@@ -1,6 +1,8 @@
 # 06 — Storage Architecture for hypothesis-bot
 
-> Scope: pick durable stores for the three data shapes (hypothesis records, embedded evidence, time-series + scores) under a hard $0/mo v1 ceiling, with a clean paid upgrade path. Mirror Platinum's stack where it doesn't hurt. The user floated Firebase; the honest answer is that one of the three stores Firebase is best at (auth) is independent from the other two (vectors, time-series), and Postgres is the right backbone for those.
+> Scope: pick durable stores for the three data shapes (hypothesis records, embedded evidence, time-series + scores) under a hard $0/mo v1 ceiling, with a clean paid upgrade path. Mirror Platinum's stack where it doesn't hurt.
+>
+> **2026-05-09 update (KISS pass).** Originally recommended Firebase Auth as the one Firebase piece worth keeping; we've since dropped Firebase entirely and consolidated on **Supabase Auth** (same vendor as Postgres). See [`08-supabase-auth-multiuser.md`](08-supabase-auth-multiuser.md) and [`09-kiss-architecture-decision.md`](09-kiss-architecture-decision.md). The data-store recommendation in this brief is unchanged; only the auth row in the final table moves from Firebase to Supabase.
 
 ---
 
@@ -36,13 +38,13 @@ Free Postgres tiers worth knowing in 2026:
 
 Two viable $0 options: **Neon** (best DX, no Timescale) and **Supabase** (Timescale extension + pgvector + Auth in one box, but project auto-pauses on idle which makes scheduled batch jobs flaky unless you ping it).
 
-### 1.3 Hybrid (Firebase Auth only, Postgres for data)
+### 1.3 Hybrid (auth provider only, Postgres for data)
 
-Firebase Auth is decoupled from Firestore — you can use Auth's Google ID-token verifier and put zero rows in Firestore. The Go side does `firebase.google.com/go/v4/auth` ID-token verification on the JWT, then looks up / creates a row in Postgres `users` keyed on the Firebase UID. This is the lowest-moving-parts data layer (one DB) while still getting the "Google sign-in in 30 minutes" benefit.
+Auth provider choice is decoupled from data store choice. Either Supabase Auth or Firebase Auth would work over a Postgres data store; the verifier is the only difference. After the KISS pass, **Supabase Auth wins on lock-in arithmetic** because we already chose Supabase Postgres — collapsing Auth into the same vendor saves an SDK, a console, and an onboarding flow without locking us in further than the data layer already does.
 
 ### 1.4 Verdict for §1
 
-**Postgres-everywhere wins.** Hypothesis records, evidence vectors, and market time-series all want the same engine, and SQL JOINs across them (e.g. "show me the latest 10 evidence items for hypothesis X joined with its current score") fall out for free. Use **Supabase** if you want Timescale + Auth bundled, or **Neon** if you want the better DX and are willing to skip Timescale (see §3 — you can). Firebase contributes *only* Auth in the recommendation.
+**Postgres-everywhere wins.** Hypothesis records, evidence vectors, and market time-series all want the same engine, and SQL JOINs across them (e.g. "show me the latest 10 evidence items for hypothesis X joined with its current score") fall out for free. Use **Supabase** for Postgres + Timescale + pgvector + Auth in one box, or **Neon** for better DX (no Timescale, no Auth — would force a separate auth vendor back into the stack).
 
 ---
 
@@ -121,12 +123,15 @@ CREATE EXTENSION IF NOT EXISTS vector;     -- pgvector
 
 CREATE TABLE IF NOT EXISTS users (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    firebase_uid    VARCHAR(128) UNIQUE NOT NULL,
+    supabase_uid    UUID UNIQUE NOT NULL,           -- matches auth.users.id in Supabase
     email           VARCHAR(320) UNIQUE NOT NULL,
     display_name    VARCHAR(255) DEFAULT '',
+    role            VARCHAR(16) NOT NULL DEFAULT 'viewer', -- operator|editor|viewer
     created_at      BIGINT NOT NULL,
     updated_at      BIGINT NOT NULL
 );
+-- No claude_oauth_token column: the operator's CLAUDE_CODE_OAUTH_TOKEN
+-- lives as an env var on the goworker container, not in the DB.
 
 CREATE TABLE IF NOT EXISTS hypotheses (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -247,7 +252,7 @@ var All = []Migration{
 
 ## 6. Final recommended stack
 
-**Verdict (one sentence):** Use **Supabase Postgres** (free tier) as the single store for hypothesis records, pgvector evidence, and Timescale-hypertabled market data; use **Firebase Auth** *only* for Google sign-in; embed with **OpenAI text-embedding-3-small @ 512 dims**.
+**Verdict (one sentence):** Use **Supabase Postgres** (free tier) as the single store for hypothesis records, pgvector evidence, and Timescale-hypertabled market data; use **Supabase Auth** for Google sign-in (same vendor); embed with **OpenAI text-embedding-3-small @ 512 dims**.
 
 | Component | Service (v1, $0) | Free-tier ceiling | Paid step |
 |---|---|---|---|
@@ -255,20 +260,20 @@ var All = []Migration{
 | Vector search (evidence) | Same Postgres + pgvector + HNSW | shares the 0.5 GiB | same paid step; pgvector scales to ~10M rows on a 4 GB DB |
 | Time-series (market + scores) | Same Postgres, hypertable on Supabase | shares the 0.5 GiB | same paid step; hypertables compress 10× when needed |
 | Full-text search (hybrid) | Postgres `tsvector` + GIN | included | included |
-| Auth (Google sign-in) | Firebase Auth | 50k MAU | Identity Platform paid |
+| Auth (Google sign-in) | Supabase Auth (same vendor as DB) | 50k MAU | Supabase Pro $25/mo |
 | Embeddings | OpenAI text-embedding-3-small | n/a (~$0.10/mo at our volume) | linear by tokens |
 | Job queue | River (Postgres-backed, like Platinum) | shares the DB | shares the DB |
 | Object storage (raw scrapes, prompts) | Supabase Storage | 1 GiB | Pro tier |
 
-**Honest divergence note.** The user guessed Firebase. Firebase Auth is correct; Firestore is not. The vector + time-series requirements both want SQL and both want to live next to the relational hypothesis records, so Postgres is the only data store that stays *one* store across all three shapes. Adopting Firestore would force two backends (Firestore + a vector DB + likely a third for time-series), each with its own auth, its own backups, and a cross-system "delete user X" problem. We get the user's stated benefit ("Google login fast") from Auth alone without paying the data-layer cost.
+**Honest divergence note.** The user guessed Firebase. The data-layer answer is clearly Postgres: vector + time-series both want SQL and both want to live next to the relational hypothesis records, so Postgres is the only data store that stays *one* store across all three shapes. Adopting Firestore would force two backends (Firestore + a vector DB + likely a third for time-series), each with its own auth, its own backups, and a cross-system "delete user X" problem. The auth question is independent: Supabase Auth gives us "Google login fast" without adding a second vendor (the original recommendation kept Firebase Auth alongside Supabase Postgres; the KISS pass collapsed both into Supabase).
 
 If Supabase's auto-pause becomes a problem for scheduled cadences (River jobs running at 4am EST hitting a paused DB), switch to **Neon** (no auto-pause within the compute-hour budget) and accept "no Timescale" — the 12M-row sizing math says plain Postgres is sufficient for v1 anyway.
 
 ---
 
-## 7. Firebase Auth coexistence (note)
+## 7. Supabase Auth coexistence (note)
 
-Auth provider choice is *independent* of data store choice. Firebase Auth issues an ID token (JWT) signed by Google; the Go backend verifies it with `firebase.google.com/go/v4/auth.VerifyIDToken`, extracts the `firebase_uid` and `email`, and upserts a row in the Postgres `users` table. From there the JWT-bearing middleware looks identical to Platinum's `requireAuthMiddleware` — substitute Google's verifier for Platinum's HMAC verifier and the rest of the route stack is unchanged. Detailed integration (token refresh on the SPA, claim mapping for the trusted-team allowlist, rotating to a self-hosted IdP later) is its own thread; the only thing that matters here is that picking Firebase Auth does not pull Firestore in with it.
+Supabase Auth (GoTrue) issues HS256-signed JWTs against the project's `SUPABASE_JWT_SECRET`. The Go backend verifies them with `golang-jwt/jwt v5` (~30 LOC, no external SDK; see [`08`](08-supabase-auth-multiuser.md)), extracts the `sub` (Supabase UID) and `email`, and upserts a row in the Postgres `users` table. From there the JWT-bearing middleware looks identical to Platinum's `requireAuthMiddleware` — substitute the Supabase HS256 verifier for Platinum's per-user HMAC verifier and the rest of the route stack is unchanged. Custom claims (our `app_metadata.role`) are server-managed via Supabase's Admin REST API.
 
 ---
 
@@ -276,4 +281,4 @@ Auth provider choice is *independent* of data store choice. Firebase Auth issues
 
 - **Migrations system.** Same `goapi/pkg/store/migrations/000NNN_description.go` + `all.go` registry, same `Migrator` interface, same "never reorder, never modify" rule, same run-on-startup behavior. The four schema migrations above are drop-in.
 - **DB driver pattern.** **pgx v5** for raw queries and the River queue (`riverpgxv5`), **GORM v1.30** for the simple CRUD on `hypotheses` / `users`, **goqu/v9** for dynamic query building on `evidence_items` (hybrid-search rank expressions). Exact same versions as Platinum's `go.mod` so the team's muscle memory transfers.
-- **Server struct.** Mirror `PlatinumAPIServer` with a `HypothesisBotAPIServer` holding `store.Store`, `riverClient`, `firebaseAuth`, `openaiClient` — handlers reach them via the receiver, no globals.
+- **Server struct.** Mirror `PlatinumAPIServer` with a `HypothesisBotAPIServer` holding `store.Store`, `riverClient`, `supabaseVerifier`, `openaiClient` — handlers reach them via the receiver, no globals.

@@ -146,7 +146,7 @@ Hot reload in dev: frontend, goapi, goworker, carbon all hot reload via volume m
 
 ## What's missing or needs adding
 
-1. **Firebase Auth + Google OAuth** — Platinum uses custom username/password JWT. The user wants Firebase + Google login. The `requireAuthMiddleware` shape stays; the verifier swaps to Firebase Admin SDK token verification. *(research thread)*
+1. **Supabase Auth + Google OAuth** — Platinum uses custom username/password JWT. The user wants Google login on the same vendor as the DB. The `requireAuthMiddleware` shape stays; the verifier swaps to a ~30-LOC Supabase HS256 verifier. *(research thread; see `08-supabase-auth-multiuser.md`)*
 2. **LLM container swap: Claude Agent SDK → Claude Code CLI on Max** — Platinum's sandbox runs `query()` from `@anthropic-ai/claude-agent-sdk` against Azure Foundry (per-token paid). Hypothesis-bot must run the **Claude Code CLI binary** authenticated via `CLAUDE_CODE_OAUTH_TOKEN`. The orchestrator → sandbox → CLI shape stays; the API-key proxy is simpler (mount the OAuth token directly, no per-request shim). The Claude Code CLI's tool model differs from the Agent SDK's MCP servers — the `pt`/`wolf` Bash-tool pattern still works because Claude Code natively supports Bash. *(research thread)*
 3. **Web-search tool for the LLM** — Platinum's agents work on *internal* Platinum survey data via `pt`. Hypothesis-bot's agent must research the **open web**. Need a search tool plugged into the CLI: Tavily / Exa / Brave free tiers (per `05-social-signals-free.md`).
 4. **Vector store for research notes / news / social posts** — Platinum has `pt search` but it indexes Platinum-domain artifacts, not arbitrary text. Need either **pgvector on the existing Postgres** (cleanest, no new service) or a separate vector DB. *(research thread)*
@@ -154,3 +154,18 @@ Hot reload in dev: frontend, goapi, goworker, carbon all hot reload via volume m
 6. **Per-hypothesis daily tick scheduler** — River queue is in place, but Platinum's jobs are user-triggered, not recurring per-record. Need a daily cron that scans active hypotheses and enqueues a tick job per hypothesis with the hypothesis's own cadence (daily/weekly). River supports periodic jobs natively.
 7. **Kubernetes deployment manifests** — Platinum is single-VM Docker Compose; hypothesis-bot may target k8s. Defer this until the v1 stack is stable; co-deploying via Docker Compose on the same VM is the lowest-friction path to first running end-to-end.
 8. **Replace `router5` with React Router?** — router5 is Platinum's choice and works, but it's idiosyncratic. For a fresh repo where there's no existing pages library, React Router 7 is the more searchable default. Surface as a deliberate choice; don't copy router5 reflexively.
+
+---
+
+## 2026-05-09 epilogue: KISS divergences from Platinum
+
+After completing the survey we ran a deliberate KISS pass on the inherited design (see [`09-kiss-architecture-decision.md`](09-kiss-architecture-decision.md)). The list above stays accurate as a *what's available* inventory, but for hypothesis-bot v1 we deliberately **do not copy** the following from Platinum:
+
+- **Per-session sandbox containers** (item 8 above). The goworker exec's the `claude` binary directly with per-job `CLAUDE_CONFIG_DIR=/tmp/wolf-${JobID}` instead of spawning a Docker container per session. No suspend/destroy reaper, no `wolf.*` labels, no Docker SDK in Go.
+- **`wolf` Go CLI baked into the sandbox** (item 9). With no sandbox, there are no callbacks; the worker writes to its own DB. Skills/MCP/baked-in tooling all defer to v1.1+.
+- **API-key proxy at `:3080`.** The operator's `CLAUDE_CODE_OAUTH_TOKEN` is the credential and it lives directly on the goworker. No proxy.
+- **SSE event taxonomy + 100-event reconnect buffer** (item 11). The frontend polls `GET /api/v1/hypotheses/:id` for status; LLM jobs return final JSON, not a stream of events.
+- **Phase orchestrator with `SummaryPrompt` + history reset** (item 7). Each `claude -p` invocation is a fresh process; multi-phase work (research → questions → finalize) is sequential job dispatch in River, not a stateful in-process orchestrator.
+- **DAG executor (Kahn's algorithm).** No analytic pipelines in v1; revisit when we want non-interactive multi-step analyses.
+
+What we **do** copy is items 1–6, 10, 12, 13: folder layout, framework versions, handwritten Go migrations, `typescriptify-golang-structs`, server-struct dependency holding, workflow-as-rendered-prompt registry (without the orchestrator), `agent_messages`-style TSVECTOR + GIN pattern (renamed `evidence_items`), the React + Vite + MUI + TanStack Query + TipTap frontend, and multi-stage Dockerfile + Compose multi-env. The skipped items are reintroducible piece-by-piece if hypothesis-bot grows into them — see §Revisit triggers in `09-kiss-architecture-decision.md`.

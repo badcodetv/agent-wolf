@@ -1,6 +1,6 @@
 # Prior Art for the Hypothesis Machine
 
-A research brief surveying systems that turn vague claims into trackable, falsifiable structured beliefs and accumulate evidence for/against them over time. Aimed at lifting concrete schemas, prompts, and scoring rules for our Firebase + Go + Claude Code CLI architecture.
+A research brief surveying systems that turn vague claims into trackable, falsifiable structured beliefs and accumulate evidence for/against them over time. Aimed at lifting concrete schemas, prompts, and scoring rules for our Supabase + Go + Claude Code CLI architecture.
 
 ---
 
@@ -248,7 +248,7 @@ Synthesising AsPredicted + Metaculus + Lean + the buy-side memo into one JSON sc
 ```json
 {
   "id": "uuid",
-  "owner_uid": "firebase-uid",
+  "owner_uid": "supabase-uid",
   "collaborators": ["uid1", "uid2"],
   "version": 1,
 
