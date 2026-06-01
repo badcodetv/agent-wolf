@@ -1,49 +1,46 @@
-# agent-wolf
+# hypothesis-bot
 
-A **hypothesis machine** for markets — turn an idea like *"gold will rise because China is converting reserves to gold"* into a tracked, evidenced thesis whose confirmation strength updates as social and market data arrive.
+The active focus of agent-wolf. Multi-market paper-only hypothesis-tracking advisor for a trusted team.
 
-> **Status:** 2026-05-06 — design phase. Multi-user paper-only MVP. **No actual trades.**
+> **Status:** 2026-05-09 — research phase complete + KISS pass applied. Design synthesized in [`docs/overview.md`](docs/overview.md); rationale for what got cut in [`docs/research/09-kiss-architecture-decision.md`](docs/research/09-kiss-architecture-decision.md). Code begins after the open questions in §Open questions are resolved.
 
-## Two folders
+## Goal
 
-- **[`hypothesis-bot/`](hypothesis-bot/)** — the active focus. Multi-asset (stocks, commodities, crypto, memecoins) paper-only hypothesis-tracking advisor.
-- **[`active-trading-bot/`](active-trading-bot/)** — archived prior research from the original crypto-DEX active-trading direction. Useful background on agentic loops, risk engines, and DEX venues, but the project pivoted away from execution-in-the-loop.
+Given a user thesis like *"gold will increase in price because China is converting their dollars to gold,"* the system:
 
-## What the hypothesis machine does
+1. Turns the loose statement into a detailed, falsifiable spec via a guided LLM interview backed by deep web research.
+2. Begins gathering social and market data on a configurable schedule. The first capture is unbounded; later captures are time-gated to the most recent window.
+3. Tracks confirmation/invalidation strength over the lifetime of the hypothesis, separating *mechanism evidence* from *price outcome* so a thesis can be "right" even when the price moves against it short-term.
+4. Surfaces a verdict — and the underlying evidence — to the owner and any collaborators.
 
-1. **Captures** a user thesis (free-form: *"gold up because China FX rebalancing"*).
-2. **Specs** it via a guided LLM interview backed by deep web research, producing a structured falsifiable hypothesis with explicit signals + invalidation criteria.
-3. **Gathers** social and market data on a configurable schedule — the first capture is unbounded; subsequent captures are time-gated to the most recent window.
-4. **Tracks** confirmation strength over time — does the evidence accumulate or erode?
-5. **Reports** to the hypothesis owner and any collaborators.
+## Recommended stack (chosen)
 
-Trade execution is explicitly out of scope for v1. The first job is to find out whether the *hypothesis quality* is reliable; trades come later, if at all.
+- **Frontend:** React 18 + Vite + MUI + TanStack Query + TipTap (mirrors Platinum).
+- **Backend:** Go 1.25 + Fiber v3 + River queue + zerolog + Cobra (mirrors Platinum).
+- **Database:** Postgres on **Supabase free** — pgvector + tsvector + TimescaleDB **all in one DB**. Neon as fallback.
+- **Auth:** **Supabase Auth** + Google OAuth, allowlist via `app_metadata.role` (operator/editor/viewer). Same vendor as the DB; ~30-LOC HS256 verifier in Go.
+- **LLM:** Claude Code CLI on Max, **single operator OAuth token** baked into the goworker container. Teammates draft and view; only the operator triggers LLM workflows.
+- **Web search:** Claude Code native `WebSearch` / `WebFetch` (free under Max session budget).
+- **Embeddings:** OpenAI `text-embedding-3-small` @ 512 dims (~$0.10/mo); sentence-transformers as the strict-$0 fallback.
+- **Deploy v1:** Docker Compose on a single VM — three services (`goapi`, `goworker`, optional `postgres`).
 
-## Architecture (intended)
-
-```
-Firebase (Auth + Firestore)
-    │
-    ├── Google OAuth login
-    └── User accounts + hypothesis records
-
-Go API controller
-    │
-    ├── Schedules per-hypothesis ticks
-    ├── Calls Claude Code container for LLM work
-    └── Reads/writes Firestore + vector store + time-series store
-
-Claude Code CLI container (Opus 4.7, Max subscription)
-    └── Spec generation, deep web research, scoring, summaries
-
-External data stores (TBD — see open questions)
-    ├── Vector store for embedded research notes / social posts
-    └── Time-series store for market data captures
-```
-
-Containers are stateless; durable state lives in Firebase + the external stores.
+The single most important takeaway from the research: **after the KISS pass we copy the Platinum migrations + Fiber server-struct + Cobra patterns, but skip the per-session-sandbox + scoped-JWT-callback + SSE-streaming + phase-orchestrator stack.** The goworker exec's `claude -p` directly, parses the final JSON, and writes to Postgres. See [`docs/research/09-kiss-architecture-decision.md`](docs/research/09-kiss-architecture-decision.md) for the rationale.
 
 ## Read next
 
-- [`hypothesis-bot/README.md`](hypothesis-bot/README.md) — current design notes and open questions.
-- [`active-trading-bot/docs/overview.md`](active-trading-bot/docs/overview.md) — archived prior research (still useful as background on agentic loops and venue mechanics).
+- [`docs/overview.md`](docs/overview.md) — single document that synthesizes everything below into a buildable design with a recommended build order.
+- [`docs/research/`](docs/research/) — nine citation-heavy briefs (1-prior-art, 2-time-series, 3-Platinum-survey, 4-market-data, 5-social-signals, 6-storage, 7-Claude-Code-orchestration, 8-Supabase-auth, 9-KISS-decision).
+
+## Open questions before code
+
+See `docs/overview.md` §Open questions. Headlines:
+
+1. Storage host commit — Supabase (Auth + DB + Timescale in one) vs. Neon (better DX, no Timescale).
+2. Embedding model — OpenAI 3-small (pay-per-token but trivial) or local sentence-transformers (strictly $0)?
+3. Frontend router — React Router 7 (lean) or copy Platinum's router5?
+4. Operator-only LLM access — hard (only operator can create) or soft (anyone drafts; operator runs LLM)?
+5. Routines API or River cron — depends on hypothesis count.
+
+---
+
+**Out of scope for v1:** live trade execution, position sizing, risk engine, auto-rebalancing. These are deferred until we trust the hypothesis machine.
