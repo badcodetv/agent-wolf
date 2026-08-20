@@ -1,0 +1,50 @@
+# Agent Wolf — local topology. Bring agent-orange up FIRST (its compose
+# network and dind container must already exist), then:
+#   cp .env.example .env && docker compose up --build
+# Then open http://localhost:${WOLF_WEB_PORT:-8081}
+#
+# See design/2026-08-20-agent-wolf.md § "Local topology and networking"
+# (agent-orange repo) for why this shape is mandatory, not a convenience:
+# agentd shares DinD's network namespace in the standalone stack, so nested
+# session containers cannot resolve compose DNS and cannot reach a wolf-api
+# sitting on the ordinary compose network. wolf-api therefore shares that
+# same DinD container's netns instead of joining a network of its own.
+services:
+  wolf-api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    # Shares agent-orange's dind container's network namespace: reaches
+    # agentd at http://localhost:8099 (same netns) and is reachable FROM
+    # session containers at http://172.17.0.1:${WOLF_API_PORT}. This service
+    # therefore has no `networks:` of its own and publishes no host port —
+    # only wolf-web does, below.
+    network_mode: "container:${ORANGE_DIND_CONTAINER:-agent-orange-dind-1}"
+    environment:
+      WOLF_API_PORT: ${WOLF_API_PORT:-8100}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      NODE_ENV: ${NODE_ENV:-production}
+    restart: unless-stopped
+
+  wolf-web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    # External: agent-orange's own `docker compose up` must have created
+    # this network already (compose project name "agent-orange" + its
+    # default network name "default" -> "agent-orange_default").
+    networks:
+      - agent-orange_default
+    ports:
+      - "${WOLF_WEB_PORT:-8081}:80"
+    environment:
+      # Read by nginx.conf.template's envsubst at container start — see that
+      # file's comment.
+      WOLF_API_PORT: ${WOLF_API_PORT:-8100}
+    depends_on:
+      - wolf-api
+    restart: unless-stopped
+
+networks:
+  agent-orange_default:
+    external: true
