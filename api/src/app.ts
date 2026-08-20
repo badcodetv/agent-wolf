@@ -11,7 +11,11 @@ export function createApp(logger: Logger): Express {
   const app = express();
   app.use(express.json());
 
-  app.get("/healthz", (_req: Request, res: Response) => {
+  // Mounted at /api/healthz, not /healthz: nginx's /api/ location (prod)
+  // and vite's /api proxy (dev) both forward the full path unrewritten
+  // (see web/nginx.conf.template and web/vite.config.ts), matching every
+  // route in § "Wolf API routes" of the plan, which are all /api/....
+  app.get("/api/healthz", (_req: Request, res: Response) => {
     res.status(200).json({ status: "ok" });
   });
 

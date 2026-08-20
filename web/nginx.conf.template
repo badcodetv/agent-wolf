@@ -18,7 +18,17 @@ server {
     }
 
     location /api/ {
-        proxy_pass http://dind:${WOLF_API_PORT}/;
+        # No URI part after the port: nginx must NOT strip the `/api/`
+        # prefix. Matches deploy/web.nginx.conf:55 (`proxy_pass
+        # http://dind:8099;`, no trailing slash) exactly — wolf-api receives
+        # the full `/api/...` path, same as the vite dev proxy below (which
+        # also does not rewrite). A trailing slash here would make nginx
+        # replace the matched `/api/` prefix, so wolf-api would see
+        # `/healthz` in prod but `/api/healthz` in dev — two different
+        # mount prefixes for the same route table. wolf-api's Express app
+        # therefore mounts every route (including /api/healthz) under the
+        # literal `/api` prefix, matching § "Wolf API routes" in the plan.
+        proxy_pass http://dind:${WOLF_API_PORT};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header Connection "";
