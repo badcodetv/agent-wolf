@@ -80,6 +80,23 @@ import {
   type Transitioner,
   isHypothesisStatus,
 } from "./lifecycle.js";
+// ⚠️ `../report/kinds.ts` imports the trust primitives FROM this file, so these
+// two modules form an import cycle. It is safe and it is deliberate — R48
+// settled that W5 defines the trust primitives and W15's `kinds.ts` re-exports
+// them rather than declaring a second `TRUSTED_KINDS` — but it holds only
+// while NEITHER side reads a value from the other at module-evaluation time.
+// Everything imported here is used inside a function body; nothing below is a
+// top-level `const x = KIND_REPORT`. Keep it that way: a top-level read is a
+// TDZ crash whose stack blames whichever module the test runner happened to
+// load first, which is the worst kind of bug to inherit.
+import {
+  KIND_REPORT,
+  KIND_REPORT_TEMPLATE,
+  parseReportContent,
+  parseTemplateContent,
+  reportSelector,
+  type ParsedReport,
+} from "../report/kinds.js";
 
 // ── The trusted-kind set ────────────────────────────────────────────────
 
@@ -567,6 +584,62 @@ export interface HypothesisRecord {
   tamper?: Tamper[];
 }
 
+// ── The report layer's reads (W15) ──────────────────────────────────────
+
+/**
+ * One `kind=report-template` row, read in FULL. `html` is the template
+ * fragment, which routinely runs to tens of kilobytes — far past the
+ * 500-character snippet the list route returns — so this always costs a
+ * second request (`GET /agent/memories/{id}`).
+ */
+export interface ReportTemplateRecord {
+  /** The memory id, not the hypothesis id. */
+  memoryId: string;
+  hypothesisId: string;
+  /** Line 1: the structure hash W16 computes and W20 compares drift against. */
+  structureHash: string;
+  /** Everything after line 1: the template HTML fragment. */
+  html: string;
+  createdAtMs: UnixMs;
+}
+
+/** One `kind=report` row, read in full: a headline and a flat slot map. */
+export interface ReportRecord extends ParsedReport {
+  memoryId: string;
+  hypothesisId: string;
+  createdAtMs: UnixMs;
+  /**
+   * Provenance, carried through UNMODIFIED. `kind=report` is NOT a trusted
+   * kind — a researcher inside a container is what writes it — so this read
+   * makes no trust judgement about the writer at all. W22 is the ticket that
+   * checks the writer is *this* hypothesis's own researcher or session, and it
+   * needs these two fields to do it.
+   */
+  createdByWorker: string;
+  createdBySession: string;
+}
+
+/**
+ * Both report reads answer with the row AND the anomalies, never one or the
+ * other. `null` means "nothing to show"; a non-empty `tamper` with a non-null
+ * row means "here it is, and something attacked it".
+ *
+ * The shape exists because "absent" and "attacked" are different answers and
+ * W21 renders them differently: no template is a 404 the UI explains as "not
+ * authored yet", while a template somebody tried to retract is served WITH a
+ * warning. Collapsing the two — returning `null` for a hidden template — is
+ * exactly the failure the retraction defence exists to prevent.
+ */
+export interface TemplateRead {
+  template: ReportTemplateRecord | null;
+  tamper: Tamper[];
+}
+
+export interface ReportRead {
+  report: ReportRecord | null;
+  tamper: Tamper[];
+}
+
 // ── The store ───────────────────────────────────────────────────────────
 
 export interface AppendStateParams {
@@ -593,6 +666,15 @@ export interface ReadOptions {
   sessionPageSize?: number;
 }
 
+export interface ReportReadOptions extends ReadOptions {
+  /**
+   * A session index already in hand. Supplying it skips the session-list walk
+   * — which is one HTTP request per page, and W22's board already holds the
+   * answer. Omit it and the read pays for its own index.
+   */
+  sessions?: SessionLookup;
+}
+
 export interface HypothesisStore {
   newId(): string;
   /** The authoritative index: the session list, never memory. */
@@ -610,6 +692,22 @@ export interface HypothesisStore {
    * set (a `Set<string>` satisfies `SessionLookup`), not a fresh index read.
    */
   readEvaluationSummaries(sessions: SessionLookup): Promise<Map<string, EvaluationSummary>>;
+  /**
+   * The locked `kind=report-template` for one hypothesis, in full — the ONLY
+   * path by which any later ticket obtains one.
+   *
+   * Read with `include_retracted=1`, and a retraction whose own provenance is
+   * non-empty is IGNORED for state and surfaced as `hostile_retraction`,
+   * exactly as the hypothesis reads do. A template hidden by a hostile
+   * retraction therefore comes back served-and-flagged, never as absence.
+   */
+  readTemplate(id: string, options?: ReportReadOptions): Promise<TemplateRead>;
+  /**
+   * The newest `kind=report` for one hypothesis, in full — the ONLY path by
+   * which any later ticket obtains one. Same retraction rule as
+   * `readTemplate`.
+   */
+  readLatestReport(id: string, options?: ReportReadOptions): Promise<ReportRead>;
   /** Appends a trusted `kind=hypothesis` row through `POST /agent/memories`. */
   appendState(params: AppendStateParams): Promise<MemoryRecord>;
   /** The serialised state machine; re-reads the current state under the lock. */
@@ -894,6 +992,134 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
     return out;
   }
 
+  // ── The report layer's two reads (W15) ────────────────────────────────
+
+  /**
+   * The rows-in, one-row-out half of both report reads, and deliberately the
+   * same three rules `resolveFromRows` applies to hypothesis state:
+   *
+   *   1. a row naming a different hypothesis is not ours — skip it silently;
+   *   2. a row that fails `trust` is an anomaly — skip it, report `forged_row`;
+   *   3. a row retracted by WOLF (empty provenance on the retraction) is gone —
+   *      skip it and keep looking older; a retraction whose own provenance is
+   *      NON-empty is ignored for state and reported as `hostile_retraction`.
+   *
+   * Rule 3 is the one that matters. `retracts` is an ordinary label and
+   * `notRetractedSQL` never checks who wrote the retraction, so without this a
+   * prompt-injected researcher withdraws the locked template and the report
+   * frame simply 404s — an erasure indistinguishable from "nobody authored
+   * one". With it, the template is still served and the attack is named.
+   *
+   * `trust` is `null` for a kind that is UNTRUSTED BY CONSTRUCTION. `report` is
+   * written from inside a container on every tick; flagging each one
+   * `forged_row` would fill the board with tamper warnings for the system
+   * working exactly as designed. The check that belongs to those rows — that
+   * the writer is *this* hypothesis's own researcher or session — is
+   * cross-hypothesis defence and belongs to W22.
+   */
+  function pickSurvivingRow(
+    id: string,
+    rows: readonly MemorySearchResultRow[],
+    trust: ((row: MemorySearchResultRow) => boolean) | null,
+  ): { row: MemorySearchResultRow | null; tamper: Tamper[] } {
+    const tamper: Tamper[] = [];
+    const add = (t: Tamper): void => {
+      if (tamper.some((x) => x.reason === t.reason && x.memory_id === t.memory_id)) return;
+      tamper.push(t);
+    };
+    let winner: MemorySearchResultRow | null = null;
+    for (const row of rows) {
+      if (row.labels["name"] !== id) continue;
+      if (trust !== null && !trust(row)) {
+        add(forgedRowTamper(row));
+        continue;
+      }
+      let withdrawnByWolf = false;
+      for (const retraction of row.retractedBy ?? []) {
+        if (hasEmptyProvenance(retraction)) withdrawnByWolf = true;
+        else add(hostileRetractionTamper(retraction));
+      }
+      if (withdrawnByWolf) continue;
+      if (winner === null) winner = row;
+    }
+    return { row: winner, tamper };
+  }
+
+  async function reportSessions(opts?: ReportReadOptions): Promise<SessionLookup> {
+    return opts?.sessions ?? (await readSessionIndex(opts));
+  }
+
+  function requireKnownHypothesis(id: string, sessions: SessionLookup): void {
+    // The session list is the authoritative index (§ "The trust model"), so an
+    // id absent from it is not a hypothesis whose report is missing — it is not
+    // a hypothesis. `readHypothesis` answers the same way for the same reason.
+    if (!sessions.has(id)) {
+      throw new WolfError("not_found", `no hypothesis ${id}`, { details: { id } });
+    }
+  }
+
+  async function readTemplate(id: string, opts?: ReportReadOptions): Promise<TemplateRead> {
+    const sessions = await reportSessions(opts);
+    requireKnownHypothesis(id, sessions);
+    const rows = await client.listMemories({
+      selector: reportSelector(KIND_REPORT_TEMPLATE, id),
+      limit: DETAIL_LIMIT,
+      includeRetracted: true,
+    });
+    // `report-template` IS in TRUSTED_KINDS, so all three clauses apply: empty
+    // provenance, the kind, and a `name` matching an existing `hyp-<id>`
+    // session. A template written from inside a container is a forgery — the
+    // frame route must serve 404 rather than render it.
+    const picked = pickSurvivingRow(id, rows, (row) => isTrusted(row, sessions));
+    if (picked.row === null) return { template: null, tamper: picked.tamper };
+    // The template HTML is far past the 500-character snippet, so the full row
+    // is a second request. `GET /agent/memories/{id}` is deliberately NOT
+    // retraction-filtered on the Orange side, which is what lets a row a
+    // hostile retraction hid still be read here.
+    const full = await client.getMemoryById(picked.row.id);
+    const parsed = parseTemplateContent(full.content);
+    return {
+      template: {
+        memoryId: full.id,
+        hypothesisId: id,
+        structureHash: parsed.first,
+        html: parsed.html,
+        createdAtMs: full.createdAtMs,
+      },
+      tamper: picked.tamper,
+    };
+  }
+
+  async function readLatestReport(id: string, opts?: ReportReadOptions): Promise<ReportRead> {
+    const sessions = await reportSessions(opts);
+    requireKnownHypothesis(id, sessions);
+    const rows = await client.listMemories({
+      selector: reportSelector(KIND_REPORT, id),
+      limit: DETAIL_LIMIT,
+      includeRetracted: true,
+    });
+    const picked = pickSurvivingRow(id, rows, null);
+    if (picked.row === null) return { report: null, tamper: picked.tamper };
+    const full = await client.getMemoryById(picked.row.id);
+    // `parseReportContent` THROWS `invalid` naming the offending slot key. It
+    // is not swallowed: a report whose body is not a flat {slotId: html} map
+    // cannot be rendered, and the writer is a model, so the failure has to be
+    // legible to whoever reads the log rather than silently becoming "no
+    // report yet".
+    const parsed = parseReportContent(full.content);
+    return {
+      report: {
+        ...parsed,
+        memoryId: full.id,
+        hypothesisId: id,
+        createdAtMs: full.createdAtMs,
+        createdByWorker: full.createdByWorker,
+        createdBySession: full.createdBySession,
+      },
+      tamper: picked.tamper,
+    };
+  }
+
   async function appendState(params: AppendStateParams): Promise<MemoryRecord> {
     if (!isHypothesisId(params.id)) {
       throw new WolfError("invalid", `not a hypothesis id: ${JSON.stringify(params.id)}`, {
@@ -935,7 +1161,7 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
       if (record.statusMemoryId === null) {
         throw new WolfError("conflict", `hypothesis ${id} has no trusted state row to carry forward`);
       }
-      const previous: MemoryRecord = await client.getMemory(record.statusMemoryId);
+      const previous: MemoryRecord = await client.getMemoryById(record.statusMemoryId);
       const parsed = parseHypothesisContent(previous.content);
       const appended = await appendState({
         id,
@@ -957,6 +1183,8 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
     readBoard,
     readHypothesis,
     readEvaluationSummaries,
+    readTemplate,
+    readLatestReport,
     appendState,
     transition,
   };

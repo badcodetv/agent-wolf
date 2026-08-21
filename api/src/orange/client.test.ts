@@ -311,6 +311,166 @@ describe("memories", () => {
   });
 });
 
+describe("memory provenance must be PRESENT, not merely empty (W15 defect 3)", () => {
+  // ⚠️ THE ONE PLACE IN THE PRODUCT where the trust rule depends on a field
+  // being PRESENT rather than on its value. § "The trust model" reads: a
+  // memory is trusted iff `created_by_worker === "" && created_by_session === ""`.
+  // Mapped with the ordinary `strField` default, a row that simply OMITS both
+  // keys becomes two empty strings and satisfies clause 1 — it fails OPEN, in
+  // the direction of granting authority.
+  //
+  // It is not reachable through today's `agentd`: `agentdb.MemorySearchResult`
+  // tags both fields without `omitempty` (`go/agentdb/memories.go:133-134`), so
+  // they are always emitted. The defence still belongs HERE and nowhere else,
+  // because by the time `hypothesis/store.ts` sees the row the distinction
+  // between "absent" and "empty" is already gone. W5 found this and named W15
+  // as the owner.
+
+  it("a search row omitting BOTH provenance fields is an `invalid` error, not a trusted-looking row", async () => {
+    intercept("GET", 200, {
+      memories: [{ id: "mem-forged", labels: { kind: "hypothesis", name: "1a2b3c4d" }, snippet: "s", score: 1, created_at: 1755600000000 }],
+    });
+    let caught: WolfError | undefined;
+    try {
+      await client().listMemories({ selector: "kind=hypothesis" });
+    } catch (err) {
+      caught = err as WolfError;
+    }
+    expect(caught).toBeInstanceOf(WolfError);
+    expect(caught?.kind).toBe("invalid");
+    expect(caught?.message).toContain("created_by_worker");
+    expect(caught?.message).toContain("absent");
+  });
+
+  it("a search row omitting ONE provenance field is refused too", async () => {
+    intercept("GET", 200, {
+      memories: [{ id: "m", labels: {}, snippet: "s", score: 1, created_by_worker: "", created_at: 1 }],
+    });
+    await expect(client().listMemories()).rejects.toMatchObject({
+      kind: "invalid",
+      message: expect.stringContaining("created_by_session"),
+    });
+  });
+
+  it("a provenance field of the WRONG TYPE is refused rather than coerced", async () => {
+    intercept("GET", 200, {
+      memories: [{ id: "m", labels: {}, snippet: "s", score: 1, created_by_worker: null, created_by_session: "", created_at: 1 }],
+    });
+    await expect(client().listMemories()).rejects.toMatchObject({
+      kind: "invalid",
+      message: expect.stringContaining("not a string"),
+    });
+  });
+
+  it("a RETRACTION omitting its provenance is refused — an absent one would read as Wolf's own withdrawal", async () => {
+    // The retraction rule is "a row counts as retracted iff AT LEAST ONE
+    // retraction of it has EMPTY provenance". A retraction whose provenance is
+    // absent would therefore be read as Wolf withdrawing its own state, which
+    // is precisely the erasure `include_retracted=1` exists to expose.
+    intercept("GET", 200, {
+      memories: [
+        {
+          id: "m",
+          labels: {},
+          snippet: "s",
+          score: 1,
+          created_by_worker: "",
+          created_by_session: "",
+          created_at: 1,
+          retracted_by: [{ memory_id: "r1", created_at: 2 }],
+        },
+      ],
+    });
+    await expect(client().listMemories({ includeRetracted: true })).rejects.toMatchObject({
+      kind: "invalid",
+    });
+  });
+
+  it("a FULL-CONTENT read omitting provenance is refused on the same rule", async () => {
+    intercept("GET", 200, { id: "mem-1", labels: {}, content: "hello", created_at: 1 });
+    await expect(client().getMemoryById("mem-1")).rejects.toMatchObject({ kind: "invalid" });
+  });
+
+  it("an explicitly EMPTY provenance is still accepted — that is what a trusted row looks like", async () => {
+    intercept("GET", 200, {
+      memories: [{ id: "m", labels: {}, snippet: "s", score: 1, created_by_worker: "", created_by_session: "", created_at: 1 }],
+    });
+    const rows = await client().listMemories();
+    expect(rows[0]?.createdByWorker).toBe("");
+    expect(rows[0]?.createdBySession).toBe("");
+  });
+});
+
+describe("the two full-content reads (W15 names them getMemoryById / getCurrentMemory)", () => {
+  it("getMemoryById returns full content for a >600-character body", async () => {
+    const longContent = "q".repeat(704);
+    const c = intercept("GET", 200, {
+      id: "mem-long-2",
+      labels: { kind: "report-template", name: "1a2b3c4d" },
+      content: longContent,
+      created_by_worker: "",
+      created_by_session: "",
+      created_at: 1700000000000,
+    });
+    const full = await client().getMemoryById("mem-long-2");
+    expect(pathnameOf(c)).toBe("/agent/memories/mem-long-2");
+    expect(full.content).toBe(longContent);
+    expect(full.content.length).toBeGreaterThan(600);
+    expect(full).not.toHaveProperty("snippet");
+  });
+
+  it("getMemory is the same call — kept only as a deprecated alias for W8's routes", async () => {
+    intercept("GET", 200, {
+      id: "mem-alias",
+      labels: {},
+      content: "c".repeat(650),
+      created_by_worker: "",
+      created_by_session: "",
+      created_at: 1,
+    });
+    expect((await client().getMemory("mem-alias")).content).toHaveLength(650);
+  });
+
+  it("getCurrentMemory(name, kind) returns the row when the kind matches, in full", async () => {
+    const longContent = "r".repeat(650);
+    const c = intercept("GET", 200, {
+      id: "mem-cur-2",
+      labels: { kind: "hypothesis-spec", name: "1a2b3c4d" },
+      content: longContent,
+      created_by_worker: "",
+      created_by_session: "",
+      created_at: 1,
+    });
+    const full = await client().getCurrentMemory("1a2b3c4d", "hypothesis-spec");
+    expect(queryOf(c)).toEqual({ name: "1a2b3c4d" });
+    expect(full.content).toBe(longContent);
+  });
+
+  it("getCurrentMemory(name, kind) is `not_found` when the newest row is a different kind — the filter is CLIENT-SIDE", async () => {
+    // Orange's route builds the selector as exactly `"name=" + name`
+    // (`go/httpapi/memories.go:391`) and takes no other parameter, so it
+    // answers with the newest memory of ANY kind carrying that name — and in
+    // Wolf's vocabulary every kind shares `name=<hypothesis id>`. `kind` here
+    // ASSERTS what came back; it does not search past it. Anything that needs
+    // "the newest row of this kind" must use listMemories with a
+    // `kind=,name=` selector — which is also the only way to pass
+    // include_retracted=1.
+    intercept("GET", 200, {
+      id: "mem-cur-3",
+      labels: { kind: "research-note", name: "1a2b3c4d" },
+      content: "the researcher wrote last",
+      created_by_worker: "researcher-1a2b3c4d",
+      created_by_session: "sess-9",
+      created_at: 1,
+    });
+    await expect(client().getCurrentMemory("1a2b3c4d", "hypothesis-spec")).rejects.toMatchObject({
+      kind: "not_found",
+      status: 404,
+      details: { name: "1a2b3c4d", kind: "hypothesis-spec", found: "research-note" },
+    });
+  });
+});
+
 describe("datasets", () => {
   it("GET /agent/datasets — selector/limit, {datasets:[...]} envelope, field-for-field metadata", async () => {
     const c = intercept("GET", 200, {
@@ -718,6 +878,51 @@ describe("non-2xx responses become WolfErrors, per the fixed status table", () =
     await expect(
       client().createSession({ name: "hyp-1a2b3c4d", worker: "interviewer" }),
     ).rejects.toMatchObject({ kind: "unavailable", message: msg, upstreamBody: msg });
+  });
+
+  it("POST /agent/session — that unavailable carries status 503, not the upstream 403 (W15 defect 2)", async () => {
+    // `unavailable` is the ONE retryable kind and the taxonomy maps it to 503.
+    // Before W15 this override preserved the upstream status, producing an
+    // `unavailable` served behind "403 Forbidden" — a retry loop (or a proxy)
+    // reading the status rather than the kind concludes the condition is
+    // permanent and stops retrying the one outage that genuinely clears when a
+    // finished session is deleted. W10's poller is the caller that will see
+    // it. The upstream status is preserved in `details`, not thrown away.
+    const msg = "host port pool is exhausted";
+    intercept("POST", 403, msg);
+    let caught: WolfError | undefined;
+    try {
+      await client().createSession({ name: "hyp-1a2b3c4d", worker: "interviewer" });
+    } catch (err) {
+      caught = err as WolfError;
+    }
+    expect(caught?.kind).toBe("unavailable");
+    expect(caught?.status).toBe(503);
+    expect(caught?.message).toBe(msg);
+    expect(caught?.details).toEqual({ upstreamStatus: 403 });
+  });
+
+  it("401 -> forbidden, NOT internal (W15 defect 1)", async () => {
+    // Before W15 there was no 401 case at all, so a rejected credential fell
+    // through `default` and arrived as kind `internal` — "WE have a bug". W8
+    // needed verify-google's 401 to read as `forbidden` and worked around it
+    // by branching on `err.status === 401` in its own route rather than
+    // editing this file, which left every other caller that branches on
+    // `kind` mis-handling a 401. `internal` is also not retryable and a 401
+    // never clears by retrying, so the kind is the part that was wrong.
+    intercept("GET", 401, "invalid credential");
+    await expect(client().getProjectSettings()).rejects.toMatchObject({
+      kind: "forbidden",
+      status: 401,
+      upstreamBody: "invalid credential",
+    });
+  });
+
+  it("401 keeps status 401, so W8's `err.status === 401` branch is unaffected", async () => {
+    intercept("POST", 401, "bad signature");
+    await expect(client().verifyGoogle("a-google-credential")).rejects.toMatchObject({
+      status: 401,
+    });
   });
 
   it("POST /agent/session — an ordinary 403 maps to forbidden, not unavailable", async () => {

@@ -111,6 +111,10 @@ interface StubConfig {
   evaluations?: string;
   /** Raw bodies for the per-name follow-up, keyed by bare id. */
   details?: Record<string, string>;
+  /** Raw bodies for the `kind=report-template,name=<id>` read (W15), keyed by bare id. */
+  templates?: Record<string, string>;
+  /** Raw bodies for the `kind=report,name=<id>` read (W15), keyed by bare id. */
+  reports?: Record<string, string>;
   /** Raw bodies for `GET /agent/memories/{id}`, keyed by memory id. */
   memoriesById?: Record<string, string>;
   /** What `POST /agent/memories` answers with. */
@@ -198,7 +202,21 @@ class Stub {
       const selector = url.searchParams.get("selector") ?? "";
       const match = /name=([0-9a-f]{8})/.exec(selector);
       const id = match?.[1];
-      const found = id === undefined ? undefined : this.config.details?.[id];
+      // Dispatch on the selector's OWN `kind=` term, not on a prefix test:
+      // "kind=report" is a prefix of "kind=report-template", and answering one
+      // query with the other's body is exactly the kind of stub bug that makes
+      // a wrong selector pass.
+      const kind = selector
+        .split(",")
+        .find((term) => term.startsWith("kind="))
+        ?.slice("kind=".length);
+      const bucket =
+        kind === "report-template"
+          ? this.config.templates
+          : kind === "report"
+            ? this.config.reports
+            : this.config.details;
+      const found = id === undefined ? undefined : bucket?.[id];
       return { status: 200, data: found ?? EMPTY_MEMORIES };
     }
     return { status: 404, data: "unrouted in the stub: " + url.pathname };
@@ -1300,5 +1318,404 @@ describe("store_read_evaluation_summaries", () => {
       }),
     });
     expect((await store.readEvaluationSummaries(new Set([ID]))).size).toBe(0);
+  });
+});
+
+// ── The report layer's two reads (W15) ──────────────────────────────────
+
+describe("store_read_template", () => {
+  const ID = "1a2b3c4d";
+  const HASH = "9f8b1c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f60718293a4b5c6d7e8f900112233";
+  // Deliberately far past the 500-character snippet: the whole reason
+  // `readTemplate` pays for a second `GET /agent/memories/{id}` is that a
+  // template fragment does not fit in one.
+  const HTML = `<section data-wolf-slot="headline"></section>\n<div data-wolf-fallback>${"x".repeat(700)}</div>`;
+
+  // These bodies are CONSTRUCTED, not captured: they are the same
+  // MemorySearchResult / memoryRecord shapes W5 recorded from a running O11
+  // build (`__fixtures__/`), with the labels and content this ticket's kinds
+  // require. Nothing about the SHAPE is invented — see the fixtures README —
+  // and no file below is presented as a recording.
+  function templateRow(extra: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: "tmpl-1",
+      labels: { kind: "report-template", name: ID, status: "locked" },
+      snippet: `${HASH}\n<section data-wolf-slot="headline">`,
+      score: 0,
+      created_by_worker: "",
+      created_by_session: "",
+      created_at: 1787334047500,
+      ...extra,
+    };
+  }
+
+  function templateFull(id = "tmpl-1", extra: Record<string, unknown> = {}): string {
+    return JSON.stringify({
+      id,
+      labels: { kind: "report-template", name: ID, status: "locked" },
+      content: `${HASH}\n${HTML}`,
+      created_by_worker: "",
+      created_by_session: "",
+      created_at: 1787334047500,
+      ...extra,
+    });
+  }
+
+  const SESSIONS = sessionsNamed("hyp-1a2b3c4d");
+
+  it("store_read_template: the locked template comes back in FULL, with include_retracted=1 on the search", async () => {
+    const { store, stub } = harness({
+      sessions: SESSIONS,
+      templates: { [ID]: JSON.stringify({ memories: [templateRow()] }) },
+      memoriesById: { "tmpl-1": templateFull() },
+    });
+    const read = await store.readTemplate(ID);
+
+    expect(read.tamper).toEqual([]);
+    expect(read.template?.structureHash).toBe(HASH);
+    expect(read.template?.html).toBe(HTML);
+    expect(read.template?.html.length).toBeGreaterThan(500);
+    expect(read.template?.memoryId).toBe("tmpl-1");
+    expect(read.template?.hypothesisId).toBe(ID);
+
+    const search = stub.memoryRequests.find((r) => r.path.includes("selector="));
+    expect(search?.path).toContain("selector=kind%3Dreport-template%2Cname%3D1a2b3c4d");
+    expect(search?.path).toContain("include_retracted=1");
+    // The second request is the full-content read — the snippet cannot hold it.
+    expect(stub.memoryRequests.some((r) => r.path === "/agent/memories/tmpl-1")).toBe(true);
+  });
+
+  it("store_read_template: a FORGED template (non-empty provenance) is refused and reported, never served", async () => {
+    // Reusing W5's `isTrusted` / `forgedRowTamper`, not a second check: a
+    // `report-template` written from inside a container is a forgery, and the
+    // frame route must answer 404 rather than render whatever it says.
+    const { store } = harness({
+      sessions: SESSIONS,
+      templates: {
+        [ID]: JSON.stringify({
+          memories: [
+            templateRow({
+              id: "tmpl-forged",
+              created_by_worker: "researcher-1a2b3c4d",
+              created_by_session: "sess-77c1e2d5",
+            }),
+          ],
+        }),
+      },
+      memoriesById: { "tmpl-forged": templateFull("tmpl-forged") },
+    });
+    const read = await store.readTemplate(ID);
+
+    expect(read.template).toBeNull();
+    expect(read.tamper).toEqual([
+      {
+        reason: "forged_row",
+        written_by_worker: "researcher-1a2b3c4d",
+        written_by_session: "sess-77c1e2d5",
+        memory_id: "tmpl-forged",
+      },
+    ]);
+  });
+
+  it("store_read_template: a template naming a hypothesis with NO session is unreachable — clause 3 in situ", async () => {
+    // Empty provenance + a trusted kind, but no `hyp-<id>` session: the
+    // `ApplyTopology` forgery path (R24). Clause 3 is the one that cannot be
+    // forged from inside a container, and at this level it bites twice — the
+    // session list is also the authoritative index, so the read refuses before
+    // the row is ever considered. (`isTrusted`'s own three-clause test, with
+    // the first two passing and the third failing, is in
+    // `src/report/kinds.test.ts`.)
+    const { store } = harness({
+      sessions: sessionsNamed("hyp-2b3c4d5e"),
+      templates: { [ID]: JSON.stringify({ memories: [templateRow()] }) },
+      memoriesById: { "tmpl-1": templateFull() },
+    });
+    await expect(store.readTemplate(ID)).rejects.toMatchObject({ kind: "not_found" });
+  });
+
+  it("store_read_template: a HOSTILE retraction hides nothing — the template is still SERVED, and the retractor is named", async () => {
+    // ⚠️ The criterion this file exists for. `retracts` is an ordinary label
+    // and `notRetractedSQL` (`go/agentdb/memories.go:284-288`) never checks
+    // who wrote the retraction, so anything holding the core MCP tools can
+    // withdraw the locked template. Served-and-flagged, never absent: an
+    // erasure that reads as "nobody authored one" is the attack succeeding.
+    const { store } = harness({
+      sessions: SESSIONS,
+      templates: {
+        [ID]: JSON.stringify({
+          memories: [
+            templateRow({
+              retracted_by: [
+                {
+                  memory_id: "ret-hostile",
+                  created_by_worker: "researcher-1a2b3c4d",
+                  created_by_session: "sess-77c1e2d5",
+                  created_at: 1787334047600,
+                },
+              ],
+            }),
+          ],
+        }),
+      },
+      memoriesById: { "tmpl-1": templateFull() },
+    });
+    const read = await store.readTemplate(ID);
+
+    expect(read.template?.structureHash).toBe(HASH);
+    expect(read.template?.html).toBe(HTML);
+    expect(read.tamper).toEqual([
+      {
+        reason: "hostile_retraction",
+        written_by_worker: "researcher-1a2b3c4d",
+        written_by_session: "sess-77c1e2d5",
+        memory_id: "ret-hostile",
+      },
+    ]);
+  });
+
+  it("store_read_template: WOLF's own retraction IS honoured — that is how Wolf corrects itself", async () => {
+    const { store } = harness({
+      sessions: SESSIONS,
+      templates: {
+        [ID]: JSON.stringify({
+          memories: [
+            templateRow({
+              retracted_by: [
+                { memory_id: "ret-wolf", created_by_worker: "", created_by_session: "", created_at: 1787334047600 },
+              ],
+            }),
+          ],
+        }),
+      },
+      memoriesById: { "tmpl-1": templateFull() },
+    });
+    const read = await store.readTemplate(ID);
+    expect(read.template).toBeNull();
+    expect(read.tamper).toEqual([]);
+  });
+
+  it("store_read_template: Wolf's retraction plus a hostile one on top still counts as retracted — no resurrection", async () => {
+    // "At least one retraction with empty provenance" (owner decision B5).
+    // Reading only the NEWEST retraction would let an attacker resurrect a
+    // template Wolf legitimately withdrew by appending its own on top.
+    const { store } = harness({
+      sessions: SESSIONS,
+      templates: {
+        [ID]: JSON.stringify({
+          memories: [
+            templateRow({
+              retracted_by: [
+                { memory_id: "ret-hostile", created_by_worker: "", created_by_session: "sess-77c1e2d5", created_at: 1787334047700 },
+                { memory_id: "ret-wolf", created_by_worker: "", created_by_session: "", created_at: 1787334047600 },
+              ],
+            }),
+          ],
+        }),
+      },
+      memoriesById: { "tmpl-1": templateFull() },
+    });
+    const read = await store.readTemplate(ID);
+    expect(read.template).toBeNull();
+    expect(read.tamper.map((t) => t.memory_id)).toEqual(["ret-hostile"]);
+  });
+
+  it("store_read_template: a withdrawn template falls through to the older one beneath it", async () => {
+    const { store } = harness({
+      sessions: SESSIONS,
+      templates: {
+        [ID]: JSON.stringify({
+          memories: [
+            templateRow({
+              id: "tmpl-2",
+              created_at: 1787334047900,
+              retracted_by: [
+                { memory_id: "ret-wolf", created_by_worker: "", created_by_session: "", created_at: 1787334047950 },
+              ],
+            }),
+            templateRow(),
+          ],
+        }),
+      },
+      memoriesById: { "tmpl-1": templateFull(), "tmpl-2": templateFull("tmpl-2") },
+    });
+    const read = await store.readTemplate(ID);
+    expect(read.template?.memoryId).toBe("tmpl-1");
+  });
+
+  it("store_read_template: no template at all is `null` with no tamper — absence, not an anomaly", async () => {
+    const { store } = harness({ sessions: SESSIONS });
+    expect(await store.readTemplate(ID)).toEqual({ template: null, tamper: [] });
+  });
+
+  it("store_read_template: an id absent from the SESSION index is not_found — the session list is the authoritative index", async () => {
+    const { store } = harness({ sessions: [] });
+    await expect(store.readTemplate(ID)).rejects.toMatchObject({ kind: "not_found" });
+  });
+
+  it("store_read_template: a supplied session index skips the session walk entirely", async () => {
+    const { store, stub } = harness({
+      sessions: SESSIONS,
+      templates: { [ID]: JSON.stringify({ memories: [templateRow()] }) },
+      memoriesById: { "tmpl-1": templateFull() },
+    });
+    await store.readTemplate(ID, { sessions: new Set([ID]) });
+    expect(stub.sessionRequests).toHaveLength(0);
+  });
+});
+
+describe("store_read_latest_report", () => {
+  const ID = "1a2b3c4d";
+  const SLOTS = { headline: "<p>the basket held</p>", "chart-main": '<div id="c"></div>' };
+  const SESSIONS = sessionsNamed("hyp-1a2b3c4d");
+
+  function reportRow(extra: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: "rep-1",
+      labels: { kind: "report", name: ID },
+      snippet: "the basket held\n{",
+      score: 0,
+      // `kind=report` is written from INSIDE a container on every tick. This
+      // provenance is normal, not an attack.
+      created_by_worker: "researcher-1a2b3c4d",
+      created_by_session: "sess-77c1e2d5",
+      created_at: 1787334048000,
+      ...extra,
+    };
+  }
+
+  function reportFull(id = "rep-1", headline = "the basket held", slots: unknown = SLOTS): string {
+    return JSON.stringify({
+      id,
+      labels: { kind: "report", name: ID },
+      content: `${headline}\n${JSON.stringify(slots)}`,
+      created_by_worker: "researcher-1a2b3c4d",
+      created_by_session: "sess-77c1e2d5",
+      created_at: 1787334048000,
+    });
+  }
+
+  it("store_read_latest_report: the newest report comes back in full, and its container provenance is NOT tamper", async () => {
+    // `report` is untrusted by construction — the researcher is what writes
+    // it. Flagging every one `forged_row` would fill the board with warnings
+    // for the system working as designed. The check that DOES belong to these
+    // rows — that the writer is this hypothesis's own researcher or session —
+    // is cross-hypothesis defence and belongs to W22.
+    const { store, stub } = harness({
+      sessions: SESSIONS,
+      reports: { [ID]: JSON.stringify({ memories: [reportRow()] }) },
+      memoriesById: { "rep-1": reportFull() },
+    });
+    const read = await store.readLatestReport(ID);
+
+    expect(read.tamper).toEqual([]);
+    expect(read.report?.headline).toBe("the basket held");
+    expect(read.report?.headlineTruncated).toBe(false);
+    expect(read.report?.slots).toEqual(SLOTS);
+    expect(read.report?.createdByWorker).toBe("researcher-1a2b3c4d");
+    expect(read.report?.createdBySession).toBe("sess-77c1e2d5");
+
+    const search = stub.memoryRequests.find((r) => r.path.includes("selector="));
+    expect(search?.path).toContain("selector=kind%3Dreport%2Cname%3D1a2b3c4d");
+    expect(search?.path).toContain("include_retracted=1");
+  });
+
+  it("store_read_latest_report: a hostile retraction of a report changes nothing but is reported", async () => {
+    const { store } = harness({
+      sessions: SESSIONS,
+      reports: {
+        [ID]: JSON.stringify({
+          memories: [
+            reportRow({
+              retracted_by: [
+                { memory_id: "ret-hostile", created_by_worker: "critic", created_by_session: "sess-9", created_at: 1787334048100 },
+              ],
+            }),
+          ],
+        }),
+      },
+      memoriesById: { "rep-1": reportFull() },
+    });
+    const read = await store.readLatestReport(ID);
+    expect(read.report?.headline).toBe("the basket held");
+    expect(read.tamper).toEqual([
+      {
+        reason: "hostile_retraction",
+        written_by_worker: "critic",
+        written_by_session: "sess-9",
+        memory_id: "ret-hostile",
+      },
+    ]);
+  });
+
+  it("store_read_latest_report: a report WOLF retracted is skipped, and the one beneath it wins", async () => {
+    const { store } = harness({
+      sessions: SESSIONS,
+      reports: {
+        [ID]: JSON.stringify({
+          memories: [
+            reportRow({
+              id: "rep-2",
+              created_at: 1787334048900,
+              retracted_by: [
+                { memory_id: "ret-wolf", created_by_worker: "", created_by_session: "", created_at: 1787334048950 },
+              ],
+            }),
+            reportRow(),
+          ],
+        }),
+      },
+      memoriesById: { "rep-1": reportFull(), "rep-2": reportFull("rep-2", "withdrawn") },
+    });
+    const read = await store.readLatestReport(ID);
+    expect(read.report?.memoryId).toBe("rep-1");
+  });
+
+  it("store_read_latest_report: a headline over 400 characters is truncated on read and flagged", async () => {
+    const { store } = harness({
+      sessions: SESSIONS,
+      reports: { [ID]: JSON.stringify({ memories: [reportRow()] }) },
+      memoriesById: { "rep-1": reportFull("rep-1", "w".repeat(512)) },
+    });
+    const read = await store.readLatestReport(ID);
+    expect(read.report?.headline).toHaveLength(400);
+    expect(read.report?.headlineTruncated).toBe(true);
+  });
+
+  it("store_read_latest_report: a body that is not a flat {slotId: html} map is `invalid`, naming the key", async () => {
+    const { store } = harness({
+      sessions: SESSIONS,
+      reports: { [ID]: JSON.stringify({ memories: [reportRow()] }) },
+      memoriesById: { "rep-1": reportFull("rep-1", "a headline", { "chart-main": { html: "<div/>" } }) },
+    });
+    await expect(store.readLatestReport(ID)).rejects.toMatchObject({
+      kind: "invalid",
+      details: { key: "chart-main" },
+    });
+  });
+
+  it("store_read_latest_report: no report yet is `null`, never an empty headline", async () => {
+    const { store } = harness({ sessions: SESSIONS });
+    expect(await store.readLatestReport(ID)).toEqual({ report: null, tamper: [] });
+  });
+
+  it("store_read_latest_report: a row naming a DIFFERENT hypothesis is not this hypothesis's report", async () => {
+    // Labels are chosen entirely by the caller, so a search that came back
+    // with a foreign `name` must not be applied here. (Whether the WRITER
+    // belongs to this hypothesis is W22's criterion, not this one's.)
+    const { store } = harness({
+      sessions: SESSIONS,
+      reports: {
+        [ID]: JSON.stringify({
+          memories: [reportRow({ id: "rep-other", labels: { kind: "report", name: "2b3c4d5e" } })],
+        }),
+      },
+      memoriesById: { "rep-other": reportFull("rep-other") },
+    });
+    expect((await store.readLatestReport(ID)).report).toBeNull();
+  });
+
+  it("store_read_latest_report: an id absent from the session index is not_found", async () => {
+    const { store } = harness({ sessions: [] });
+    await expect(store.readLatestReport(ID)).rejects.toMatchObject({ kind: "not_found" });
   });
 });
