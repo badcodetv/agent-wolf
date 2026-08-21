@@ -157,6 +157,20 @@ async function ensureProjectSettings(
 ): Promise<"unchanged" | "updated"> {
   const current: ProjectSettings = await client.getProjectSettings();
 
+  // `attention_channel` is DELIBERATELY EMPTY, and must stay that way. Do not
+  // "fix" this by inventing a URL.
+  //
+  // Orange's only channel kind is an OUTBOUND WEBHOOK: `{"kind": "webhook",
+  // "url": "https://…"}`, POSTed to by agentd when a worker calls
+  // `request_human_attention` (go/cmd/agentd/attention.go:57-103 — it requires
+  // an http(s) URL and rejects anything else). Wolf exposes no such receiver:
+  // its API (api/src/app.ts) mounts no inbound webhook route, and adding one
+  // would be an unauthenticated write surface pointed at the board.
+  //
+  // Wolf's notification surface is the board itself: W10's poller reads
+  // `GET /agent/attention-requests` on its own tick and moves the hypothesis to
+  // `challenged`. Pull, not push — so there is nothing here to configure, and a
+  // non-empty value would make agentd POST at a URL that does not exist.
   const attentionChannel: Record<string, unknown> = {};
   const alreadyCorrect =
     current.baseImage === wolfBaseImage &&

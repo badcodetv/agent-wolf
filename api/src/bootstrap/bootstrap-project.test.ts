@@ -383,6 +383,19 @@ describe("prompt contract — the literals every other ticket depends on", () =>
     expect(RESEARCHER_METHOD.includes("<!-- WOLF:METHOD-BODY -->")).toBe(false);
   });
 
+  // The preamble MENTIONS the marker in prose (inside backticks) while
+  // explaining what it is, so the literal appears more than once as a
+  // SUBSTRING. The boundary is the literal LINE, and only a line-anchored
+  // split is safe: a splitter using indexOf/split on the bare substring would
+  // cut at the prose mention and silently make most of the locked preamble
+  // "mutable". This pins the property W9's splitter relies on.
+  it("<!-- WOLF:METHOD-BODY --> occurs exactly once in the preamble as a whole line", () => {
+    const markerLines = RESEARCHER_PREAMBLE.split("\n").filter(
+      (line) => line.trim() === "<!-- WOLF:METHOD-BODY -->",
+    );
+    expect(markerLines).toHaveLength(1);
+  });
+
   it("timestamp,value occurs in the preamble", () => {
     expect(RESEARCHER_PREAMBLE.includes("timestamp,value")).toBe(true);
   });
