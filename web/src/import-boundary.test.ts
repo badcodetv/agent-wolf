@@ -1,31 +1,56 @@
+// @vitest-environment node
+//
+// This suite walks the filesystem and (for the alias check) dynamically
+// imports vite.config.ts — none of it touches the DOM. Overriding the
+// per-file environment to "node" (the project default is jsdom, for
+// component tests) avoids a jsdom/esbuild realm mismatch: esbuild's own
+// startup check (`new TextEncoder().encode("") instanceof Uint8Array`) is
+// evaluated against jsdom's TextEncoder under the default environment and
+// fails there, which breaks the dynamic import of vite.config.ts (it pulls
+// in @vitejs/plugin-react, which loads esbuild) with an unrelated-looking
+// "your JavaScript environment is broken" error.
 import { describe, expect, it } from "vitest";
 import { builtinModules } from "node:module";
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 // design/2026-08-20-agent-wolf.md, W1 acceptance criteria: "web/ imports
 // nothing from agent-orange — enforced by a test that fails if any import
 // specifier resolves outside the repo." This walks every source file under
 // web/src plus both package.json manifests, and fails if ANY way of naming a
 // module — a relative import, a dynamic import()/require(), a bare
-// specifier resolved through node_modules, or a file:/link:/portal:
-// dependency — resolves outside this repository (agent-wolf). Fix-round-1
-// findings this version closes: dynamic import()/require() were unmatched;
-// bare specifiers (a `file:` dependency installed as e.g. "@agentkit/web")
-// were never resolved at all; and `startsWith(repoRoot)` is not a safe
-// boundary check (a sibling directory like "agent-wolf-old" shares that
-// prefix as a string without being inside the repo).
+// specifier resolved through node_modules, a file:/link:/portal:
+// dependency, a Vite `resolve.alias` target, or a tsconfig `paths` target —
+// resolves outside this repository (agent-wolf). Fix-round-1 findings this
+// version closes: dynamic import()/require() were unmatched; bare
+// specifiers (a `file:` dependency installed as e.g. "@agentkit/web") were
+// never resolved at all; and `startsWith(repoRoot)` is not a safe boundary
+// check (a sibling directory like "agent-wolf-old" shares that prefix as a
+// string without being inside the repo). Fix-round-2 finding this version
+// closes: a bare specifier that resolves through a Vite `resolve.alias` (or
+// a tsconfig `paths` entry) has no node_modules entry at all, so it fell
+// into the "nothing resolves it, not this test's problem" branch and passed
+// unexamined — which is exactly the route the plan names for how
+// examples/web consumes Orange's UI (`examples/web/vite.config.ts:21-38`).
+// Two changes close it: `vite.config.ts`'s `resolve.alias` and
+// `tsconfig.json`'s `compilerOptions.paths` are now read and every target
+// they name is boundary-checked; and an unresolvable bare specifier is now a
+// violation unless its package name is declared in web/package.json's
+// dependencies/devDependencies (so a specifier that is neither a real
+// package nor a builtin can no longer pass unexamined).
 
 const here = dirname(fileURLToPath(import.meta.url));
 const webRoot = resolve(here, ".."); // web/
 const repoRoot = resolve(webRoot, ".."); // agent-wolf/
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx"]);
 
-// Matches, across three call shapes:
-//   import x from "spec"; import "spec"; export * from "spec";
-//   import("spec")                                    (dynamic import)
-//   require("spec")                                   (CJS interop)
+// Matches, across three call shapes (module specifier elided below so this
+// comment block does not itself look like an import to the regex it is
+// documenting):
+//   import x from SPEC; import SPEC; export * from SPEC   (static forms)
+//   import(SPEC)                                          (dynamic import)
+//   require(SPEC)                                         (CJS interop)
 const IMPORT_SPECIFIER_PATTERNS = [
   /(?:import|export)(?:[^'"()]*from)?\s*["']([^"']+)["']/g,
   /\bimport\s*\(\s*["']([^"']+)["']/g,
@@ -71,6 +96,87 @@ function allImportSpecifiers(filePath: string): string[] {
 
 function isBuiltin(specifier: string): boolean {
   return specifier.startsWith("node:") || builtinModules.includes(specifier);
+}
+
+type PackageManifest = {
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+};
+
+function readManifest(path: string): PackageManifest {
+  return JSON.parse(readFileSync(path, "utf8")) as PackageManifest;
+}
+
+// Every package name web/package.json declares, dependency or dev
+// dependency. A bare specifier naming one of these is allowed to fail
+// node_modules resolution (e.g. a fresh checkout before install) without
+// being treated as an escape; anything else that resolves to nothing on
+// disk is a real, unexplained bare specifier and must be flagged.
+function declaredDependencyNames(): Set<string> {
+  const manifest = readManifest(join(webRoot, "package.json"));
+  return new Set([
+    ...Object.keys(manifest.dependencies ?? {}),
+    ...Object.keys(manifest.devDependencies ?? {}),
+  ]);
+}
+
+// Strip // and /* */ comments so tsconfig's JSONC can go through
+// JSON.parse. Good enough for this file's own tsconfig, which is
+// deliberately simple; if it ever grows a `//` or `/*` inside a string
+// value this would need a real JSONC parser, but it does not today.
+function stripJsonComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+}
+
+// Every filesystem target named by web/tsconfig.json's compilerOptions.paths
+// (resolved against baseUrl, wildcard segment stripped), as absolute paths.
+// A `paths` entry is exactly as capable of aliasing outside the repo as a
+// Vite resolve.alias — this is the tsconfig-side half of the same escape.
+function tsconfigPathsTargets(tsconfigPath: string): string[] {
+  if (!existsSync(tsconfigPath)) return [];
+  let config: { compilerOptions?: { baseUrl?: string; paths?: Record<string, string[]> } };
+  try {
+    config = JSON.parse(stripJsonComments(readFileSync(tsconfigPath, "utf8")));
+  } catch {
+    return []; // malformed tsconfig is a build-time problem, not this test's
+  }
+  const paths = config.compilerOptions?.paths;
+  if (!paths) return [];
+  const baseDir = resolve(dirname(tsconfigPath), config.compilerOptions?.baseUrl ?? ".");
+  const targets: string[] = [];
+  for (const patterns of Object.values(paths)) {
+    for (const pattern of patterns) {
+      targets.push(resolve(baseDir, pattern.replace(/\*/g, "")));
+    }
+  }
+  return targets;
+}
+
+// Every filesystem target named by web/vite.config.ts's resolve.alias, as
+// absolute paths. Loaded by dynamic import (this file already runs under
+// vitest's own TS-aware module loader, which is what evaluates
+// vite.config.ts to run this very suite) rather than by regex, so an alias
+// expressed any of Vite's supported shapes — a plain object, an array of
+// {find, replacement}, or a computed value — is still caught rather than
+// only the literal-string-object shape a regex would special-case.
+async function viteAliasTargets(viteConfigPath: string): Promise<string[]> {
+  if (!existsSync(viteConfigPath)) return [];
+  const mod = (await import(pathToFileURL(viteConfigPath).href)) as {
+    default?: { resolve?: { alias?: unknown } };
+  };
+  const alias = mod.default?.resolve?.alias;
+  if (!alias) return [];
+
+  const entries: Array<[string, unknown]> = Array.isArray(alias)
+    ? alias.map((a) => [String((a as { find: unknown }).find), (a as { replacement: unknown }).replacement])
+    : Object.entries(alias as Record<string, unknown>);
+
+  const targets: string[] = [];
+  for (const [, replacement] of entries) {
+    if (typeof replacement !== "string") continue;
+    targets.push(isAbsolute(replacement) ? replacement : resolve(dirname(viteConfigPath), replacement));
+  }
+  return targets;
 }
 
 // Package name portion of a bare specifier: "@scope/pkg/sub/path" ->
@@ -120,7 +226,8 @@ describe("web/ import boundary", () => {
     expect(violations).toEqual([]);
   });
 
-  it("resolves every bare-specifier import to a node_modules entry inside the repo", () => {
+  it("resolves every bare-specifier import to a node_modules entry inside the repo, or to a declared dependency", () => {
+    const declared = declaredDependencyNames();
     const violations: string[] = [];
     for (const file of files) {
       for (const specifier of allImportSpecifiers(file)) {
@@ -130,10 +237,21 @@ describe("web/ import boundary", () => {
         const pkgName = packageNameOf(specifier);
         const dir = resolvePackageDir(pkgName, dirname(file));
         if (!dir) {
-          // Nothing on disk resolves this specifier at all — not an escape
-          // (there is nowhere for it to escape to), but also not silently
-          // ignorable: an uninstalled or misspelled import is a real bug,
-          // just not this test's bug to report.
+          // Nothing on disk resolves this specifier via node_modules. That is
+          // legitimate for a declared-but-not-yet-installed dependency (a
+          // clean checkout before `yarn install`), but a specifier naming a
+          // package that is neither installed NOR declared is exactly the
+          // shape of a bare specifier that only resolves through a bundler
+          // alias (Vite resolve.alias / tsconfig paths) — those are
+          // boundary-checked directly below, but a specifier is flagged here
+          // regardless of whether this suite's alias scan actually catches
+          // the particular alias mechanism used, so an unexplained bare
+          // specifier can never pass silently.
+          if (!declared.has(pkgName)) {
+            violations.push(
+              `${file} imports "${specifier}" -> package "${pkgName}" is neither present in node_modules nor declared in web/package.json (dependencies/devDependencies)`,
+            );
+          }
           continue;
         }
         const real = realpathSync(dir);
@@ -142,6 +260,35 @@ describe("web/ import boundary", () => {
             `${file} imports "${specifier}" -> node_modules entry "${dir}" resolves (via realpath) outside the repo: ${real}`,
           );
         }
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+
+  it("resolves every vite.config.ts resolve.alias target inside the repo", async () => {
+    const targets = await viteAliasTargets(join(webRoot, "vite.config.ts"));
+    const violations: string[] = [];
+    for (const target of targets) {
+      const real = existsSync(target) ? realpathSync(target) : target;
+      if (!isPathInside(real, repoRoot)) {
+        violations.push(`vite.config.ts resolve.alias target resolves outside the repo: ${target} -> ${real}`);
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+
+  it("resolves every tsconfig.json paths target inside the repo", () => {
+    // web/tsconfig.json itself, plus the base config it extends — a `paths`
+    // entry declared at either level is equally capable of aliasing out.
+    const targets = [
+      ...tsconfigPathsTargets(join(webRoot, "tsconfig.json")),
+      ...tsconfigPathsTargets(join(repoRoot, "tsconfig.base.json")),
+    ];
+    const violations: string[] = [];
+    for (const target of targets) {
+      const real = existsSync(target) ? realpathSync(target) : target;
+      if (!isPathInside(real, repoRoot)) {
+        violations.push(`tsconfig.json paths target resolves outside the repo: ${target} -> ${real}`);
       }
     }
     expect(violations).toEqual([]);
