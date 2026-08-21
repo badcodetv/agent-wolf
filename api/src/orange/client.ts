@@ -84,8 +84,32 @@ export interface OrangeClient {
 
   appendMemory(params: AppendMemoryParams): Promise<MemoryRecord>;
   listMemories(params?: ListMemoriesParams): Promise<MemorySearchResultRow[]>;
+  /**
+   * `GET /agent/memories/{id}` — FULL content, not the 500-character snippet
+   * the list route returns. Deliberately not retraction-filtered on the Orange
+   * side (`go/agentdb/memories.go:281-283`: "fetching a specific id is an
+   * explicit request for that row"), which is what lets W15's report reads
+   * serve a template a hostile retraction tried to hide.
+   */
+  getMemoryById(id: string): Promise<MemoryRecord>;
+  /** @deprecated W15 named this `getMemoryById`; this alias is kept only so W8's routes keep compiling. */
   getMemory(id: string): Promise<MemoryRecord>;
-  getCurrentMemory(name: string): Promise<MemoryRecord>;
+  /**
+   * `GET /agent/memories/current?name=` — FULL content, the newest memory
+   * carrying `name=<name>`.
+   *
+   * ⚠️ `kind` is filtered CLIENT-SIDE and cannot be pushed to the server.
+   * Orange's route builds the selector as exactly `"name=" + name`
+   * (`go/httpapi/memories.go:391`) and accepts no other parameter, so it
+   * answers with the newest memory of ANY kind carrying that name — and every
+   * kind in Wolf's vocabulary shares `name=<hypothesis id>`. Passing `kind`
+   * asserts what came back; it does not search past it. When the newest row is
+   * a different kind the result is `not_found`, NOT the newest row of the kind
+   * asked for. Anything that needs "the newest row of this kind" must use
+   * `listMemories` with a `kind=,name=` selector — which is also the only way
+   * to pass `include_retracted=1`, which this route does not support at all.
+   */
+  getCurrentMemory(name: string, kind?: string): Promise<MemoryRecord>;
 
   listDatasets(params?: { selector?: string; limit?: number }): Promise<DatasetMetadata[]>;
   getDataset(name: string): Promise<DatasetMetadata>;
@@ -178,6 +202,20 @@ async function safeText(res: Response): Promise<string> {
  */
 function classifyStatus(status: number): WolfErrorKind {
   switch (status) {
+    case 401:
+      // W15: this case was MISSING, so an Orange 401 fell through `default`
+      // and arrived as kind `internal` — "WE have a bug" — for what is in fact
+      // a rejected credential. W8 needed `POST /auth/verify-google`'s 401 to
+      // read as `forbidden` and worked around it by branching on
+      // `err.status === 401` inside its own route rather than editing this
+      // file, which left every OTHER caller that branches on `kind`
+      // mis-handling a 401. `forbidden` is the taxonomy's "authenticated but
+      // not allowed", and it is emphatically NOT `unavailable`: a 401 never
+      // clears by retrying.
+      //
+      // The STATUS stays 401 (`defaultErrorFor` passes it through), so W8's
+      // existing `err.status === 401` branch keeps working unchanged.
+      return "forbidden";
     case 404:
     case 410:
       return "not_found";
@@ -301,6 +339,38 @@ function recordField(raw: Record<string, unknown>, key: string): Record<string, 
   return isRecord(v) ? v : {};
 }
 
+/**
+ * A provenance field — `created_by_worker` / `created_by_session` — which must
+ * be PRESENT and a string. An absent one is an `invalid` error, never `""`.
+ *
+ * ⚠️ **This is the one place in the whole product where the trust rule depends
+ * on a field being PRESENT rather than on its value.** § "The trust model"
+ * reads: *a memory is trusted iff `created_by_worker === "" && created_by_session === ""`*
+ * — so a row that simply OMITS both keys, mapped through the ordinary
+ * `strField` default, becomes two empty strings and reads as **trusted**. It
+ * fails OPEN, in the direction of granting authority.
+ *
+ * It is not reachable through today's `agentd`: `agentdb.MemorySearchResult`
+ * tags both fields without `omitempty` (`go/agentdb/memories.go:133-134`), so
+ * they are always emitted. But the defence cannot be mounted from
+ * `hypothesis/store.ts` — by the time the store sees the row the distinction
+ * between "absent" and "empty" is already gone — so it is mounted here, at the
+ * only boundary that can still tell them apart. W5 found this and named W15 as
+ * the owner. Rejecting the shape is the safe direction: a mapper that throws
+ * is a visible failure, a mapper that fabricates provenance is a silent one.
+ */
+function provenanceField(raw: Record<string, unknown>, key: string, where: string): string {
+  const v = raw[key];
+  if (typeof v !== "string") {
+    throw invalidShape(
+      where,
+      `${key} is ${v === undefined ? "absent" : "not a string"} — provenance must be PRESENT, ` +
+        "because the trust rule tests it for EMPTINESS and an absent field would read as trusted",
+    );
+  }
+  return v;
+}
+
 function labelsField(raw: Record<string, unknown>): Record<string, string> {
   const v = raw["labels"];
   if (!isRecord(v)) return {};
@@ -317,8 +387,8 @@ function mapMemoryRetraction(raw: unknown, where: string): MemoryRetraction {
   if (!isRecord(raw)) throw invalidShape(where, "expected a retraction object");
   return {
     memoryId: strField(raw, "memory_id"),
-    createdByWorker: strField(raw, "created_by_worker"),
-    createdBySession: strField(raw, "created_by_session"),
+    createdByWorker: provenanceField(raw, "created_by_worker", where),
+    createdBySession: provenanceField(raw, "created_by_session", where),
     createdAtMs: toMs(numField(raw, "created_at")),
   };
 }
@@ -330,8 +400,8 @@ function mapMemorySearchRow(raw: unknown, where: string): MemorySearchResultRow 
     labels: labelsField(raw),
     snippet: strField(raw, "snippet"),
     score: numField(raw, "score"),
-    createdByWorker: strField(raw, "created_by_worker"),
-    createdBySession: strField(raw, "created_by_session"),
+    createdByWorker: provenanceField(raw, "created_by_worker", where),
+    createdBySession: provenanceField(raw, "created_by_session", where),
     createdAtMs: toMs(numField(raw, "created_at")),
   };
   const retractedByRaw = raw["retracted_by"];
@@ -347,8 +417,8 @@ function mapMemoryRecord(raw: unknown, where: string): MemoryRecord {
     id: strField(raw, "id"),
     labels: labelsField(raw),
     content: strField(raw, "content"),
-    createdByWorker: strField(raw, "created_by_worker"),
-    createdBySession: strField(raw, "created_by_session"),
+    createdByWorker: provenanceField(raw, "created_by_worker", where),
+    createdBySession: provenanceField(raw, "created_by_session", where),
     createdAtMs: toMs(numField(raw, "created_at")),
   };
 }
@@ -496,7 +566,21 @@ function createSession(
     // session genuinely clears the condition.
     errorOverride: (status, bodyText) => {
       if (status === 403 && bodyText.includes("host port pool is exhausted")) {
-        return new WolfError("unavailable", bodyText, { status, upstreamBody: bodyText });
+        // W15: this used to carry the UPSTREAM status (403) on kind
+        // `unavailable`, which contradicts the taxonomy — `unavailable` is
+        // 503 — and `unavailable` is the ONE retryable kind. A retry loop
+        // that reads the status rather than the kind (or a proxy that does)
+        // sees "403 Forbidden", concludes the condition is permanent, and
+        // stops retrying the one outage that genuinely clears when a finished
+        // session is deleted. The status is restated at 503; the MESSAGE and
+        // `upstreamBody` are Orange's, verbatim, because "host port pool is
+        // exhausted" is the only actionable part of it, and the upstream
+        // status is preserved in `details` rather than thrown away.
+        return new WolfError("unavailable", bodyText, {
+          status: 503,
+          upstreamBody: bodyText,
+          details: { upstreamStatus: status },
+        });
       }
       return undefined;
     },
@@ -595,12 +679,28 @@ function getMemory(ctx: ClientContext, id: string): Promise<MemoryRecord> {
   }).then(({ json }) => mapMemoryRecord(json, `GET /agent/memories/${id}`));
 }
 
-function getCurrentMemory(ctx: ClientContext, name: string): Promise<MemoryRecord> {
+function getCurrentMemory(ctx: ClientContext, name: string, kind?: string): Promise<MemoryRecord> {
   return doRequest(ctx, {
     method: "GET",
     path: "/agent/memories/current",
     query: { name },
-  }).then(({ json }) => mapMemoryRecord(json, "GET /agent/memories/current"));
+  }).then(({ json }) => {
+    const record = mapMemoryRecord(json, "GET /agent/memories/current");
+    // The kind assertion is client-side because the route has nowhere to put
+    // it — see the interface comment. Reported as `not_found` rather than
+    // `invalid`: from the caller's point of view "the current memory named X
+    // is not a Y" is exactly "there is no current Y named X", and Orange
+    // already answers 404 for the neighbouring case.
+    if (kind !== undefined && record.labels["kind"] !== kind) {
+      throw new WolfError(
+        "not_found",
+        `GET /agent/memories/current?name=${name}: the newest memory with that name is kind ` +
+          `${JSON.stringify(record.labels["kind"] ?? "")}, not ${JSON.stringify(kind)}`,
+        { status: 404, details: { name, kind, found: record.labels["kind"] ?? "" } },
+      );
+    }
+    return record;
+  });
 }
 
 function listDatasets(
@@ -825,7 +925,8 @@ export function createOrangeClient(options: CreateOrangeClientOptions): OrangeCl
     appendMemory: (params) => appendMemory(ctx, params),
     listMemories: (params) => listMemories(ctx, params),
     getMemory: (id) => getMemory(ctx, id),
-    getCurrentMemory: (name) => getCurrentMemory(ctx, name),
+    getMemoryById: (id) => getMemory(ctx, id),
+    getCurrentMemory: (name, kind) => getCurrentMemory(ctx, name, kind),
 
     listDatasets: (params) => listDatasets(ctx, params),
     getDataset: (name) => getDataset(ctx, name),
