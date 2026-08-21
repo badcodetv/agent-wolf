@@ -54,6 +54,26 @@ const secondsSchema = z.coerce.number().int().min(0);
 const MCP_TOKEN_PATTERN = /^[A-Za-z0-9_-]{32,128}$/;
 
 /**
+ * `WOLF_CRITIC_CRON`'s pinned shape (W12): a plain 5-field cron expression,
+ * never a nickname. Orange's schedule store refuses `@weekly` and friends
+ * outright (`go/agentdb/schedules.go:827`), so validating the shape here —
+ * before it ever reaches `POST /agent/schedules` — turns a bad value into a
+ * boot-time `misconfigured` error naming this variable, rather than a
+ * bootstrap script failing opaquely partway through provisioning the `wolf`
+ * project. This is a shape check, not a full cron grammar: it does not
+ * validate that each field's *value* is in range, only that there are
+ * exactly five whitespace-separated fields and none of them is a `@…`
+ * nickname.
+ */
+const CRON_NICKNAME_PATTERN = /^@/;
+
+function isFiveFieldCron(value: string): boolean {
+  const trimmed = value.trim();
+  if (trimmed === "" || CRON_NICKNAME_PATTERN.test(trimmed)) return false;
+  return trimmed.split(/\s+/).length === 5;
+}
+
+/**
  * Treats an EMPTY environment variable as absent.
  *
  * This is not pedantry: `docker-compose.yml` forwards optional variables as
@@ -103,6 +123,17 @@ export interface WolfConfig {
    * download URL stays valid. Kept short — the URL carries its token
    * through the model's context and the persisted transcript. */
   seriesUrlTtlSeconds: number;
+  /** `WOLF_BASE_IMAGE` (default `agent-wolf:dev`): the image every session
+   * in the `wolf` Orange project launches from, written into the project's
+   * `base_image` setting by the bootstrap script (W12). Not read anywhere
+   * else in this process — this is config for the bootstrap, not for
+   * serving requests. */
+  wolfBaseImage: string;
+  /** `WOLF_CRITIC_CRON` (default `0 4 * * 1`, i.e. Mondays at 04:00): the
+   * cron the bootstrap script (W12) registers for the project-level
+   * `critic` worker's weekly schedule. Must be a plain 5-field expression —
+   * see `isFiveFieldCron`'s doc comment for why. */
+  criticCron: string;
 }
 
 /**
@@ -122,6 +153,12 @@ export const DEFAULT_SERIES_URL_TTL_SECONDS = 300;
 
 /** Default market-data cache TTL, in seconds (W6: "default 3600s"). */
 export const DEFAULT_MARKETDATA_CACHE_TTL_SECONDS = 3600;
+
+/** Default `base_image` the bootstrap script sets on the `wolf` project (W12). */
+export const DEFAULT_WOLF_BASE_IMAGE = "agent-wolf:dev";
+
+/** Default cron for the project-level `critic` schedule (W12): Mondays at 04:00. */
+export const DEFAULT_WOLF_CRITIC_CRON = "0 4 * * 1";
 
 // ── DinD gateway discovery (R43) ────────────────────────────────────────
 //
@@ -309,6 +346,17 @@ export function loadConfig(
     );
   }
 
+  const wolfBaseImage = present(env.WOLF_BASE_IMAGE) ?? DEFAULT_WOLF_BASE_IMAGE;
+
+  const criticCron = present(env.WOLF_CRITIC_CRON) ?? DEFAULT_WOLF_CRITIC_CRON;
+  if (!isFiveFieldCron(criticCron)) {
+    throw WolfError.misconfigured(
+      "WOLF_CRITIC_CRON",
+      "WOLF_CRITIC_CRON must be a plain 5-field cron expression (never a nickname like " +
+        `@weekly — Orange's schedule store rejects those), got ${JSON.stringify(env.WOLF_CRITIC_CRON)}`,
+    );
+  }
+
   return {
     port: portResult.data,
     logLevel: logLevelResult.data,
@@ -321,5 +369,7 @@ export function loadConfig(
     seriesTokenSecret: seriesSecretFromEnv || randomBytes(32).toString("base64url"),
     seriesTokenSecretSource: seriesSecretFromEnv ? "env" : "generated",
     seriesUrlTtlSeconds: seriesTtlResult.data,
+    wolfBaseImage,
+    criticCron,
   };
 }

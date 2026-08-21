@@ -284,3 +284,71 @@ describe("loadConfig — W7 market-data and MCP variables", () => {
     }
   });
 });
+
+// design/2026-08-20-agent-wolf.md, W12's Files line: "modify api/src/config.ts
+// and .env.example (WOLF_BASE_IMAGE, WOLF_CRITIC_CRON only)".
+describe("WOLF_BASE_IMAGE / WOLF_CRITIC_CRON (W12)", () => {
+  const noRoutes = routeSourceReturning(undefined);
+
+  it("defaults wolfBaseImage to agent-wolf:dev and criticCron to Mondays at 04:00", () => {
+    const config = loadConfig({}, noRoutes);
+    expect(config.wolfBaseImage).toBe("agent-wolf:dev");
+    expect(config.criticCron).toBe("0 4 * * 1");
+  });
+
+  it("reads WOLF_BASE_IMAGE and WOLF_CRITIC_CRON when set", () => {
+    const config = loadConfig(
+      { WOLF_BASE_IMAGE: "agent-wolf:2026-08-21", WOLF_CRITIC_CRON: "30 5 * * 3" },
+      noRoutes,
+    );
+    expect(config.wolfBaseImage).toBe("agent-wolf:2026-08-21");
+    expect(config.criticCron).toBe("30 5 * * 3");
+  });
+
+  it("treats an empty WOLF_BASE_IMAGE as absent (R80's present() rule) and falls back to the default", () => {
+    // Compose forwards an unset optional variable as "" via `${VAR:-}`, not
+    // as absent — this is the same trap W7 documented for numeric variables,
+    // and it applies here even though wolfBaseImage is a plain string: an
+    // operator who leaves WOLF_BASE_IMAGE unset in .env must still get the
+    // real default, not an empty base_image written into project settings.
+    const config = loadConfig({ WOLF_BASE_IMAGE: "" }, noRoutes);
+    expect(config.wolfBaseImage).toBe("agent-wolf:dev");
+  });
+
+  it("treats an empty WOLF_CRITIC_CRON as absent and falls back to the default", () => {
+    const config = loadConfig({ WOLF_CRITIC_CRON: "" }, noRoutes);
+    expect(config.criticCron).toBe("0 4 * * 1");
+  });
+
+  it("fails fast naming WOLF_CRITIC_CRON when it is a nickname Orange's schedule store rejects", () => {
+    // go/agentdb/schedules.go:827 refuses `@weekly` and friends outright.
+    for (const bad of ["@weekly", "@daily", "@hourly"]) {
+      try {
+        loadConfig({ WOLF_CRITIC_CRON: bad }, noRoutes);
+        throw new Error(`expected loadConfig to throw for ${JSON.stringify(bad)}`);
+      } catch (err) {
+        expect(err).toBeInstanceOf(WolfError);
+        expect((err as WolfError).kind).toBe("misconfigured");
+        expect((err as WolfError).message).toContain("WOLF_CRITIC_CRON");
+      }
+    }
+  });
+
+  it("fails fast naming WOLF_CRITIC_CRON when it does not have exactly five fields", () => {
+    for (const bad of ["0 4 * *", "0 4 * * 1 *", "not-a-cron"]) {
+      try {
+        loadConfig({ WOLF_CRITIC_CRON: bad }, noRoutes);
+        throw new Error(`expected loadConfig to throw for ${JSON.stringify(bad)}`);
+      } catch (err) {
+        expect(err).toBeInstanceOf(WolfError);
+        expect((err as WolfError).kind).toBe("misconfigured");
+        expect((err as WolfError).message).toContain("WOLF_CRITIC_CRON");
+      }
+    }
+  });
+
+  it("accepts a 5-field cron with irregular whitespace between fields", () => {
+    const config = loadConfig({ WOLF_CRITIC_CRON: "0   4 *\t* 1" }, noRoutes);
+    expect(config.criticCron).toBe("0   4 *\t* 1");
+  });
+});
