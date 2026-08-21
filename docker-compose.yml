@@ -31,6 +31,17 @@ services:
       # Compose does not inject .env values into the container on its own,
       # only variables an `environment:` entry names.
       WOLF_MCP_URL: ${WOLF_MCP_URL:-}
+      # W7's market-data surface. Compose injects nothing from .env on its
+      # own — only variables an `environment:` entry names — so a variable
+      # documented in .env.example but missing here would simply never
+      # reach the process. WOLF_MCP_TOKEN is required (wolf-api refuses to
+      # boot without it); the other four are optional and carry their
+      # defaults from api/src/config.ts when left empty.
+      WOLF_MCP_TOKEN: ${WOLF_MCP_TOKEN:-}
+      WOLF_SERIES_TOKEN_SECRET: ${WOLF_SERIES_TOKEN_SECRET:-}
+      WOLF_SERIES_URL_TTL_SECONDS: ${WOLF_SERIES_URL_TTL_SECONDS:-}
+      FRED_API_KEY: ${FRED_API_KEY:-}
+      WOLF_MARKETDATA_CACHE_TTL_SECONDS: ${WOLF_MARKETDATA_CACHE_TTL_SECONDS:-}
     restart: unless-stopped
 
   wolf-web:
