@@ -1,0 +1,53 @@
+{
+  "thesis": "…restated tightly by the interviewer…",
+  "horizon_days": 180,
+  "flat_band_pct": 2.0,
+  "metrics": [
+    {
+      "slug": "drone-suppliers-basket",
+      "source": "stooq",
+      "series_id": "avav.us",
+      "direction": "up",
+      "weight": 0.6,
+      "unit": "USD"
+    },
+    {
+      "slug": "petro-settlement-share",
+      "source": "derived",
+      "direction": "down",
+      "weight": 0.4,
+      "unit": "pct",
+      "method": {
+        "description": "share of oil trade settled in USD",
+        "formula": "usd_settled / total_settled * 100",
+        "constituents": ["…"],
+        "source_series": ["…"]
+      }
+    }
+  ],
+  "invalidation": [
+    {
+      "id": "inv-1",
+      "metric": "drone-suppliers-basket",
+      "stat": "drawdown_pct",
+      "ratio_metric": null,
+      "ratio_lookback_days": null,
+      "reference": "peak_since_live",
+      "reference_days": null,
+      "op": "gt",
+      "threshold": 25,
+      "sustained_days": 30,
+      "meaning": "the basket is not responding to the thesis"
+    },
+    {
+      "id": "inv-2",
+      "metric": "petro-settlement-share",
+      "stat": "change_pct",
+      "reference": "value_at_live",
+      "op": "gt",
+      "threshold": 5,
+      "sustained_days": 20,
+      "meaning": "the settlement share is rising, which the thesis says it should not"
+    }
+  ]
+}
