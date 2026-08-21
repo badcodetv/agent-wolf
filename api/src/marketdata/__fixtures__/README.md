@@ -4,36 +4,43 @@ design/2026-08-20-agent-wolf.md § W6: "Fixtures are recorded real responses,
 not hand-written." This file records the exact command each fixture was (or
 would be) captured with, per that requirement.
 
-## FRED — BLOCKED, no fixture recorded
+## FRED — RECORDED 2026-08-21 (W6b)
 
-**No `FRED_API_KEY` is available to the executor in this environment.**
-Verified before writing any code: `FRED_API_KEY` is absent from the
-environment, and an unkeyed request to `api.stlouisfed.org` returns HTTP
-400. Per this ticket's own acceptance criterion — "If no FRED key is
-available to the executor, recording the fixture is a blocked step: log it
-in the Discovered Issues Log and stop — do not hand-write a substitute" —
-**no FRED fixture is committed here.**
-
-The command that WOULD have been used, once a key is available (recorded
-for whoever unblocks this):
+**W6b.** A real `FRED_API_KEY` was made available to the W6b executor (it is
+not committed anywhere — see `.env`, which is git-ignored). Both fixtures
+below were recorded with it on **2026-08-21** using exactly these commands
+(shown with the variable, never the value):
 
 ```sh
-curl -sS "https://api.stlouisfed.org/fred/series/observations?series_id=DGS10&api_key=$FRED_API_KEY&file_type=json" \
+curl -sS "https://api.stlouisfed.org/fred/series/observations?series_id=DGS10&api_key=$FRED_API_KEY&file_type=json&observation_start=2024-12-20&observation_end=2025-01-03" \
   -o api/src/marketdata/__fixtures__/fred-observations-dgs10.json
 
-curl -sS "https://api.stlouisfed.org/fred/series/search?search_text=treasury&api_key=$FRED_API_KEY&file_type=json" \
+curl -sS "https://api.stlouisfed.org/fred/series/search?search_text=treasury&api_key=$FRED_API_KEY&file_type=json&limit=5" \
   -o api/src/marketdata/__fixtures__/fred-search-treasury.json
 ```
 
-The observations fixture should be captured for a series and date range
-known to include at least one FRED restatement (a date appearing twice with
-different `value`s) and at least one missing-value sentinel (`"value": "."`)
-— DGS10 (10-Year Treasury yield) reliably has both around holiday/no-trade
-dates. Until this is recorded, `fred.ts` implements the "." omission and the
-`series_search` field mapping per FRED's publicly documented API shape, but
-**no test asserts either against a real recorded response** — see
-`fred.test.ts`'s header comment and this ticket's Discovered Issues Log
-entry.
+(Both files were re-serialised through `json.dump(..., indent=2)` after
+capture, for readable diffs — the field set and values are unchanged from
+what FRED returned. Neither response body contains the API key; verified
+with `grep` for the literal key value against both files before committing,
+in addition to the general repo-wide `.env`-is-git-ignored protection.)
+
+**`fred-observations-dgs10.json`** — DGS10 (10-Year Treasury yield),
+`observation_start=2024-12-20&observation_end=2025-01-03`. This range was
+chosen because it spans both Christmas Day and New Year's Day 2024/2025,
+and DGS10 is published as a business-daily series that lists every weekday
+including market holidays, with the value `"."` on days markets were
+closed. The recorded response contains exactly this: 11 observations, two
+of which (`2024-12-25` and `2025-01-01`) have `"value": "."`. This pins the
+missing-value-sentinel-omission test.
+
+**`fred-search-treasury.json`** — `search_text=treasury&limit=5` (the
+unbounded query matches 7306 series; `limit=5` keeps the committed fixture
+small while still exercising the real field shape). This pins the
+`series_search` field-mapping test: `id`, `title`, `units`, `frequency`,
+`observation_start`, `observation_end` are all present on every item, as
+FRED actually returns them (`units`/`frequency` are the plain English
+strings, e.g. `"Percent"`/`"Daily"`, not the `_short` codes).
 
 ## Stooq — ALSO BLOCKED, no fixture recorded (discovered during this ticket)
 
