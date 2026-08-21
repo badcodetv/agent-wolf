@@ -1,46 +1,76 @@
-# hypothesis-bot
+# Agent Wolf
 
-The active focus of agent-wolf. Multi-market paper-only hypothesis-tracking advisor for a trusted team.
+A platform for stating trading hypotheses and having them deeply researched and continuously
+validated. A user states a thesis, an interview sharpens it into a falsifiable spec, and a daily
+job then researches and scores it until a human confirms or invalidates the thesis.
 
-> **Status:** 2026-05-09 — research phase complete + KISS pass applied. Design synthesized in [`docs/overview.md`](docs/overview.md); rationale for what got cut in [`docs/research/09-kiss-architecture-decision.md`](docs/research/09-kiss-architecture-decision.md). Code begins after the open questions in §Open questions are resolved.
+Agent Wolf is built on **[Agent Orange](../agent-orange)** as its runtime: Orange owns prompts,
+sessions, schedules, memories and datasets; Wolf owns the page, the vocabulary and the user
+allowlist. The full design — architecture, the trust model, the hypothesis lifecycle, and every
+ticket that builds this repo — lives in agent-orange's
+[`design/2026-08-20-agent-wolf.md`](../agent-orange/design/2026-08-20-agent-wolf.md). Read that
+first; this README only covers running what's here.
 
-## Goal
+> This repository previously held an earlier, architecturally different design
+> ("hypothesis-bot": Go + Fiber + Supabase + TimescaleDB + River). That design was superseded on
+> 2026-08-20 by the Agent-Orange-based plan above. Its research briefs are kept, not deleted, at
+> [`docs/archive-2026-05-hypothesis-bot/`](docs/archive-2026-05-hypothesis-bot/).
 
-Given a user thesis like *"gold will increase in price because China is converting their dollars to gold,"* the system:
+## Layout
 
-1. Turns the loose statement into a detailed, falsifiable spec via a guided LLM interview backed by deep web research.
-2. Begins gathering social and market data on a configurable schedule. The first capture is unbounded; later captures are time-gated to the most recent window.
-3. Tracks confirmation/invalidation strength over the lifetime of the hypothesis, separating *mechanism evidence* from *price outcome* so a thesis can be "right" even when the price moves against it short-term.
-4. Surfaces a verdict — and the underlying evidence — to the owner and any collaborators.
+| Path | What |
+| --- | --- |
+| `api/` | Node + TypeScript API: hypothesis lifecycle, Orange client, market-data MCP server, evaluation poller. Express 5, vitest, zod, pino. |
+| `web/` | React 18 + MUI 6 UI: hypothesis list/detail, scoreboard, the Orange chat embed. Vite + vitest. Its own components — imports nothing from agent-orange (`web/` there is a private, non-installable library; see the design doc's "Iframe-only UI reuse" decision). |
+| `docker-compose.yml`, `.env.example` | The local topology — see below. |
+| `docs/archive-2026-05-hypothesis-bot/` | The superseded first design, kept for its research briefs. |
 
-## Recommended stack (chosen)
+## Running it locally
 
-- **Frontend:** React 18 + Vite + MUI + TanStack Query + TipTap (mirrors Platinum).
-- **Backend:** Go 1.25 + Fiber v3 + River queue + zerolog + Cobra (mirrors Platinum).
-- **Database:** Postgres on **Supabase free** — pgvector + tsvector + TimescaleDB **all in one DB**. Neon as fallback.
-- **Auth:** **Supabase Auth** + Google OAuth, allowlist via `app_metadata.role` (operator/editor/viewer). Same vendor as the DB; ~30-LOC HS256 verifier in Go.
-- **LLM:** Claude Code CLI on Max, **single operator OAuth token** baked into the goworker container. Teammates draft and view; only the operator triggers LLM workflows.
-- **Web search:** Claude Code native `WebSearch` / `WebFetch` (free under Max session budget).
-- **Embeddings:** OpenAI `text-embedding-3-small` @ 512 dims (~$0.10/mo); sentence-transformers as the strict-$0 fallback.
-- **Deploy v1:** Docker Compose on a single VM — three services (`goapi`, `goworker`, optional `postgres`).
+**Order matters: bring Agent Orange up first.** Agent Wolf's compose file joins Orange's compose
+network as `external` and shares Orange's `dind` container's network namespace — both must
+already exist before `docker compose up` here can succeed. This isn't a convenience choice: in
+the standalone stack `agentd` shares DinD's network namespace, so nested session containers
+cannot resolve compose DNS names and a `wolf-api` sitting on an ordinary compose network would be
+unreachable from them. See `design/2026-08-20-agent-wolf.md` § "Local topology and networking"
+for the full picture.
 
-The single most important takeaway from the research: **after the KISS pass we copy the Platinum migrations + Fiber server-struct + Cobra patterns, but skip the per-session-sandbox + scoped-JWT-callback + SSE-streaming + phase-orchestrator stack.** The goworker exec's `claude -p` directly, parses the final JSON, and writes to Postgres. See [`docs/research/09-kiss-architecture-decision.md`](docs/research/09-kiss-architecture-decision.md) for the rationale.
+```sh
+# 1. Agent Orange first — its compose network and dind container must exist
+#    before Wolf's compose file can attach to them.
+cd ../agent-orange
+cp .env.example .env
+docker compose up --build
+# → http://localhost:8080
 
-## Read next
+# 2. Agent Wolf second.
+cd ../agent-wolf
+cp .env.example .env
+docker compose up --build
+# → http://localhost:8081 (WOLF_WEB_PORT)
+```
 
-- [`docs/overview.md`](docs/overview.md) — single document that synthesizes everything below into a buildable design with a recommended build order.
-- [`docs/research/`](docs/research/) — nine citation-heavy briefs (1-prior-art, 2-time-series, 3-Platinum-survey, 4-market-data, 5-social-signals, 6-storage, 7-Claude-Code-orchestration, 8-Supabase-auth, 9-KISS-decision).
+## Development
 
-## Open questions before code
+```sh
+yarn install --frozen-lockfile
+yarn typecheck   # both packages
+yarn test        # both packages
 
-See `docs/overview.md` §Open questions. Headlines:
+cd api && yarn typecheck && yarn test
+cd web && yarn typecheck && yarn test
+```
 
-1. Storage host commit — Supabase (Auth + DB + Timescale in one) vs. Neon (better DX, no Timescale).
-2. Embedding model — OpenAI 3-small (pay-per-token but trivial) or local sentence-transformers (strictly $0)?
-3. Frontend router — React Router 7 (lean) or copy Platinum's router5?
-4. Operator-only LLM access — hard (only operator can create) or soft (anyone drafts; operator runs LLM)?
-5. Routines API or River cron — depends on hypothesis count.
+## Pinned technology
 
----
+Named once in `design/2026-08-20-agent-wolf.md` § "Pinned technology choices" so later work
+doesn't pick differently: Express 5, `@modelcontextprotocol/sdk` (HTTP transport), vitest,
+`undici`'s `MockAgent` for HTTP mocking in tests, React 18.3.1 + MUI 6, Recharts, native `Date` +
+explicit UTC helpers (no moment/dayjs), zod, and `pino` (JSON to stdout, never a credential or a
+`download_url`).
 
-**Out of scope for v1:** live trade execution, position sizing, risk engine, auto-rebalancing. These are deferred until we trust the hypothesis machine.
+## Shared error taxonomy
+
+`api/src/errors.ts` defines `WolfError` and the seven `WolfErrorKind` values every route, client and
+background job uses — see that file and the design doc's § "Shared error taxonomy". Don't invent
+a second one.

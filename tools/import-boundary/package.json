@@ -1,0 +1,9 @@
+{
+  "name": "@wolf/import-boundary",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The one import-boundary checker agent-wolf's api/ and web/ packages both reuse — do not fork a second implementation. See design/2026-08-20-agent-wolf.md § W1 (agent-orange repo).",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts"
+}

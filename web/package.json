@@ -1,0 +1,33 @@
+{
+  "name": "agent-wolf-web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Agent Wolf UI — hypothesis list/detail, scoreboard, Orange chat iframe. Own components; imports nothing from agent-orange. See design/2026-08-20-agent-wolf.md (agent-orange repo).",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.json && vite build",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.0",
+    "@mui/material": "^6.1.7",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-is": "18.3.1",
+    "recharts": "^3.10.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.10",
+    "@types/react": "^18.2.66",
+    "@types/react-dom": "^18.2.22",
+    "@vitejs/plugin-react": "^4.3.4",
+    "@wolf/import-boundary": "0.0.0",
+    "jsdom": "^25.0.1",
+    "typescript": "^5.9.3",
+    "vite": "^6.4.3",
+    "vitest": "^4.0.18"
+  }
+}

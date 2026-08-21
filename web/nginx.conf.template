@@ -1,0 +1,56 @@
+# Templated (not a plain .conf) so `${WOLF_API_PORT}` below is filled in by
+# the nginx base image's docker-entrypoint.d/20-envsubst-on-templates.sh at
+# container start, from the WOLF_API_PORT env var set on the wolf-web
+# service in docker-compose.yml. Default matches .env.example (8100) if
+# unset. wolf-api shares dind's netns (see docker-compose.yml comments), so
+# "dind" is the only compose-DNS name that reaches it — matches
+# deploy/web.nginx.conf's `proxy_pass http://dind:8099` in the agent-orange
+# repo, same indirection, different target.
+server {
+    listen 80;
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # SPA fallback.
+    location / {
+        try_files $uri /index.html;
+    }
+
+    location /api/ {
+        # No URI part after the port: nginx must NOT strip the `/api/`
+        # prefix. Matches deploy/web.nginx.conf:55 (`proxy_pass
+        # http://dind:8099;`, no trailing slash) exactly — wolf-api receives
+        # the full `/api/...` path, same as the vite dev proxy below (which
+        # also does not rewrite). A trailing slash here would make nginx
+        # replace the matched `/api/` prefix, so wolf-api would see
+        # `/healthz` in prod but `/api/healthz` in dev — two different
+        # mount prefixes for the same route table. wolf-api's Express app
+        # therefore mounts every route (including /api/healthz) under the
+        # literal `/api` prefix, matching § "Wolf API routes" in the plan.
+        proxy_pass http://dind:${WOLF_API_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header Connection "";
+        # SSE-friendly: the Orange chat iframe streams over SSE, and Wolf's
+        # own poller/status endpoints may too — never buffer either.
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+    }
+
+    location /mcp {
+        proxy_pass http://dind:${WOLF_API_PORT}/mcp;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header Connection "";
+        # Streamable HTTP's server-to-client leg is an SSE stream on
+        # GET /mcp — the same reason /api/ carries these three directives.
+        # nginx's 60s default proxy_read_timeout would cut a long-lived MCP
+        # stream, and buffering would delay every event until nginx's buffer
+        # filled or the upstream closed.
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+    }
+}

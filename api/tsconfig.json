@@ -1,0 +1,21 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    // Overrides the base's "Bundler" resolution (right for web/, which Vite
+    // bundles). api/ is compiled once and then run directly with
+    // `node dist/index.js` — no bundler in the loop — so relative imports
+    // need the same explicit `.js` extension Node's own ESM loader requires
+    // at runtime. "Bundler" resolution does NOT enforce that at typecheck
+    // time (nor does vitest, which goes through Vite's own resolver), so an
+    // extensionless relative import would typecheck clean, test clean, and
+    // then crash on `node dist/index.js` with ERR_MODULE_NOT_FOUND —
+    // exactly the "nothing fails at use time" trap this codebase's CLAUDE.md
+    // warns about elsewhere. NodeNext catches it at `tsc --noEmit`.
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": "dist",
+    "rootDir": "src",
+    "types": ["node"]
+  },
+  "include": ["src"]
+}
