@@ -46,6 +46,12 @@ async function runCheck() {
     rootManifestPath: join(repoRoot, "package.json"),
     tsconfigPaths: [join(webRoot, "tsconfig.json"), join(repoRoot, "tsconfig.base.json")],
     viteConfigPath: join(webRoot, "vite.config.ts"),
+    // F1 (W1 round-4 escalation): web/vite.config.ts sits beside src/, not
+    // inside it, and was never scanned for its own import specifiers (the
+    // dynamic-import-based alias-target check above is a different check
+    // entirely). Naming it here closes that hole for the real tree, not
+    // just in the fixture regression test.
+    rootConfigFiles: [join(webRoot, "vite.config.ts")],
   });
 }
 
@@ -88,6 +94,14 @@ describe("web/ import boundary", () => {
   it("has no file:/link:/portal: dependency resolving outside the repo", async () => {
     const report = await runCheck();
     expect(report.manifestEscapeViolations).toEqual([]);
+  });
+
+  // F1 (W1 round-4 escalation): proves web/vite.config.ts is actually
+  // scanned, not just that its imports happen to be clean. If this ever
+  // regresses to not-scanned, this is the assertion that catches it.
+  it("scans web/vite.config.ts as part of the boundary", async () => {
+    const report = await runCheck();
+    expect(report.files).toContain(join(webRoot, "vite.config.ts"));
   });
 
   // Regression case (rewritten criterion, round 3's finding): a .jsx source

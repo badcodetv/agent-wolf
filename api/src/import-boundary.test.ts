@@ -23,6 +23,10 @@ async function runCheck() {
     packageManifestPath: join(apiRoot, "package.json"),
     rootManifestPath: join(repoRoot, "package.json"),
     tsconfigPaths: [join(apiRoot, "tsconfig.json"), join(repoRoot, "tsconfig.base.json")],
+    // F1 (W1 round-4 escalation): api/vitest.config.ts sits beside src/,
+    // not inside it, and was never scanned. Naming it here is what closes
+    // that hole for the real tree, not just in the fixture regression test.
+    rootConfigFiles: [join(apiRoot, "vitest.config.ts")],
   });
 }
 
@@ -65,5 +69,13 @@ describe("api/ import boundary", () => {
   it("has no file:/link:/portal: dependency resolving outside the repo", async () => {
     const report = await runCheck();
     expect(report.manifestEscapeViolations).toEqual([]);
+  });
+
+  // F1 (W1 round-4 escalation): proves api/vitest.config.ts is actually
+  // scanned, not just that its imports happen to be clean. If this ever
+  // regresses to not-scanned, this is the assertion that catches it.
+  it("scans api/vitest.config.ts as part of the boundary", async () => {
+    const report = await runCheck();
+    expect(report.files).toContain(join(apiRoot, "vitest.config.ts"));
   });
 });

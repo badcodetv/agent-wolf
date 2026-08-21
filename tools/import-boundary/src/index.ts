@@ -6,15 +6,27 @@
  *
  * Graded surface, exactly as the rewritten W1 criterion enumerates it:
  *
- *   - Files scanned: every file under a package's own src dir (and, for
- *     web/, its root config files) with an extension in
- *     .ts .tsx .js .jsx .mjs .cjs — every extension Vite +
- *     @vitejs/plugin-react resolves.
+ *   - Files scanned: every file under a package's own src dir with an
+ *     extension in .ts .tsx .js .jsx .mjs .cjs — every extension Vite +
+ *     @vitejs/plugin-react resolves — PLUS any `rootConfigFiles` the
+ *     caller names (e.g. web/vite.config.ts, api/vitest.config.ts): a
+ *     package's own root config sits beside srcDir, not inside it, and is
+ *     just as capable of importing outside the repo (W1 round-4 escalation
+ *     F1 — these were unscanned before this field existed).
  *   - Specifier forms: static import/export...from, dynamic import(...),
- *     require(...), import type, side-effect import "...".
+ *     require(...), import type, side-effect import "...". Any of these
+ *     may be single-, double- or backtick-quoted (F3); a backtick literal
+ *     containing "${" is a computed expression, not a static path, and is
+ *     deliberately left unmatched — a documented plan gap, not this
+ *     checker's job to solve.
  *   - Specifier kinds: relative (./ ../), absolute (/...), bare
- *     (react, @mui/material). Each resolved and boundary-checked
- *     differently — see the three checker functions below.
+ *     (react, @mui/material) — a bare specifier is allowed only if
+ *     DECLARED in a package.json dependencies/devDependencies, this
+ *     package's own or the workspace root's (F2 — mere resolvability via
+ *     node_modules is not sufficient; a package hoisted in by someone
+ *     else's dependency but declared nowhere still fails). Each kind is
+ *     resolved and boundary-checked differently — see the three checker
+ *     functions below.
  *   - Config escape routes: a Vite `resolve.alias` target, and a tsconfig
  *     `compilerOptions.paths` target in either of a package's own tsconfig
  *     and the shared root tsconfig.base.json.
@@ -39,10 +51,17 @@ export const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", 
 //   import x from SPEC; import SPEC; export * from SPEC; import type ...   (static forms)
 //   import(SPEC)                                                          (dynamic import)
 //   require(SPEC)                                                         (CJS interop)
+// The quote class includes backticks (F3, round-4 escalation): a plain
+// backtick-quoted specifier with no interpolation — e.g. require(`../x`) —
+// is a real, literal specifier and must be caught exactly like a
+// single/double-quoted one. A specifier containing "${" is a *computed*
+// template (an actual expression, not a literal path) and is filtered back
+// out in allImportSpecifiers below — that case is a documented plan gap
+// (W1 Notes), not something this fix widens scope to solve.
 const IMPORT_SPECIFIER_PATTERNS = [
-  /(?:import|export)(?:[^'"()]*from)?\s*["']([^"']+)["']/g,
-  /\bimport\s*\(\s*["']([^"']+)["']/g,
-  /\brequire\s*\(\s*["']([^"']+)["']/g,
+  /(?:import|export)(?:[^'"`()]*from)?\s*["'`]([^"'`]+)["'`]/g,
+  /\bimport\s*\(\s*["'`]([^"'`]+)["'`]/g,
+  /\brequire\s*\(\s*["'`]([^"'`]+)["'`]/g,
 ];
 
 /**
@@ -83,7 +102,10 @@ export function allImportSpecifiers(filePath: string): string[] {
   const specifiers: string[] = [];
   for (const pattern of IMPORT_SPECIFIER_PATTERNS) {
     for (const match of src.matchAll(pattern)) {
-      if (match[1]) specifiers.push(match[1]);
+      // "${" means the backtick literal is computed, not a static path —
+      // out of scope (a documented plan gap, W1 Notes), and left unmatched
+      // exactly as it was before backticks joined the quote class.
+      if (match[1] && !match[1].includes("${")) specifiers.push(match[1]);
     }
   }
   return specifiers;
@@ -222,6 +244,16 @@ export interface ImportBoundaryConfig {
   tsconfigPaths: string[];
   /** This package's own vite.config.ts, if it has one. */
   viteConfigPath?: string;
+  /**
+   * Root config files sitting BESIDE srcDir rather than inside it — e.g.
+   * web/vite.config.ts, api/vitest.config.ts — that must be scanned for
+   * import specifiers exactly like a src/ file. Round-4 escalation F1:
+   * checkImportBoundary previously walked only srcDir, so these files
+   * could import anything unexamined. A path that does not exist is
+   * skipped rather than erroring (a package with no such file, e.g. api/
+   * had no vite.config.ts before this fix either).
+   */
+  rootConfigFiles?: string[];
 }
 
 export interface ImportBoundaryReport {
@@ -242,8 +274,13 @@ export interface ImportBoundaryReport {
  * failure names exactly which check tripped.
  */
 export async function checkImportBoundary(config: ImportBoundaryConfig): Promise<ImportBoundaryReport> {
-  const { srcDir, repoRoot, packageManifestPath, rootManifestPath, tsconfigPaths, viteConfigPath } = config;
-  const files = collectSourceFiles(srcDir);
+  const { srcDir, repoRoot, packageManifestPath, rootManifestPath, tsconfigPaths, viteConfigPath, rootConfigFiles } =
+    config;
+  // Root config files (F1) are scanned alongside srcDir, not instead of it:
+  // the same specifier-form checks below (relative/absolute/bare,
+  // agent-orange mention) run over both, since a config file is exactly as
+  // capable of importing outside the repo as a source file is.
+  const files = [...collectSourceFiles(srcDir), ...(rootConfigFiles ?? []).filter((f) => existsSync(f))];
 
   const declared = new Set<string>([
     ...declaredDependencyNames(packageManifestPath),
@@ -288,18 +325,24 @@ export async function checkImportBoundary(config: ImportBoundaryConfig): Promise
         continue;
       }
 
-      // Bare — allowed only if declared in a manifest, or if it resolves
-      // (via node_modules, realpath-followed) to somewhere inside the repo.
+      // Bare — allowed only if DECLARED in a manifest (dependencies or
+      // devDependencies, this package's own or the workspace root's).
+      // Round-4 escalation F2: resolvability via node_modules is not the
+      // same thing as declaration — a package hoisted into node_modules as
+      // someone else's transitive dependency, but named in no manifest,
+      // must still fail. So declaration is checked unconditionally, before
+      // resolution is even attempted; a resolved-but-undeclared specifier
+      // is exactly the case this closes. A declared-but-not-installed
+      // specifier still passes (nothing to resolve, nothing to check).
       const pkgName = packageNameOf(specifier);
-      const dir = resolvePackageDir(pkgName, dirname(file));
-      if (!dir) {
-        if (!declared.has(pkgName)) {
-          bareViolations.push(
-            `${file} imports "${specifier}" -> package "${pkgName}" is neither present in node_modules nor declared in a package.json (dependencies/devDependencies)`,
-          );
-        }
+      if (!declared.has(pkgName)) {
+        bareViolations.push(
+          `${file} imports "${specifier}" -> package "${pkgName}" is not declared in a package.json (dependencies/devDependencies)`,
+        );
         continue;
       }
+      const dir = resolvePackageDir(pkgName, dirname(file));
+      if (!dir) continue; // declared but not installed — passes
       const real = realpathSync(dir);
       if (!isPathInside(real, repoRoot)) {
         bareViolations.push(
