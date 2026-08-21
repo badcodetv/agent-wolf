@@ -65,6 +65,22 @@ describe("marketdata_normalise", () => {
     expect(csv).not.toContain("100");
   });
 
+  // Every other case in this file uses contiguous dates (01-01, 01-02,
+  // 01-03), so a hypothetical gap-filling or interpolating implementation
+  // would pass the whole file up to this point — see this ticket's
+  // Discovered Issues Log entry. This case pins a real gap: 2026-01-05
+  // follows 2026-01-01 directly, with nothing synthesised in between.
+  it("marketdata_ no gap filling and no interpolation: a real gap between dates produces no synthesised rows", () => {
+    const rows: RawMarketDataRow[] = [
+      { timestamp: "2026-01-01", value: "10" },
+      { timestamp: "2026-01-05", value: "50" },
+    ];
+
+    const csv = normalise(rows);
+
+    expect(csv).toBe("timestamp,value\n2026-01-01T00:00:00Z,10\n2026-01-05T00:00:00Z,50\n");
+  });
+
   describe("marketdata_ countDataRows boundaries", () => {
     it("empty file is 0", () => {
       expect(countDataRows("")).toBe(0);

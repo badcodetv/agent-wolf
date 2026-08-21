@@ -49,7 +49,17 @@ export interface FredClientOptions {
   /** Defaults to `https://api.stlouisfed.org`. Overridable so tests never
    * hit the real host. */
   baseUrl?: string;
+  /** Deadline for the underlying HTTP call, in milliseconds. Defaults to
+   * `DEFAULT_TIMEOUT_MS`. The error taxonomy classifies "a 5xx, a
+   * connection failure, or a TIMEOUT" as `unavailable` (retryable), but
+   * nothing bounded the call itself until this fix round — see this
+   * ticket's Discovered Issues Log entry. Read via an explicit option,
+   * never `process.env`. */
+  timeoutMs?: number;
 }
+
+/** Default HTTP deadline for a FRED request, in milliseconds. */
+export const DEFAULT_TIMEOUT_MS = 10_000;
 
 interface FredObservation {
   date: string;
@@ -86,6 +96,7 @@ export function createFredClient(options: FredClientOptions): MarketDataConnecto
   const apiKey = options.apiKey;
   const fetchImpl = options.fetchImpl ?? fetch;
   const baseUrl = options.baseUrl ?? "https://api.stlouisfed.org";
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   async function request<T>(path: string, params: Record<string, string>): Promise<T> {
     const url = new URL(path, baseUrl);
@@ -97,7 +108,7 @@ export function createFredClient(options: FredClientOptions): MarketDataConnecto
 
     let response: Response;
     try {
-      response = await fetchImpl(url.toString());
+      response = await fetchImpl(url.toString(), { signal: AbortSignal.timeout(timeoutMs) });
     } catch (err) {
       throw new WolfError("unavailable", "FRED request failed", { cause: err });
     }

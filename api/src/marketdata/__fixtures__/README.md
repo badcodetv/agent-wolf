@@ -85,19 +85,32 @@ against Stooq's publicly documented CSV shape
 `stooq.test.ts`'s `parseStooqCsv` describe block, which says explicitly in
 its own title that this is NOT a recorded fixture.
 
-## `stooq-tickers.json` — not a recorded fixture, by design
+## The Stooq ticker table — not a recorded fixture, by design
 
-This file is a hand-authored static reference table, not a captured API
-response — Stooq has no search endpoint, which is exactly why
-`stooq.ts`'s `search()` matches against a committed table instead of
-calling out. See the W6 acceptance criteria: "Stooq has no search API: its
-`search` matches a committed static ticker table
-(`__fixtures__/stooq-tickers.json`, covering at least the US equity and ETF
-symbols the interviewer prompt suggests)". `prompts/interviewer.md` does
-not exist yet on this branch (it is created by a later ticket), so the
-table below is a reasonable placeholder set of well-known US equities and
-ETFs, including `avav.us` (the one symbol the plan's own Spec JSON example
-names) — see this ticket's Discovered Issues Log entry and its `guesses`
-for the exact list and the reasoning. Extend it, rather than replace it, if
-a later ticket finds `prompts/interviewer.md` names symbols this table
-lacks.
+The committed static ticker table `search()` matches against
+(§ W6 acceptance criteria: "Stooq has no search API: its `search` matches a
+committed static ticker table … covering at least the US equity and ETF
+symbols the interviewer prompt suggests") is a hand-authored reference
+table, not a captured API response — Stooq has no search endpoint, which is
+exactly why `stooq.ts`'s `search()` matches against a committed table
+instead of calling out.
+
+**It lives at `api/src/marketdata/stooq-tickers.ts`, as a TypeScript
+module — not at `__fixtures__/stooq-tickers.json`.** It started life as a
+JSON file under this directory, loaded at runtime with `readFileSync`; a
+fix-round finding caught that `api/`'s build (`tsc`, `rootDir: src` →
+`outDir: dist`) does not copy that JSON into `dist/`, and `api/Dockerfile`
+copies only `dist/`, `package.json` and `node_modules` — so
+`createStooqClient()` with no injected `tickers` would `ENOENT` the first
+time it ran from the built image (this ticket's Discovered Issues Log
+entry has the full account). Moving the table into a `.ts` module makes it
+part of the same `tsc` output as everything else this package exports, so
+there is nothing left for the production image to be missing.
+
+`prompts/interviewer.md` does not exist yet on this branch (it is created
+by a later ticket), so the table is a reasonable placeholder set of
+well-known US equities and ETFs, including `avav.us` (the one symbol the
+plan's own Spec JSON example names) — see this ticket's Discovered Issues
+Log entry and its `guesses` for the exact list and the reasoning. Extend
+it, rather than replace it, if a later ticket finds `prompts/interviewer.md`
+names symbols this table lacks.

@@ -13,6 +13,12 @@
  * — including which HTTP implementation to use and which ticker table to
  * search — is an explicit constructor option.
  *
+ * The default ticker table is imported from the sibling `stooq-tickers.ts`
+ * TS module, not read from a JSON file at runtime — see that file's header
+ * comment and this ticket's Discovered Issues Log entry for why a
+ * `readFileSync` against `__fixtures__/stooq-tickers.json` does not survive
+ * `yarn build` + `api/Dockerfile`.
+ *
  * NOTE on the fetch() happy path (see the sibling __fixtures__/README.md
  * and this ticket's Discovered Issues Log entry): stooq.com now sits
  * behind a client-side JavaScript proof-of-work challenge that returns
@@ -26,10 +32,9 @@
  * response.
  */
 
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { WolfError } from "../errors.js";
 import type { RawMarketDataRow } from "./normalise.js";
+import { DEFAULT_STOOQ_TICKERS } from "./stooq-tickers.js";
 
 export interface StooqTicker {
   /** Stooq's own symbol form, e.g. `spy.us`. Lower-case by convention. */
@@ -57,19 +62,19 @@ export interface StooqClientOptions {
   fetchImpl?: typeof fetch;
   /** Defaults to `https://stooq.com`. Overridable so tests never hit the real host. */
   baseUrl?: string;
-  /** Defaults to the bundled `__fixtures__/stooq-tickers.json`. Injectable so
+  /** Defaults to the bundled `DEFAULT_STOOQ_TICKERS` table. Injectable so
    * tests do not depend on the shape of the committed table. */
   tickers?: StooqTicker[];
+  /** Deadline for the underlying HTTP call, in milliseconds. Defaults to
+   * `DEFAULT_TIMEOUT_MS`. A hung upstream must not block the caller (an
+   * unbounded call, e.g. W10's poller) forever — see this ticket's
+   * Discovered Issues Log entry. Read via an explicit option, never
+   * `process.env`. */
+  timeoutMs?: number;
 }
 
-const DEFAULT_TICKERS_PATH = fileURLToPath(
-  new URL("./__fixtures__/stooq-tickers.json", import.meta.url),
-);
-
-function loadDefaultTickers(): StooqTicker[] {
-  const raw = readFileSync(DEFAULT_TICKERS_PATH, "utf8");
-  return JSON.parse(raw) as StooqTicker[];
-}
+/** Default HTTP deadline for a Stooq request, in milliseconds. */
+export const DEFAULT_TIMEOUT_MS = 10_000;
 
 /** Stooq's daily download CSV has no adjusted column: `Close` is the value.
  * Exported for `stooq.test.ts` to exercise directly against hand-built CSV
@@ -101,10 +106,18 @@ function toStooqDate(isoDate: string): string {
 export function createStooqClient(options: StooqClientOptions = {}): MarketDataConnector {
   const fetchImpl = options.fetchImpl ?? fetch;
   const baseUrl = options.baseUrl ?? "https://stooq.com";
-  const tickers = options.tickers ?? loadDefaultTickers();
+  const tickers = options.tickers ?? DEFAULT_STOOQ_TICKERS;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   async function search(query: string): Promise<{ results: MarketDataSearchResult[] }> {
     const needle = query.trim().toLowerCase();
+    // An empty (or whitespace-only) needle matches every entry via
+    // `String.includes("")`, which would flood a caller like W7's
+    // `series_search` with the entire table for a blank query — see this
+    // ticket's Discovered Issues Log entry. Require at least one character.
+    if (needle.length === 0) {
+      return { results: [] };
+    }
     const results: MarketDataSearchResult[] = tickers
       .filter(
         (ticker) =>
@@ -131,7 +144,7 @@ export function createStooqClient(options: StooqClientOptions = {}): MarketDataC
 
     let response: Response;
     try {
-      response = await fetchImpl(url.toString());
+      response = await fetchImpl(url.toString(), { signal: AbortSignal.timeout(timeoutMs) });
     } catch (err) {
       throw new WolfError("unavailable", "stooq request failed", { cause: err });
     }

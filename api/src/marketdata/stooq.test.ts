@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getGlobalDispatcher, MockAgent, setGlobalDispatcher } from "undici";
 import { createStooqClient, parseStooqCsv, type StooqTicker } from "./stooq.js";
+import { DEFAULT_STOOQ_TICKERS } from "./stooq-tickers.js";
 
 const TEST_TICKERS: StooqTicker[] = [
   { symbol: "spy.us", name: "SPDR S&P 500 ETF Trust" },
@@ -78,6 +79,46 @@ describe("marketdata_stooq", () => {
       const client = createStooqClient({ tickers: TEST_TICKERS });
       const { results } = await client.search("nonexistent-ticker-xyz");
       expect(results).toEqual([]);
+    });
+
+    // An empty needle makes `String.includes("")` true for every entry, so
+    // an unguarded search("") would return the whole table — see this
+    // ticket's Discovered Issues Log entry.
+    it("returns no results for an empty query, rather than the whole table", async () => {
+      const client = createStooqClient({ tickers: TEST_TICKERS });
+      await expect(client.search("")).resolves.toEqual({ results: [] });
+    });
+
+    it("returns no results for a whitespace-only query", async () => {
+      const client = createStooqClient({ tickers: TEST_TICKERS });
+      await expect(client.search("   ")).resolves.toEqual({ results: [] });
+    });
+
+    // No `tickers` option injected — exercises the shipped default table
+    // (`DEFAULT_STOOQ_TICKERS`, imported from the TS module, not read from
+    // a JSON file — see stooq-tickers.ts's header comment and this
+    // ticket's Discovered Issues Log entry for why that distinction is
+    // load-bearing for the built image).
+    it("with no injected tickers, searches the committed default table and finds avav.us", async () => {
+      const avav = DEFAULT_STOOQ_TICKERS.find((t) => t.symbol === "avav.us");
+      // Guard the fixture itself, so a future edit that removes avav.us
+      // from the default table fails with a clear message here rather
+      // than a confusing `toEqual([])` below.
+      expect(avav).toBeDefined();
+
+      const client = createStooqClient({});
+      const { results } = await client.search("avav");
+      expect(results).toEqual([
+        {
+          source: "stooq",
+          id: "avav.us",
+          title: avav?.name,
+          unit: "USD",
+          frequency: "daily",
+          first: null,
+          last: null,
+        },
+      ]);
     });
   });
 
@@ -162,6 +203,25 @@ describe("marketdata_stooq", () => {
       const rejection = await client.fetch("avav.us").catch((err: unknown) => err);
       expect(rejection).toMatchObject({ kind: "internal" });
       expect((rejection as { kind: string }).kind).not.toBe("unavailable");
+    });
+
+    // W10's poller has no bounded call unless the connector itself enforces
+    // a deadline — see this ticket's Discovered Issues Log entry. A reply
+    // delayed past a short injected `timeoutMs` must abort and map to
+    // `unavailable`, not hang.
+    it("a request exceeding timeoutMs aborts and maps to unavailable (retryable)", async () => {
+      mockAgent
+        .get("https://stooq.test")
+        .intercept({ path: /\/q\/d\/l\/.*/, method: "GET" })
+        .reply(200, "Date,Open,High,Low,Close,Volume\n2026-08-19,140,142,139.5,141.22,1000000\n")
+        .delay(200);
+
+      const client = createStooqClient({
+        tickers: TEST_TICKERS,
+        baseUrl: "https://stooq.test",
+        timeoutMs: 10,
+      });
+      await expect(client.fetch("avav.us")).rejects.toMatchObject({ kind: "unavailable" });
     });
   });
 });
