@@ -241,7 +241,7 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value as Record<string, unknown>;
 }
 
-function present(record: Record<string, unknown>, key: string): boolean {
+export function present(record: Record<string, unknown>, key: string): boolean {
   const v = record[key];
   return v !== undefined && v !== null;
 }

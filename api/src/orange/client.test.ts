@@ -28,11 +28,23 @@ beforeEach(() => {
   mockAgent.disableNetConnect();
   setGlobalDispatcher(mockAgent);
   pool = mockAgent.get(BASE_URL);
+  dispatches = [];
 });
 
 afterEach(async () => {
-  setGlobalDispatcher(originalDispatcher);
-  await mockAgent.close();
+  try {
+    // R109: every request this test actually made carried the API key. A route
+    // that forgets the header now fails here rather than only in production.
+    // The teardown below still runs, so one failure cannot leak the mock
+    // dispatcher into the next test.
+    for (const captured of dispatches) {
+      if (!captured.dispatched) continue;
+      expect(captured.apiKey, `no X-API-Key on ${captured.path ?? "(unknown path)"}`).toBe(API_KEY);
+    }
+  } finally {
+    setGlobalDispatcher(originalDispatcher);
+    await mockAgent.close();
+  }
 });
 
 function client(logger?: Parameters<typeof createOrangeClient>[0]["logger"]) {
@@ -50,6 +62,38 @@ function client(logger?: Parameters<typeof createOrangeClient>[0]["logger"]) {
 interface Captured {
   path?: string;
   body?: string;
+  /** Value of the `X-API-Key` request header, lower-cased lookup. */
+  apiKey?: string;
+  /** True once the interceptor actually served a request. */
+  dispatched?: boolean;
+}
+
+/**
+ * Every `Captured` minted during the current test. The `afterEach` below
+ * asserts that each one that was actually dispatched carried the API key
+ * (**R109**): the client's single authentication mechanism is shared by all
+ * twenty-three routes, and before this the whole suite stayed green if the
+ * header were dropped — the only failure would have been against a live
+ * agentd, which no unit test reaches. Asserting here, rather than in each
+ * test, gates every route any test in this file exercises.
+ */
+let dispatches: Captured[] = [];
+
+/** undici hands headers back as an object or as a flat [k, v, k, v] array. */
+function headerValue(headers: unknown, name: string): string | undefined {
+  const wanted = name.toLowerCase();
+  if (Array.isArray(headers)) {
+    for (let i = 0; i + 1 < headers.length; i += 2) {
+      if (String(headers[i]).toLowerCase() === wanted) return String(headers[i + 1]);
+    }
+    return undefined;
+  }
+  if (headers && typeof headers === "object") {
+    for (const [k, v] of Object.entries(headers as Record<string, unknown>)) {
+      if (k.toLowerCase() === wanted) return Array.isArray(v) ? String(v[0]) : String(v);
+    }
+  }
+  return undefined;
 }
 
 function intercept(
@@ -65,8 +109,11 @@ function intercept(
       // opts.body carries whatever fetch handed the dispatcher for a
       // request with a body; GETs/DELETEs-without-rationale have none.
       captured.body = typeof opts.body === "string" ? opts.body : undefined;
+      captured.apiKey = headerValue(opts.headers, "x-api-key");
+      captured.dispatched = true;
       return { statusCode: status, data: data as never, responseOptions: { headers: headers ?? {} } };
     });
+  dispatches.push(captured);
   return captured;
 }
 
