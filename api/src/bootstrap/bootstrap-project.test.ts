@@ -16,13 +16,14 @@ import {
   type BootstrapProjectOptions,
 } from "./bootstrap-project.js";
 
-// design/2026-08-20-agent-wolf.md, ticket W12. Every test drives
+// design/2026-08-20-agent-wolf.md, tickets W12 and W2b. Every test drives
 // bootstrapProject through undici's MockAgent (§ "Pinned technology
 // choices": no live network in any unit test) exactly the way
 // src/orange/client.test.ts drives createOrangeClient — bootstrapProject
-// uses that same client internally, plus one narrow raw `fetch` for
-// GET /agent/workers/{name} (see bootstrap-project.ts's header comment for
-// why: W2's route list does not cover a worker read).
+// uses that same client internally for every read and write, including
+// `GET /agent/workers/{name}` via `client.getWorker` (W2b's twenty-third
+// route; the raw `fetch` workaround documented in earlier revisions of
+// bootstrap-project.ts is gone).
 
 const BASE_URL = "http://orange.test:8099";
 const API_KEY = "wolf-bootstrap-test-key";
@@ -35,6 +36,15 @@ const repoRoot = join(here, "..", "..", "..");
 function prompt(name: string): string {
   return readFileSync(join(repoRoot, "prompts", name), "utf8");
 }
+// W2b: the raw `fetch` this module used to make for GET /agent/workers/{name}
+// is gone — every Orange call now goes through OrangeClient.
+describe("bootstrap-project.ts contains no raw fetch( call (W2b)", () => {
+  it("its source has no fetch( call", () => {
+    const src = readFileSync(join(here, "bootstrap-project.ts"), "utf8");
+    expect(src.includes("fetch(")).toBe(false);
+  });
+});
+
 const INTERVIEWER_PROMPT = prompt("interviewer.md");
 const CRITIC_PROMPT = prompt("critic.md");
 const RESEARCHER_PREAMBLE = prompt("researcher-preamble.md");

@@ -8,11 +8,12 @@ import { fileURLToPath } from "node:url";
 import { WolfError } from "../errors.js";
 import { createOrangeClient } from "./client.js";
 
-// design/2026-08-20-agent-wolf.md, W2 acceptance criteria. The route list
-// (22 of them) is exhaustive and closed — see client.ts's own header
-// comment. Every test below drives the client through `undici`'s
-// MockAgent: no live network anywhere in this file (§ "Pinned technology
-// choices": undici MockAgent, no msw, no nock).
+// design/2026-08-20-agent-wolf.md, W2 (and W2b) acceptance criteria. The
+// route list (23 of them, since W2b's GET /agent/workers/{name}) is
+// exhaustive and closed — see client.ts's own header comment. Every test
+// below drives the client through `undici`'s MockAgent: no live network
+// anywhere in this file (§ "Pinned technology choices": undici MockAgent,
+// no msw, no nock).
 
 const BASE_URL = "http://orange.test:4100";
 const API_KEY = "wolf-test-secret-9f3a7c21";
@@ -87,7 +88,7 @@ describe("createOrangeClient reads no environment variable", () => {
   });
 });
 
-// ── The 22 routes, one dedicated test each (plus a few extra per-route cases) ──
+// ── The 23 routes, one dedicated test each (plus a few extra per-route cases) ──
 
 describe("sessions", () => {
   it("POST /agent/session — sends name and worker, maps {id,status,workflowId}", async () => {
@@ -555,6 +556,44 @@ describe("datasets", () => {
 });
 
 describe("workers", () => {
+  it("GET /agent/workers/{name} — maps the stored row into the same WorkerRecord shape putWorker returns", async () => {
+    const c = intercept("GET", 200, {
+      project: "wolf",
+      name: "interviewer",
+      description: "",
+      system_prompt: "be an interviewer",
+      mcp_config: {},
+      image: "",
+      max_instances: 1,
+      enabled: true,
+      frozen: false,
+      created_at: 1700000000,
+      updated_at: 1700000001,
+    });
+    const worker = await client().getWorker("interviewer");
+    expect(pathnameOf(c)).toBe("/agent/workers/interviewer");
+    expect(worker.systemPrompt).toBe("be an interviewer");
+    expect(worker.enabled).toBe(true);
+    expect(worker.createdAtSec).toBe(1700000000);
+    expect(worker.updatedAtSec).toBe(1700000001);
+  });
+
+  it("GET /agent/workers/{name} — a 404 (worker does not exist yet) maps to not_found, NOT unavailable (W2b's load-bearing criterion)", async () => {
+    intercept("GET", 404, { error: "worker not found" });
+    await expect(client().getWorker("interviewer")).rejects.toMatchObject({
+      kind: "not_found",
+      status: 404,
+    });
+  });
+
+  it("GET /agent/workers/{name} — a 503 maps to unavailable, exactly as it does for an existing route — no bespoke handling", async () => {
+    intercept("GET", 503, "service unavailable");
+    await expect(client().getWorker("interviewer")).rejects.toMatchObject({
+      kind: "unavailable",
+      status: 503,
+    });
+  });
+
   it("PUT /agent/workers/{name} — sends the worker body, maps the stored row back", async () => {
     const c = intercept("PUT", 200, {
       project: "wolf",

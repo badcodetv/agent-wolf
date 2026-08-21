@@ -15,21 +15,18 @@
  * Per-hypothesis atoms (researcher workers, per-hypothesis schedules,
  * datasets) are W9's, at go-live, and never appear here.
  *
- * **Idempotency, and the one deliberate exception to "come from W2".**
- * Project settings and schedules are read back through `OrangeClient`
- * (`getProjectSettings`, `listSchedules`) before any write, exactly as the
- * ticket's Depends-on note requires. Worker reads are not: W2's route list
- * is exhaustive and closed at 22 routes and does not include `GET
- * /agent/workers/{name}` (only `PUT` and `DELETE` are wrapped), even though
- * Orange's HTTP API serves that route (`go/httpapi/workers.go:77`). Rather
- * than call `putWorker` unconditionally on every run — which would fail
- * this ticket's own idempotency criterion — `readWorker` below makes one
- * narrowly-scoped raw request for that single read, using the same
- * `X-API-Key` credential and the same wire shape (`system_prompt`,
- * `enabled`) `client.ts` already assumes for the write side. It is not a
- * second Orange client: it has no retry, no error-kind mapping and no other
- * caller. See the ticket's `guesses`/`discoveredIssues` in the executor's
- * return value for the fuller account of why this couldn't be avoided.
+ * **Idempotency.** Project settings, worker and schedule state are all read
+ * back through `OrangeClient` before any write — `getProjectSettings`,
+ * `getWorker`, `listSchedules` — exactly as the ticket's Depends-on note
+ * requires. Worker reads used to be the one exception: W2's route list was
+ * exhaustive and closed at 22 routes and had no `GET /agent/workers/{name}`
+ * (only `PUT` and `DELETE` were wrapped), even though Orange's HTTP API
+ * serves that route (`go/httpapi/workers.go:77`). This module worked around
+ * it with a narrowly-scoped raw `fetch`. W2b (owner ruling R91) added
+ * `client.getWorker(name)` as the client's twenty-third route — the raw
+ * fetch is gone and this module now goes through `OrangeClient` exclusively,
+ * with a 404 from `getWorker` (kind `not_found`) read as "does not exist
+ * yet".
  */
 
 import { readFileSync } from "node:fs";
@@ -73,53 +70,28 @@ export interface BootstrapProjectOptions {
   /** `prompts/critic.md`, read verbatim. */
   criticPrompt: string;
   logger?: Logger;
-  /** Injectable for tests; defaults to the global `fetch` (undici's `MockAgent`, set as the global dispatcher, intercepts it the same way it intercepts `client.ts`'s calls). */
-  fetchImpl?: typeof fetch;
-  /** Injectable so a test can assert `client.ts` is what performs every write, without constructing its own. Defaults to `createOrangeClient({ baseUrl, apiKey })`. */
+  /** Injectable so a test can assert `client.ts` is what performs every read and write, without constructing its own. Defaults to `createOrangeClient({ baseUrl, apiKey })`. */
   client?: OrangeClient;
 }
 
-/** The wire shape `GET /agent/workers/{name}` returns — a bare `agentdb.Worker` (`go/agentdb/workers.go:78`). Only the two fields this module compares are read. */
-interface RawWorkerRead {
-  systemPrompt: string;
-  enabled: boolean;
-}
-
 /**
- * Reads one worker's current `system_prompt` and `enabled` fields, or
- * `undefined` if it does not exist yet. Not part of `OrangeClient` — see
- * this module's header comment for why.
+ * Reads one worker's current `systemPrompt` and `enabled` fields via
+ * `client.getWorker`, or `undefined` if it does not exist yet (a `not_found`
+ * `WolfError` — the expected first-run answer, not an outage). Any other
+ * `WolfError` kind (e.g. `unavailable`) propagates, since the bootstrap has
+ * no basis for treating a live upstream failure as "worker absent".
  */
 async function readWorker(
-  baseUrl: string,
-  apiKey: string,
+  client: OrangeClient,
   name: string,
-  fetchImpl: typeof fetch,
-): Promise<RawWorkerRead | undefined> {
-  const base = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
-  const res = await fetchImpl(`${base}/agent/workers/${encodeURIComponent(name)}`, {
-    method: "GET",
-    headers: { "X-API-Key": apiKey },
-  });
-  if (res.status === 404) return undefined;
-  if (!res.ok) {
-    let bodyText = "";
-    try {
-      bodyText = await res.text();
-    } catch {
-      // best-effort only
-    }
-    throw new WolfError(
-      "internal",
-      `GET /agent/workers/${name} failed with status ${res.status}`,
-      { status: res.status, upstreamBody: bodyText },
-    );
+): Promise<{ systemPrompt: string; enabled: boolean } | undefined> {
+  try {
+    const worker = await client.getWorker(name);
+    return { systemPrompt: worker.systemPrompt, enabled: worker.enabled };
+  } catch (err) {
+    if (err instanceof WolfError && err.kind === "not_found") return undefined;
+    throw err;
   }
-  const body = (await res.json()) as Record<string, unknown>;
-  return {
-    systemPrompt: typeof body.system_prompt === "string" ? body.system_prompt : "",
-    enabled: body.enabled === true,
-  };
 }
 
 /** Structural equality for the plain JSON objects this module compares (`mcp_config`, `attention_channel`). No cycles, no `Map`/`Set` — this only ever sees data that round-tripped through Orange's JSON wire format. */
@@ -199,13 +171,10 @@ async function ensureProjectSettings(
 
 async function ensureWorker(
   client: OrangeClient,
-  baseUrl: string,
-  apiKey: string,
-  fetchImpl: typeof fetch,
   name: string,
   systemPrompt: string,
 ): Promise<WriteOutcome> {
-  const existing = await readWorker(baseUrl, apiKey, name, fetchImpl);
+  const existing = await readWorker(client, name);
   if (existing && existing.systemPrompt === systemPrompt && existing.enabled === true) {
     return "unchanged";
   }
@@ -242,7 +211,6 @@ export async function bootstrapProject(
   options: BootstrapProjectOptions,
 ): Promise<BootstrapProjectResult> {
   const client = options.client ?? createOrangeClient({ baseUrl: options.baseUrl, apiKey: options.apiKey });
-  const fetchImpl = options.fetchImpl ?? fetch;
   const logger = options.logger;
 
   const mcpConfig = desiredMcpConfig(options.wolfMcpUrl);
@@ -250,24 +218,10 @@ export async function bootstrapProject(
   const projectSettings = await ensureProjectSettings(client, options.wolfBaseImage, mcpConfig);
   logger?.info({ result: projectSettings }, "wolf bootstrap: project settings");
 
-  const interviewer = await ensureWorker(
-    client,
-    options.baseUrl,
-    options.apiKey,
-    fetchImpl,
-    "interviewer",
-    options.interviewerPrompt,
-  );
+  const interviewer = await ensureWorker(client, "interviewer", options.interviewerPrompt);
   logger?.info({ result: interviewer }, "wolf bootstrap: interviewer worker");
 
-  const critic = await ensureWorker(
-    client,
-    options.baseUrl,
-    options.apiKey,
-    fetchImpl,
-    "critic",
-    options.criticPrompt,
-  );
+  const critic = await ensureWorker(client, "critic", options.criticPrompt);
   logger?.info({ result: critic }, "wolf bootstrap: critic worker");
 
   const criticSchedule = await ensureCriticSchedule(client, options.criticCron);
