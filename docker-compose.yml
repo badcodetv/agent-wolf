@@ -42,6 +42,18 @@ services:
       WOLF_SERIES_URL_TTL_SECONDS: ${WOLF_SERIES_URL_TTL_SECONDS:-}
       FRED_API_KEY: ${FRED_API_KEY:-}
       WOLF_MARKETDATA_CACHE_TTL_SECONDS: ${WOLF_MARKETDATA_CACHE_TTL_SECONDS:-}
+      # W8's sign-in surface and Wolf's own credential to Orange. Same rule as
+      # the block above: a variable documented in .env.example and read by
+      # api/src/config.ts still never reaches this container without a line
+      # here (R81). WOLF_API_KEY, WOLF_ALLOWED_EMAILS and WOLF_SESSION_SECRET
+      # are all REQUIRED — wolf-api refuses to boot without them, naming the
+      # one that is missing.
+      ORANGE_BASE_URL: ${ORANGE_BASE_URL:-}
+      WOLF_API_KEY: ${WOLF_API_KEY:-}
+      WOLF_ALLOWED_EMAILS: ${WOLF_ALLOWED_EMAILS:-}
+      WOLF_SESSION_SECRET: ${WOLF_SESSION_SECRET:-}
+      # Test-only (owner decision B6); refused alongside NODE_ENV=production.
+      WOLF_TEST_LOGIN: ${WOLF_TEST_LOGIN:-}
     restart: unless-stopped
 
   wolf-web:

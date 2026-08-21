@@ -371,6 +371,94 @@ export function parseHypothesisContent(content: string): HypothesisContent {
   return { title, thesis: thesis.trim(), ownerEmail, evaluation, rationale };
 }
 
+// ── The evaluation summary line ─────────────────────────────────────────
+
+/**
+ * `kind=evaluation`'s FIRST LINE, parsed. There is exactly ONE parser for it
+ * and it lives here (a W8 acceptance criterion): W10's poller writes the line
+ * and W8's board reads it, and a second copy in `routes/hypotheses.ts` is how
+ * the two silently drift apart.
+ *
+ * Why the board reads a line of text at all, rather than a number on the
+ * hypothesis row: `support_score` cannot live on the state memory (a `live`
+ * hypothesis's newest trusted row is its go-live row, and the board read
+ * returns labels plus a 500-byte snippet and no content), it cannot be a
+ * label (`support_score=-0.42` is an ILLEGAL label value — values must begin
+ * alphanumeric — and a poller rewriting the row every 5 minutes would drown
+ * `latest_per`), and reading each hypothesis's dataset from the board route
+ * is N×M fetches to paint one page. See § "Where the board's numbers come
+ * from".
+ */
+export interface EvaluationSummaryLine {
+  /** −1 … +1. Displayed; it never trips anything — only conditions do. */
+  supportScore: number;
+  tripped: number;
+  holding: number;
+  indeterminate: number;
+  /** `evaluated=<RFC3339>` converted to unix ms. */
+  evaluatedAtMs: UnixMs;
+}
+
+/** One board row's evaluation, with the memory it was read from. */
+export interface EvaluationSummary extends EvaluationSummaryLine {
+  memoryId: string;
+  /** When the memory was appended (unix ms) — NOT `evaluated=`, which is the
+   * moment the evaluator ran. They differ whenever the poller suppresses a
+   * duplicate row. */
+  createdAtMs: UnixMs;
+}
+
+/** The five keys the line must carry. Enumerated, never counted. */
+const EVALUATION_SUMMARY_KEYS = ["score", "tripped", "holding", "indeterminate", "evaluated"] as const;
+
+function parseCount(raw: string | undefined): number | null {
+  if (raw === undefined || !/^\d+$/.test(raw)) return null;
+  const n = Number(raw);
+  return Number.isSafeInteger(n) ? n : null;
+}
+
+/**
+ * Parses `score=-0.42 tripped=1 holding=3 indeterminate=0 evaluated=2026-08-20T06:05:00Z`.
+ *
+ * All five keys are REQUIRED; **unrecognised `key=value` tokens are ignored
+ * rather than rejected**, so W10 can extend the line without breaking the
+ * board. A line that does not parse yields `null` — the caller renders
+ * `support_score: null` and no conditions summary — and this function NEVER
+ * throws: a row Wolf cannot read is a hypothesis that still has to appear on
+ * the board.
+ *
+ * The first occurrence of a key wins, so a second `score=` appended after the
+ * fact cannot override the leading one.
+ */
+export function parseEvaluationSummaryLine(line: string): EvaluationSummaryLine | null {
+  const found = new Map<string, string>();
+  for (const token of line.trim().split(/\s+/)) {
+    const eq = token.indexOf("=");
+    if (eq <= 0) continue;
+    const key = token.slice(0, eq);
+    if (found.has(key)) continue;
+    found.set(key, token.slice(eq + 1));
+  }
+  for (const key of EVALUATION_SUMMARY_KEYS) {
+    if (!found.has(key)) return null;
+  }
+  const score = Number(found.get("score"));
+  if (!Number.isFinite(score)) return null;
+  const tripped = parseCount(found.get("tripped"));
+  const holding = parseCount(found.get("holding"));
+  const indeterminate = parseCount(found.get("indeterminate"));
+  if (tripped === null || holding === null || indeterminate === null) return null;
+  const evaluatedAtMs = Date.parse(found.get("evaluated") ?? "");
+  if (!Number.isFinite(evaluatedAtMs)) return null;
+  return {
+    supportScore: score,
+    tripped,
+    holding,
+    indeterminate,
+    evaluatedAtMs: evaluatedAtMs as UnixMs,
+  };
+}
+
 // ── The session index ───────────────────────────────────────────────────
 
 export interface SessionIndexEntry {
@@ -513,6 +601,15 @@ export interface HypothesisStore {
   readBoard(options?: ReadOptions): Promise<HypothesisRecord[]>;
   /** One hypothesis, always with `include_retracted=1`. */
   readHypothesis(id: string, options?: ReadOptions): Promise<HypothesisRecord>;
+  /**
+   * The board's SECOND `latest_per` request: the newest trusted
+   * `kind=evaluation` row per hypothesis, reduced to its summary line. One
+   * request for the whole board, whatever the hypothesis count.
+   *
+   * `sessions` is the trust rule's third clause — pass the board's own id
+   * set (a `Set<string>` satisfies `SessionLookup`), not a fresh index read.
+   */
+  readEvaluationSummaries(sessions: SessionLookup): Promise<Map<string, EvaluationSummary>>;
   /** Appends a trusted `kind=hypothesis` row through `POST /agent/memories`. */
   appendState(params: AppendStateParams): Promise<MemoryRecord>;
   /** The serialised state machine; re-reads the current state under the lock. */
@@ -530,6 +627,7 @@ const BOARD_LIMIT = 100;
 const DETAIL_LIMIT = 50;
 
 const KIND_HYPOTHESIS = "hypothesis";
+const KIND_EVALUATION = "evaluation";
 
 type MutableRecord = HypothesisRecord & { tamper?: Tamper[] };
 
@@ -751,6 +849,51 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
     return resolveFromRows(entry, rows, index).record;
   }
 
+  async function readEvaluationSummaries(
+    sessions: SessionLookup,
+  ): Promise<Map<string, EvaluationSummary>> {
+    // `include_retracted=1` for the same reason the board read carries it
+    // (see readBoard): without it Orange applies `notRetractedSQL` BEFORE the
+    // `latest_per` reduction, so a hostile retraction of the newest evaluation
+    // row hands back the OLDER one — rolling the displayed score back with no
+    // sign that anything happened.
+    const rows = await client.listMemories({
+      selector: `kind=${KIND_EVALUATION}`,
+      latestPer: "name",
+      limit: BOARD_LIMIT,
+      includeRetracted: true,
+    });
+    const out = new Map<string, EvaluationSummary>();
+    for (const row of rows) {
+      const name = row.labels["name"];
+      if (name === undefined || out.has(name)) continue;
+      if (!sessions.has(name)) continue; // names something that is not a hypothesis
+      if (!isTrusted(row, sessions)) {
+        // A forged evaluation row cannot set a score, which is the whole
+        // point. It is logged rather than rendered: the board's `tamper` array
+        // is the pinned `Tamper` shape for the STATE row (W5), and widening it
+        // here would make the board report tamper the detail page does not.
+        logger?.warn(
+          { memory_id: row.id, name },
+          "untrusted kind=evaluation memory ignored (score not rendered)",
+        );
+        continue;
+      }
+      const withdrawnByWolf = (row.retractedBy ?? []).some(hasEmptyProvenance);
+      if (withdrawnByWolf) continue;
+      const parsed = parseEvaluationSummaryLine(parseTitleFromSnippet(row.snippet).title);
+      if (parsed === null) {
+        logger?.warn(
+          { memory_id: row.id, name },
+          "kind=evaluation line 1 did not parse — support_score omitted",
+        );
+        continue;
+      }
+      out.set(name, { ...parsed, memoryId: row.id, createdAtMs: row.createdAtMs });
+    }
+    return out;
+  }
+
   async function appendState(params: AppendStateParams): Promise<MemoryRecord> {
     if (!isHypothesisId(params.id)) {
       throw new WolfError("invalid", `not a hypothesis id: ${JSON.stringify(params.id)}`, {
@@ -813,6 +956,7 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
     readSessionIndex,
     readBoard,
     readHypothesis,
+    readEvaluationSummaries,
     appendState,
     transition,
   };
