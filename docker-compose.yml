@@ -24,6 +24,13 @@ services:
       WOLF_API_PORT: ${WOLF_API_PORT:-8100}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       NODE_ENV: ${NODE_ENV:-production}
+      # Unset by default (see .env.example) so wolf-api discovers the DinD
+      # bridge gateway itself at boot rather than trusting a hard-coded
+      # 172.17.0.1 that Docker is free to not allocate. `${WOLF_MCP_URL:-}`
+      # forwards it through only when the operator has set it explicitly —
+      # Compose does not inject .env values into the container on its own,
+      # only variables an `environment:` entry names.
+      WOLF_MCP_URL: ${WOLF_MCP_URL:-}
     restart: unless-stopped
 
   wolf-web:

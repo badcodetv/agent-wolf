@@ -5,8 +5,12 @@
   "description": "Agent Wolf — trading-hypothesis platform built on Agent Orange. See design/2026-08-20-agent-wolf.md in the agent-orange repo.",
   "workspaces": [
     "api",
-    "web"
+    "web",
+    "tools/*"
   ],
+  "resolutions": {
+    "vite": "6.4.3"
+  },
   "scripts": {
     "typecheck": "yarn workspace agent-wolf-api typecheck && yarn workspace agent-wolf-web typecheck",
     "test": "yarn workspace agent-wolf-api test && yarn workspace agent-wolf-web test"

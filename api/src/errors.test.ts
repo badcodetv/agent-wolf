@@ -21,7 +21,7 @@ describe("WolfError", () => {
     expect(err.details).toMatchObject({ variable: "WOLF_API_KEY" });
   });
 
-  it("supports all six kinds from the shared taxonomy", () => {
+  it("supports all seven kinds from the shared taxonomy", () => {
     const kinds: Array<WolfError["kind"]> = [
       "not_found",
       "unavailable",
@@ -29,6 +29,7 @@ describe("WolfError", () => {
       "conflict",
       "forbidden",
       "misconfigured",
+      "internal",
     ];
 
     for (const kind of kinds) {
@@ -38,6 +39,19 @@ describe("WolfError", () => {
       expect(err).toBeInstanceOf(WolfError);
       expect(typeof err.status).toBe("number");
     }
+  });
+
+  it("classifies internal as 500 and not retryable-looking (distinct from unavailable)", () => {
+    const err = WolfError.internal(new Error("some bug"));
+    expect(err.kind).toBe("internal");
+    expect(err.status).toBe(500);
+    expect(err.kind).not.toBe("unavailable");
+  });
+
+  it("internal() never puts the original cause's message into its own message", () => {
+    const err = WolfError.internal(new Error("secret-ish detail"));
+    expect(err.message).not.toContain("secret-ish detail");
+    expect(err.message).toBe("internal error");
   });
 
   it("carries details and an upstream body when given", () => {

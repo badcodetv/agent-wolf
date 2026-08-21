@@ -7,14 +7,22 @@
  * invent a second taxonomy elsewhere in this codebase.
  */
 
-/** The six error kinds every Wolf error is classified as. */
+/**
+ * The seven error kinds every Wolf error is classified as. `internal` was
+ * added by owner decision 2026-08-21 (R39): an unhandled throw must never
+ * be classified as `unavailable`, the one RETRYABLE kind — W10's poller
+ * treats `unavailable` as "skip this tick without penalty", so mapping a
+ * genuine server bug to it would make the poller retry a crashing endpoint
+ * forever instead of surfacing the bug.
+ */
 export type WolfErrorKind =
   | "not_found" // the thing does not exist
   | "unavailable" // an upstream is down or timed out — RETRYABLE
   | "invalid" // caller error; carries field-level details
   | "conflict" // CAS or state-machine rejection
   | "forbidden" // authenticated but not allowed
-  | "misconfigured"; // an env var or an Orange-side setting is wrong; names the variable
+  | "misconfigured" // an env var or an Orange-side setting is wrong; names the variable
+  | "internal"; // WE have a bug — an unhandled throw. NOT retryable. Message never echoed to the client.
 
 /** Default HTTP status per kind, used when the caller does not override it. */
 const DEFAULT_STATUS: Record<WolfErrorKind, number> = {
@@ -24,6 +32,7 @@ const DEFAULT_STATUS: Record<WolfErrorKind, number> = {
   conflict: 409,
   forbidden: 403,
   misconfigured: 500,
+  internal: 500,
 };
 
 export interface WolfErrorOptions {
@@ -63,5 +72,18 @@ export class WolfError extends Error {
       message ?? `missing or invalid configuration: ${variableName}`,
       { details: { variable: variableName } },
     );
+  }
+
+  /**
+   * Wraps an unrecognised throw as `internal`. The message is always the
+   * fixed string below — never the original error's message — because that
+   * message may contain a stack trace, a file path or a credential and must
+   * not reach a response body (R39). The real error is kept as `cause` so
+   * the caller can log it server-side (e.g. `logger.error({ err: cause }, ...)`),
+   * and, where a correlation id exists, callers should attach it via
+   * `details` rather than folding it into the message.
+   */
+  static internal(cause: unknown): WolfError {
+    return new WolfError("internal", "internal error", { cause });
   }
 }

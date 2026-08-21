@@ -44,5 +44,13 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header Connection "";
+        # Streamable HTTP's server-to-client leg is an SSE stream on
+        # GET /mcp — the same reason /api/ carries these three directives.
+        # nginx's 60s default proxy_read_timeout would cut a long-lived MCP
+        # stream, and buffering would delay every event until nginx's buffer
+        # filled or the upstream closed.
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
     }
 }

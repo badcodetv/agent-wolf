@@ -1,0 +1,19 @@
+# Both api/Dockerfile and web/Dockerfile build with the repo ROOT as their
+# context (docker-compose.yml: `context: .`) and `COPY api ./api` /
+# `COPY web ./web` run AFTER `yarn install --frozen-lockfile`. Without this
+# file, a host node_modules tree (present on any machine that has already
+# run `yarn install` locally) gets copied straight over the freshly
+# installed one inside the image — silently replacing the image's Linux
+# native binaries and correct hoisting with whatever happens to be on the
+# host. See design/2026-08-20-agent-wolf.md § W1 acceptance criteria
+# (agent-orange repo).
+node_modules
+**/node_modules
+.git
+dist
+**/dist
+.env
+.env.*
+!.env.example
+coverage
+**/coverage
