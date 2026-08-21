@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { WolfError } from "./errors.js";
 import {
@@ -527,5 +530,104 @@ describe("WOLF_SCHEDULE_CRON / WOLF_TEARDOWN_DRAIN_SECONDS (W9)", () => {
   it("accepts a zero drain bound: proceed immediately, but still POLL once", () => {
     const config = loadConfig({ WOLF_TEARDOWN_DRAIN_SECONDS: "0" }, noRoutes);
     expect(config.teardownDrainSeconds).toBe(0);
+  });
+});
+
+// ─── R81/R110: the three places, enforced mechanically ─────────────────────
+//
+// A variable read by this module still never reaches the running process
+// without an `environment:` entry under `wolf-api` in docker-compose.yml —
+// Compose injects nothing from `.env` on its own. Every wave since W1 has
+// been told that rule in prose and it has been broken anyway: W12 shipped
+// WOLF_BASE_IMAGE and WOLF_CRITIC_CRON with no compose entry (found by W9's
+// implementer in wave 6, two waves later, by reading the file), and both W9
+// and W16 were written with Files lines that stopped at `.env.example`.
+//
+// Prose does not enforce it. This does. It is deliberately a source scan
+// rather than a config assertion, because the failure it catches is the
+// absence of a line, which no amount of exercising `loadConfig` can see.
+describe("R81/R110: every variable config.ts reads reaches the container", () => {
+  const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+  /**
+   * Variables that appear in docker-compose.yml but are deliberately NOT read
+   * by config.ts — they configure Compose itself, not the wolf-api process.
+   * This module's own header comment names them.
+   */
+  const COMPOSE_ONLY = new Set(["ORANGE_DIND_CONTAINER", "WOLF_WEB_PORT"]);
+
+  /** `env.FOO` inside a doc comment illustrating the R80 hazard, not a real read. */
+  const NOT_A_REAL_READ = new Set(["FOO"]);
+
+  function variablesConfigReads(): string[] {
+    const src = readFileSync(join(repoRoot, "api", "src", "config.ts"), "utf8");
+    const names = new Set<string>();
+    for (const m of src.matchAll(/\benv\.([A-Z][A-Z0-9_]*)\b/g)) {
+      const name = m[1];
+      if (name && !NOT_A_REAL_READ.has(name)) names.add(name);
+    }
+    return [...names].sort();
+  }
+
+  function wolfApiEnvironmentKeys(): Set<string> {
+    const compose = readFileSync(join(repoRoot, "docker-compose.yml"), "utf8");
+    const lines = compose.split("\n");
+    const start = lines.findIndex((l) => l.startsWith("  wolf-api:"));
+    expect(start, "no `wolf-api:` service in docker-compose.yml").toBeGreaterThanOrEqual(0);
+    // The service block ends at the next line indented by exactly two spaces.
+    let end = lines.length;
+    for (let i = start + 1; i < lines.length; i += 1) {
+      const line = lines[i] ?? "";
+      if (/^ {2}\S/.test(line)) {
+        end = i;
+        break;
+      }
+    }
+    const keys = new Set<string>();
+    for (const line of lines.slice(start, end)) {
+      const m = /^ {6}([A-Z][A-Z0-9_]*):/.exec(line);
+      if (m?.[1]) keys.add(m[1]);
+    }
+    return keys;
+  }
+
+  it("finds a non-trivial number of variables, so a broken scan cannot pass vacuously", () => {
+    const read = variablesConfigReads();
+    expect(read.length).toBeGreaterThan(10);
+    expect(read).toContain("WOLF_API_KEY");
+    expect(wolfApiEnvironmentKeys().size).toBeGreaterThan(10);
+  });
+
+  it("every variable config.ts reads has an `environment:` entry under wolf-api", () => {
+    const composeKeys = wolfApiEnvironmentKeys();
+    const missing = variablesConfigReads().filter((name) => !composeKeys.has(name));
+    expect(
+      missing,
+      `read by api/src/config.ts but absent from docker-compose.yml's wolf-api environment block, ` +
+        `so the value an operator sets in .env would silently never reach the container (R81/R110): ` +
+        `${missing.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  it("every variable config.ts reads is documented in .env.example", () => {
+    const example = readFileSync(join(repoRoot, ".env.example"), "utf8");
+    const documented = new Set(
+      [...example.matchAll(/^#?\s*([A-Z][A-Z0-9_]*)=/gm)].map((m) => m[1] as string),
+    );
+    const missing = variablesConfigReads().filter((name) => !documented.has(name));
+    expect(
+      missing,
+      `read by api/src/config.ts but undocumented in .env.example: ${missing.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  it("no compose entry names a variable nothing reads, beyond the documented Compose-only ones", () => {
+    const read = new Set(variablesConfigReads());
+    // LOG_LEVEL and NODE_ENV are read through the same module; anything else
+    // unaccounted for is either a typo or a variable whose reader was deleted.
+    const stray = [...wolfApiEnvironmentKeys()].filter(
+      (name) => !read.has(name) && !COMPOSE_ONLY.has(name),
+    );
+    expect(stray, `named in docker-compose.yml but read by nothing: ${stray.join(", ")}`).toEqual([]);
   });
 });

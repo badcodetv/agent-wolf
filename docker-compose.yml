@@ -61,6 +61,13 @@ services:
       # process silently runs the default instead.
       WOLF_SCHEDULE_CRON: ${WOLF_SCHEDULE_CRON:-}
       WOLF_TEARDOWN_DRAIN_SECONDS: ${WOLF_TEARDOWN_DRAIN_SECONDS:-}
+      # W12's session image and critic schedule. Both are documented in
+      # .env.example and read by api/src/config.ts, but W12 never added them
+      # here — so until now an operator who set WOLF_CRITIC_CRON in .env got
+      # the default inside the container, silently. Found by W9's implementer
+      # in wave 6 and fixed on the trunk; the same R81/R110 rule as above.
+      WOLF_BASE_IMAGE: ${WOLF_BASE_IMAGE:-}
+      WOLF_CRITIC_CRON: ${WOLF_CRITIC_CRON:-}
     restart: unless-stopped
 
   wolf-web:
