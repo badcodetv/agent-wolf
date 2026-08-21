@@ -11,24 +11,14 @@
  * A missing or empty `apiKey` is `WolfError.misconfigured` naming
  * `FRED_API_KEY`, raised AT CONSTRUCTION, not at first call.
  *
- * IMPORTANT — see this ticket's Discovered Issues Log entry: no
- * FRED_API_KEY is available to the executor in this environment
- * (FRED_API_KEY is unset, and an unkeyed request to api.stlouisfed.org
- * returns HTTP 400). Per this ticket's own acceptance criterion, that
- * makes recording a real fixture a BLOCKED step — logged, not
- * hand-substituted. Concretely this means:
- *   - The happy-path shape mapping below (series_search's field mapping;
- *     series_observations' "." missing-value sentinel omission) is
- *     implemented per FRED's PUBLICLY DOCUMENTED API shape, but is NOT
- *     covered by a test asserting it against a real recorded response —
- *     that test is the blocked step.
- *   - Error-mapping (the four WolfErrorKind branches) and the
- *     misconfigured-at-construction behaviour ARE covered by tests, using
- *     synthetic (hand-written, clearly-labelled-as-such) HTTP responses via
- *     undici MockAgent — this is generic status-code-branch testing, not a
- *     claim about FRED's exact response shape, and the ticket text
- *     explicitly permits it ("error mapping ... is testable without a
- *     key").
+ * W6b: the happy-path shape mapping below (series_search's field mapping;
+ * series_observations' "." missing-value sentinel omission) is pinned by
+ * `fred.test.ts` against two REAL recorded responses — see
+ * `__fixtures__/fred-observations-dgs10.json`,
+ * `__fixtures__/fred-search-treasury.json` and that directory's
+ * README.md for the exact commands and the recording date. This closes
+ * W6's deferred criteria (R55) — both were previously implemented only
+ * per FRED's published docs, unverified against a real response.
  */
 
 import { WolfError } from "../errors.js";
@@ -174,8 +164,8 @@ export function createFredClient(options: FredClientOptions): MarketDataConnecto
     const rows: RawMarketDataRow[] = [];
     for (const observation of observations) {
       // FRED's missing-value sentinel: the row is OMITTED entirely, never
-      // coerced to "0". See the file-level note: this branch is not covered
-      // by a fixture-backed test in this environment (blocked, no key).
+      // coerced to "0". Pinned by fred.test.ts against a real recorded
+      // fixture (__fixtures__/fred-observations-dgs10.json, W6b).
       if (observation.value === ".") continue;
       rows.push({ timestamp: observation.date, value: observation.value });
     }

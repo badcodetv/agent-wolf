@@ -1,23 +1,33 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { inspect } from "node:util";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { getGlobalDispatcher, MockAgent, setGlobalDispatcher } from "undici";
 import { createFredClient } from "./fred.js";
 
 // ─────────────────────────────────────────────────────────────────────────
-// NO FRED_API_KEY IS AVAILABLE IN THIS ENVIRONMENT (verified: FRED_API_KEY
-// is unset, and an unkeyed request to api.stlouisfed.org returns HTTP 400).
-// Per this ticket's own acceptance criterion, recording a real fixture is
-// therefore a BLOCKED step: this file does NOT contain a happy-path test
-// asserting series_search's field mapping or the "." missing-value
-// sentinel omission against a recorded response — see
-// __fixtures__/README.md and this ticket's Discovered Issues Log entry.
+// W6b: a real FRED_API_KEY was made available and two real fixtures were
+// recorded against api.stlouisfed.org — see __fixtures__/README.md for the
+// exact commands and the date. The two describe blocks below
+// ("real recorded fixture") replace W6's deferred criteria (R55): the "."
+// missing-value-sentinel omission and series_search's field mapping are now
+// pinned against those recorded responses, not hand-written ones.
 //
-// What IS tested here, per the ticket's explicit allowance ("error mapping
-// ... is testable without a key"): misconfigured-at-construction, and the
-// four WolfErrorKind branches using SYNTHETIC (hand-written, not recorded)
-// HTTP responses via undici MockAgent — generic status-code-branch
-// coverage, not a claim about FRED's exact real response shape.
+// What was ALREADY tested here, per the ticket's explicit allowance ("error
+// mapping ... is testable without a key"): misconfigured-at-construction,
+// and the four WolfErrorKind branches using SYNTHETIC (hand-written, not
+// recorded) HTTP responses via undici MockAgent — generic status-code-branch
+// coverage, not a claim about FRED's exact real response shape. Those are
+// unchanged below.
 // ─────────────────────────────────────────────────────────────────────────
+
+const here = dirname(fileURLToPath(import.meta.url));
+const fixturesDir = join(here, "__fixtures__");
+
+function loadFixture(name: string): unknown {
+  return JSON.parse(readFileSync(join(fixturesDir, name), "utf8"));
+}
 
 describe("marketdata_fred", () => {
   let mockAgent: MockAgent;
@@ -95,6 +105,102 @@ describe("marketdata_fred", () => {
 
       const client = createFredClient({ apiKey: "test-key" }); // no baseUrl — default host
       await expect(client.search("treasury")).rejects.toMatchObject({ kind: "unavailable" });
+    });
+  });
+
+  // W6b: replays __fixtures__/fred-observations-dgs10.json, a REAL response
+  // recorded 2026-08-21 (see that directory's README.md for the exact
+  // command and date) for DGS10, observation_start=2024-12-20,
+  // observation_end=2025-01-03 — a range chosen because it spans both
+  // Christmas Day and New Year's Day, on which FRED's business-daily
+  // series carries the "." missing-value sentinel. Closes W6's deferred
+  // criterion (R55): "A fixture contains one [the "." sentinel] and pins
+  // the omission."
+  describe("marketdata_ fetch(): '.' missing-value sentinel omission (real recorded fixture)", () => {
+    it("omits every '.' observation entirely — never coerces it to 0 — and keeps every real value", async () => {
+      const fixture = loadFixture("fred-observations-dgs10.json");
+
+      mockAgent
+        .get("https://fred.test")
+        .intercept({ path: /^\/fred\/series\/observations\?.*series_id=DGS10.*$/, method: "GET" })
+        .reply(200, JSON.stringify(fixture), { headers: { "content-type": "application/json" } });
+
+      const client = createFredClient({ apiKey: "test-key", baseUrl: "https://fred.test" });
+      const rows = await client.fetch("DGS10", "2024-12-20", "2025-01-03");
+
+      // The recorded fixture has 11 observations; two ("2024-12-25" and
+      // "2025-01-01") are the "." sentinel and must be OMITTED — not
+      // present with value "0" or value ".".
+      expect(rows).toHaveLength(9);
+      const timestamps = rows.map((row) => row.timestamp);
+      expect(timestamps).not.toContain("2024-12-25");
+      expect(timestamps).not.toContain("2025-01-01");
+      expect(rows.some((row) => row.value === "0")).toBe(false);
+      expect(rows.some((row) => row.value === ".")).toBe(false);
+
+      // Pin the survivors exactly, in provider order, verbatim strings.
+      expect(rows).toEqual([
+        { timestamp: "2024-12-20", value: "4.52" },
+        { timestamp: "2024-12-23", value: "4.59" },
+        { timestamp: "2024-12-24", value: "4.59" },
+        { timestamp: "2024-12-26", value: "4.58" },
+        { timestamp: "2024-12-27", value: "4.62" },
+        { timestamp: "2024-12-30", value: "4.55" },
+        { timestamp: "2024-12-31", value: "4.58" },
+        { timestamp: "2025-01-02", value: "4.57" },
+        { timestamp: "2025-01-03", value: "4.6" },
+      ]);
+    });
+  });
+
+  // W6b: replays __fixtures__/fred-search-treasury.json, a REAL response
+  // recorded 2026-08-21 for search_text=treasury&limit=5 (see that
+  // directory's README.md). Closes W6's deferred criterion (R55):
+  // series_search's field mapping — title, units, frequency,
+  // observation_start, observation_end onto
+  // { source, id, title, unit, frequency, first, last } — pinned against a
+  // real recorded response rather than FRED's published docs alone.
+  describe("marketdata_ search(): field mapping (real recorded fixture)", () => {
+    it("maps every real seriess item onto {source, id, title, unit, frequency, first, last}", async () => {
+      const fixture = loadFixture("fred-search-treasury.json") as { seriess: unknown[] };
+
+      mockAgent
+        .get("https://fred.test")
+        .intercept({ path: /^\/fred\/series\/search\?.*search_text=treasury.*$/, method: "GET" })
+        .reply(200, JSON.stringify(fixture), { headers: { "content-type": "application/json" } });
+
+      const client = createFredClient({ apiKey: "test-key", baseUrl: "https://fred.test" });
+      const { results } = await client.search("treasury");
+
+      expect(results).toHaveLength(fixture.seriess.length);
+      expect(results.length).toBeGreaterThan(0);
+
+      // Every real item maps id/title/units→unit/frequency/observation_start→first/observation_end→last,
+      // with source pinned to "fred" and no extra/missing keys.
+      for (const [index, item] of (fixture.seriess as Record<string, unknown>[]).entries()) {
+        expect(results[index]).toEqual({
+          source: "fred",
+          id: item.id,
+          title: item.title,
+          unit: item.units,
+          frequency: item.frequency,
+          first: item.observation_start,
+          last: item.observation_end,
+        });
+      }
+
+      // Pin the first real item exactly, so a future FRED response-shape
+      // change (e.g. units renamed, or search re-ranked) fails loudly
+      // rather than only via the generic loop above.
+      expect(results[0]).toEqual({
+        source: "fred",
+        id: "T10Y2Y",
+        title: "10-Year Treasury Constant Maturity Minus 2-Year Treasury Constant Maturity",
+        unit: "Percent",
+        frequency: "Daily",
+        first: "1976-06-01",
+        last: "2026-08-20",
+      });
     });
   });
 
