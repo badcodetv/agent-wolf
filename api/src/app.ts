@@ -1,6 +1,9 @@
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import type { Logger } from "./logger.js";
+import type { WolfConfig } from "./config.js";
 import { WolfError } from "./errors.js";
+import { createWolfMcp, originFromMcpUrl } from "./mcp/server.js";
+import { createMarketDataAccess } from "./mcp/tools.js";
 
 /**
  * The one shared error-handling middleware: any route that throws (or
@@ -34,8 +37,15 @@ export function createErrorHandler(logger: Logger) {
  * Builds the Express 5 app. Kept separate from index.ts so tests can
  * `import { createApp }` and drive it with `supertest`-style requests
  * without binding a real port.
+ *
+ * `config` is required, not optional: the routers mounted below are the
+ * only reason the market-data MCP server is reachable at all, and a
+ * "mounted only when configured" app is exactly the silent no-op this
+ * codebase keeps being bitten by. A missing `WOLF_MCP_TOKEN` therefore
+ * fails HERE, at boot, naming the variable — never by serving `/mcp`
+ * unauthenticated.
  */
-export function createApp(logger: Logger): Express {
+export function createApp(logger: Logger, config: WolfConfig): Express {
   const app = express();
   app.use(express.json());
 
@@ -46,6 +56,34 @@ export function createApp(logger: Logger): Express {
   app.get("/api/healthz", (_req: Request, res: Response) => {
     res.status(200).json({ status: "ok" });
   });
+
+  // ── W7: the market-data MCP server and the byte route it points at ────
+  //
+  // Both are mounted OUTSIDE the `/api` prefix and outside the session
+  // cookie: a session container has no cookie and reaches wolf-api
+  // directly at http://<dind-gateway>:<port>, not through nginx
+  // (design/2026-08-20-agent-wolf.md § "Local topology and networking").
+  // `/mcp` is authenticated by the bare `X-Wolf-Mcp-Token` header and
+  // `/series/download` solely by its signed `token` query parameter.
+  //
+  // This is the one place seconds become milliseconds
+  // (`createCache` takes `ttlMs`); `marketdata/cache.ts` deliberately does
+  // no unit conversion of its own (W6's Notes).
+  const marketdata = createMarketDataAccess({
+    fredApiKey: config.fredApiKey,
+    cacheTtlMs: config.marketDataCacheTtlSeconds * 1000,
+  });
+  const { mcpRouter, seriesDownloadRouter } = createWolfMcp({
+    // The origin follows the RESOLVED mcpUrl — which may have been
+    // discovered at boot (R43) — never `process.env.WOLF_MCP_URL`.
+    mcpOrigin: originFromMcpUrl(config.mcpUrl),
+    mcpToken: config.mcpToken,
+    seriesSecret: config.seriesTokenSecret,
+    seriesUrlTtlSec: config.seriesUrlTtlSeconds,
+    marketdata,
+  });
+  app.use(mcpRouter);
+  app.use(seriesDownloadRouter);
 
   app.use(createErrorHandler(logger));
 

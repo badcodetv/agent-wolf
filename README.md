@@ -46,9 +46,18 @@ docker compose up --build
 # 2. Agent Wolf second.
 cd ../agent-wolf
 cp .env.example .env
+# WOLF_MCP_TOKEN is REQUIRED — wolf-api refuses to boot without it rather
+# than serve its market-data MCP tools unauthenticated. Generate one into
+# .env (never commit the value); the same value must reach session
+# containers through Orange's MCP config.
+echo "WOLF_MCP_TOKEN=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')" >> .env
 docker compose up --build
 # → http://localhost:8081 (WOLF_WEB_PORT)
 ```
+
+`.env.example` documents every other variable, including the optional
+`FRED_API_KEY` (macro series; without it Stooq still works and FRED calls
+answer with a `misconfigured` error naming the variable).
 
 ## Development
 

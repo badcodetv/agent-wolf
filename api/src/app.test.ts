@@ -3,6 +3,17 @@ import type { AddressInfo } from "node:net";
 import express from "express";
 import { createApp, createErrorHandler } from "./app.js";
 import { createLogger } from "./logger.js";
+import { loadConfig } from "./config.js";
+
+/** A config good enough to build the app: a well-formed MCP token (W7 —
+ * `createWolfMcp` refuses to build without one) and no route table, so
+ * gateway discovery does not depend on the machine running the test. */
+function testConfig(env: NodeJS.ProcessEnv = {}) {
+  return loadConfig(
+    { WOLF_MCP_TOKEN: "wolf-mcp-token-for-tests-0123456789abcdef", ...env },
+    { readRouteTable: () => undefined },
+  );
+}
 
 describe("createApp", () => {
   let close: (() => void) | undefined;
@@ -13,7 +24,7 @@ describe("createApp", () => {
   });
 
   it("answers GET /api/healthz with 200", async () => {
-    const app = createApp(createLogger({ logLevel: "silent" }));
+    const app = createApp(createLogger({ logLevel: "silent" }), testConfig());
     const server = app.listen(0);
     close = () => server.close();
     const { port } = server.address() as AddressInfo;
@@ -45,5 +56,40 @@ describe("createApp", () => {
     expect(res.status).toBe(500);
     expect(bodyText).not.toContain("secret-ish detail");
     expect(JSON.parse(bodyText)).toEqual({ kind: "internal", message: "internal error" });
+  });
+
+  // W7's mount. X1 fails without these two lines in createApp, and the
+  // failure would first surface nine tickets later, inside a container.
+  describe("W7 market-data mount", () => {
+    async function listen(app: ReturnType<typeof createApp>): Promise<string> {
+      const server = app.listen(0);
+      await new Promise<void>((resolve) => server.once("listening", () => resolve()));
+      close = () => server.close();
+      const { port } = server.address() as AddressInfo;
+      return `http://127.0.0.1:${port}`;
+    }
+
+    it("mounts /mcp — an unauthenticated call is rejected, not 404", async () => {
+      const base = await listen(createApp(createLogger({ logLevel: "silent" }), testConfig()));
+      const res = await fetch(`${base}/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it("mounts /series/download — a tokenless call is 403, not 404", async () => {
+      const base = await listen(createApp(createLogger({ logLevel: "silent" }), testConfig()));
+      const res = await fetch(`${base}/series/download`);
+      expect(res.status).toBe(403);
+    });
+
+    it("refuses to build at all when WOLF_MCP_TOKEN is unset, naming the variable", () => {
+      const withoutToken = loadConfig({}, { readRouteTable: () => undefined });
+      expect(() => createApp(createLogger({ logLevel: "silent" }), withoutToken)).toThrow(
+        /WOLF_MCP_TOKEN/,
+      );
+    });
   });
 });

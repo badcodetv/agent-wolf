@@ -160,3 +160,127 @@ describe("resolveMcpUrl / DinD gateway discovery", () => {
     expect(config.mcpUrlSource).toBe("discovered");
   });
 });
+
+// ── W7: the market-data / MCP variables ─────────────────────────────────
+//
+// design/2026-08-20-agent-wolf.md § "Parallelism and file ownership": each
+// ticket adds only the variables its own criteria name, and documents each
+// in `.env.example`. W7 adds FRED_API_KEY and
+// WOLF_MARKETDATA_CACHE_TTL_SECONDS (formally requested by W6's Notes) plus
+// its own WOLF_MCP_TOKEN, WOLF_SERIES_TOKEN_SECRET and
+// WOLF_SERIES_URL_TTL_SECONDS.
+describe("loadConfig — W7 market-data and MCP variables", () => {
+  const noRoutes = routeSourceReturning(undefined);
+  const GOOD_TOKEN = "wolf-mcp-token-for-tests-0123456789abcdef";
+
+  it("defaults: no FRED key, a 3600s cache TTL, a 300s series-URL TTL, and no MCP token", () => {
+    const config = loadConfig({}, noRoutes);
+    expect(config.fredApiKey).toBe("");
+    expect(config.marketDataCacheTtlSeconds).toBe(3600);
+    expect(config.seriesUrlTtlSeconds).toBe(300);
+    expect(config.mcpToken).toBe("");
+  });
+
+  it("passes FRED_API_KEY through unchanged", () => {
+    const config = loadConfig({ FRED_API_KEY: "abcdef0123456789abcdef0123456789" }, noRoutes);
+    expect(config.fredApiKey).toBe("abcdef0123456789abcdef0123456789");
+  });
+
+  it("reads WOLF_MARKETDATA_CACHE_TTL_SECONDS as whole SECONDS", () => {
+    const config = loadConfig({ WOLF_MARKETDATA_CACHE_TTL_SECONDS: "60" }, noRoutes);
+    expect(config.marketDataCacheTtlSeconds).toBe(60);
+  });
+
+  it("fails fast naming WOLF_MARKETDATA_CACHE_TTL_SECONDS on a non-integer (e.g. a '5m' duration string)", () => {
+    try {
+      loadConfig({ WOLF_MARKETDATA_CACHE_TTL_SECONDS: "5m" }, noRoutes);
+      throw new Error("expected loadConfig to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(WolfError);
+      expect((err as WolfError).message).toContain("WOLF_MARKETDATA_CACHE_TTL_SECONDS");
+    }
+  });
+
+  it("reads WOLF_SERIES_URL_TTL_SECONDS and rejects one outside 1..3600", () => {
+    expect(loadConfig({ WOLF_SERIES_URL_TTL_SECONDS: "60" }, noRoutes).seriesUrlTtlSeconds).toBe(60);
+    for (const bad of ["0", "3601", "not-a-number"]) {
+      try {
+        loadConfig({ WOLF_SERIES_URL_TTL_SECONDS: bad }, noRoutes);
+        throw new Error(`expected loadConfig to throw for ${bad}`);
+      } catch (err) {
+        expect(err).toBeInstanceOf(WolfError);
+        expect((err as WolfError).message).toContain("WOLF_SERIES_URL_TTL_SECONDS");
+      }
+    }
+  });
+
+  // docker-compose forwards optional variables as `FOO: ${FOO:-}`, which
+  // sets them to "" when the operator left them out of .env. Empty must
+  // mean ABSENT, not 0 — a coerced 0 would be a 0-second cache TTL (never
+  // cache) and an out-of-range URL TTL (refuse to boot).
+  it("treats an EMPTY duration variable as absent, not as 0", () => {
+    const config = loadConfig(
+      {
+        WOLF_MARKETDATA_CACHE_TTL_SECONDS: "",
+        WOLF_SERIES_URL_TTL_SECONDS: "",
+        FRED_API_KEY: "",
+        WOLF_MCP_TOKEN: "",
+        WOLF_SERIES_TOKEN_SECRET: "",
+      },
+      noRoutes,
+    );
+    expect(config.marketDataCacheTtlSeconds).toBe(3600);
+    expect(config.seriesUrlTtlSeconds).toBe(300);
+    expect(config.seriesTokenSecretSource).toBe("generated");
+  });
+
+  it("accepts a well-formed WOLF_MCP_TOKEN", () => {
+    expect(loadConfig({ WOLF_MCP_TOKEN: GOOD_TOKEN }, noRoutes).mcpToken).toBe(GOOD_TOKEN);
+  });
+
+  it("fails fast naming WOLF_MCP_TOKEN when it is too short or carries a character the chain would mangle", () => {
+    for (const bad of ["short", `${GOOD_TOKEN} `, "has spaces in it and is long enough to pass length", "$WOLF_MCP_TOKEN_0123456789abcdef"]) {
+      try {
+        loadConfig({ WOLF_MCP_TOKEN: bad }, noRoutes);
+        throw new Error(`expected loadConfig to throw for ${JSON.stringify(bad)}`);
+      } catch (err) {
+        expect(err).toBeInstanceOf(WolfError);
+        expect((err as WolfError).kind).toBe("misconfigured");
+        expect((err as WolfError).message).toContain("WOLF_MCP_TOKEN");
+      }
+    }
+  });
+
+  it("never echoes a rejected token's VALUE in the error it raises", () => {
+    try {
+      loadConfig({ WOLF_MCP_TOKEN: "sekrit-but-too-short" }, noRoutes);
+      throw new Error("expected loadConfig to throw");
+    } catch (err) {
+      expect((err as WolfError).message).not.toContain("sekrit-but-too-short");
+    }
+  });
+
+  it("generates a per-boot series-token secret when WOLF_SERIES_TOKEN_SECRET is unset", () => {
+    const a = loadConfig({}, noRoutes);
+    const b = loadConfig({}, noRoutes);
+    expect(a.seriesTokenSecretSource).toBe("generated");
+    expect(a.seriesTokenSecret.length).toBeGreaterThanOrEqual(32);
+    // Freshly random per boot — not a committed constant.
+    expect(a.seriesTokenSecret).not.toBe(b.seriesTokenSecret);
+  });
+
+  it("uses WOLF_SERIES_TOKEN_SECRET when set, and rejects one shorter than 32 characters", () => {
+    const secret = "a-series-token-secret-of-sufficient-length";
+    const config = loadConfig({ WOLF_SERIES_TOKEN_SECRET: secret }, noRoutes);
+    expect(config.seriesTokenSecret).toBe(secret);
+    expect(config.seriesTokenSecretSource).toBe("env");
+
+    try {
+      loadConfig({ WOLF_SERIES_TOKEN_SECRET: "too-short" }, noRoutes);
+      throw new Error("expected loadConfig to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(WolfError);
+      expect((err as WolfError).message).toContain("WOLF_SERIES_TOKEN_SECRET");
+    }
+  });
+});
