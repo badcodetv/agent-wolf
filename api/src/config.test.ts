@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { WolfError } from "./errors.js";
+import { parseTemplate } from "./report/template.js";
 import {
   DEFAULT_GATEWAY_FALLBACK,
   loadConfig,
@@ -530,6 +531,73 @@ describe("WOLF_SCHEDULE_CRON / WOLF_TEARDOWN_DRAIN_SECONDS (W9)", () => {
   it("accepts a zero drain bound: proceed immediately, but still POLL once", () => {
     const config = loadConfig({ WOLF_TEARDOWN_DRAIN_SECONDS: "0" }, noRoutes);
     expect(config.teardownDrainSeconds).toBe(0);
+  });
+});
+
+describe("WOLF_REPORT_MAX_BYTES / WOLF_SERIES_MAX_POINTS (W16)", () => {
+  const noRoutes = routeSourceReturning(undefined);
+
+  it("defaults to a 512000-byte template budget and 5000 points per metric", () => {
+    const config = loadConfig({}, noRoutes);
+    expect(config.reportMaxBytes).toBe(512_000);
+    expect(config.seriesMaxPoints).toBe(5000);
+  });
+
+  it("is overridable — a small stack can cap a template harder than the default", () => {
+    const config = loadConfig(
+      { WOLF_REPORT_MAX_BYTES: "65536", WOLF_SERIES_MAX_POINTS: "250" },
+      noRoutes,
+    );
+    expect(config.reportMaxBytes).toBe(65_536);
+    expect(config.seriesMaxPoints).toBe(250);
+  });
+
+  it("treats BOTH as absent when compose forwards them as the empty string (R80)", () => {
+    // Without present(), z.coerce.number() turns "" into 0 — a 0-byte
+    // template limit rejects every template a human ever writes, and a
+    // 0-point cap draws an empty chart. Both would look like the default.
+    const config = loadConfig(
+      { WOLF_REPORT_MAX_BYTES: "", WOLF_SERIES_MAX_POINTS: "" },
+      noRoutes,
+    );
+    expect(config.reportMaxBytes).toBe(512_000);
+    expect(config.seriesMaxPoints).toBe(5000);
+  });
+
+  it("fails fast naming WOLF_REPORT_MAX_BYTES when it is not a whole positive count", () => {
+    for (const bad of ["0", "-1", "1.5", "512kb", "half a meg"]) {
+      try {
+        loadConfig({ WOLF_REPORT_MAX_BYTES: bad }, noRoutes);
+        throw new Error(`expected loadConfig to throw for ${JSON.stringify(bad)}`);
+      } catch (err) {
+        expect(err).toBeInstanceOf(WolfError);
+        expect((err as WolfError).kind).toBe("misconfigured");
+        expect((err as WolfError).message).toContain("WOLF_REPORT_MAX_BYTES");
+      }
+    }
+  });
+
+  it("fails fast naming WOLF_SERIES_MAX_POINTS when it is not a whole positive count", () => {
+    for (const bad of ["0", "-10", "2.5", "5k"]) {
+      try {
+        loadConfig({ WOLF_SERIES_MAX_POINTS: bad }, noRoutes);
+        throw new Error(`expected loadConfig to throw for ${JSON.stringify(bad)}`);
+      } catch (err) {
+        expect(err).toBeInstanceOf(WolfError);
+        expect((err as WolfError).kind).toBe("misconfigured");
+        expect((err as WolfError).message).toContain("WOLF_SERIES_MAX_POINTS");
+      }
+    }
+  });
+
+  it("the default budget is what parseTemplate is HANDED, not what it reads", () => {
+    // W16's first criterion: parseTemplate(html, maxBytes) takes the limit as
+    // a parameter and reads no config. This test is the config half of that
+    // contract — the parser half lives in src/report/template.test.ts.
+    const html = `<div data-wolf-fallback>no chart</div><p>${"x".repeat(200)}</p>`;
+    const { reportMaxBytes } = loadConfig({}, noRoutes);
+    expect(parseTemplate(html, reportMaxBytes).valid).toBe(true);
+    expect(parseTemplate(html, 10).valid).toBe(false);
   });
 });
 
