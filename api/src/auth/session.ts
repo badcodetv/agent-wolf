@@ -105,14 +105,29 @@ export function isExpired(user: SignedInUser, nowMs: number = Date.now()): boole
   return nowMs - user.issuedAtMs >= SESSION_MAX_AGE_MS;
 }
 
-/** Signs `email` into the `wolf_session` cookie on `res`. */
+/**
+ * Signs `email` into the `wolf_session` cookie on `res`.
+ *
+ * ⚠️ **The address is TRIMMED as well as lower-cased, and it is trimmed
+ * HERE — once, at the mint site** (**R103**, folded into W9). Every read
+ * site takes the address straight out of the cookie: `GET /api/auth/me`,
+ * and every route that mounts `requireSignedIn` and reads
+ * `req.wolfUser.email` — W9's four human routes, W10's poller and W11's
+ * two. An untrimmed address reaches an allowlist comparison and the
+ * `owner` label on every memory Wolf writes, and the Kubernetes label
+ * value charset (§ "Vocabulary": `^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$`)
+ * forbids spaces — so a leading space presents as *"this user's hypotheses
+ * do not appear"*, not as anything auth-shaped. Trimming at three read
+ * sites is three chances to forget; trimming at the one place the value
+ * enters the system is none.
+ */
 export function setSessionCookie(
   res: Response,
   email: string,
   config: WolfConfig,
   nowMs: number = Date.now(),
 ): SignedInUser {
-  const user: SignedInUser = { email: email.toLowerCase(), issuedAtMs: nowMs };
+  const user: SignedInUser = { email: email.trim().toLowerCase(), issuedAtMs: nowMs };
   res.cookie(SESSION_COOKIE_NAME, encodePayload(user), sessionCookieOptions(config));
   return user;
 }

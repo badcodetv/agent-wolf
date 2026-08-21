@@ -54,6 +54,13 @@ services:
       WOLF_SESSION_SECRET: ${WOLF_SESSION_SECRET:-}
       # Test-only (owner decision B6); refused alongside NODE_ENV=production.
       WOLF_TEST_LOGIN: ${WOLF_TEST_LOGIN:-}
+      # W9's go-live and teardown. Both are optional and both carry their
+      # defaults from api/src/config.ts when left empty — which is exactly
+      # why they need a line here anyway (R81/R110): without one, the value
+      # an operator sets in .env never reaches this container and the
+      # process silently runs the default instead.
+      WOLF_SCHEDULE_CRON: ${WOLF_SCHEDULE_CRON:-}
+      WOLF_TEARDOWN_DRAIN_SECONDS: ${WOLF_TEARDOWN_DRAIN_SECONDS:-}
     restart: unless-stopped
 
   wolf-web:

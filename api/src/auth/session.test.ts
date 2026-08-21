@@ -119,6 +119,28 @@ describe("session_cookie", () => {
     expect(setCookie).not.toMatch(/Secure/i);
   });
 
+  it("session_cookie: TRIMS as well as lower-cases the address it signs (R103)", async () => {
+    // The mint site is the ONE place this happens. W9, W10 and W11 all read
+    // `req.wolfUser.email` straight out of the cookie and put it in an
+    // allowlist comparison and in the `owner` label of every memory Wolf
+    // writes — and the K8s label charset forbids spaces, so an untrimmed
+    // address presents as "this user's hypotheses do not appear".
+    const base = await harness();
+    const res = await fetch(`${base}/sign-in`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "  Kai@Example.COM  " }),
+    });
+    await expect(res.json()).resolves.toEqual({ email: "kai@example.com" });
+
+    // And the value that comes back OUT of the signed cookie is the trimmed
+    // one too — the guard does no normalising of its own.
+    const cookie = (res.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+    const who = await fetch(`${base}/api/who`, { headers: { cookie } });
+    expect(who.status).toBe(200);
+    await expect(who.json()).resolves.toEqual({ email: "kai@example.com" });
+  });
+
   it("session_cookie: lowercases the address it signs", async () => {
     const base = await harness();
     const res = await fetch(`${base}/sign-in`, {
