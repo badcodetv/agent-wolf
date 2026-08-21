@@ -88,8 +88,20 @@ interface Recorded {
 
 interface StubConfig {
   sessions?: readonly CapturedSessionRow[];
-  /** Raw body for the `latest_per=name` board read. */
+  /**
+   * Raw body for the `latest_per=name` board read WITH `include_retracted=1`,
+   * which is the only way Wolf reads the board.
+   */
   board?: string;
+  /**
+   * Raw body for the same query WITHOUT the flag. Orange answers these two
+   * DIFFERENTLY (that is the whole point of the flag), so the stub does too:
+   * a board read that drops `include_retracted` gets this body, and the
+   * resurrection tests below then fail loudly instead of passing by accident.
+   * Left unset it is the empty page — so every board test in this file also
+   * fails if the flag is ever dropped.
+   */
+  boardDefault?: string;
   /** Raw bodies for the per-name follow-up, keyed by bare id. */
   details?: Record<string, string>;
   /** Raw bodies for `GET /agent/memories/{id}`, keyed by memory id. */
@@ -168,7 +180,10 @@ class Stub {
     }
     if (url.pathname === "/agent/memories") {
       if (url.searchParams.get("latest_per") !== null) {
-        return { status: 200, data: this.config.board ?? EMPTY_MEMORIES };
+        if (url.searchParams.get("include_retracted") === "1") {
+          return { status: 200, data: this.config.board ?? EMPTY_MEMORIES };
+        }
+        return { status: 200, data: this.config.boardDefault ?? EMPTY_MEMORIES };
       }
       const selector = url.searchParams.get("selector") ?? "";
       const match = /name=([0-9a-f]{8})/.exec(selector);
@@ -209,7 +224,8 @@ function harness(config: StubConfig): { store: HypothesisStore; stub: Stub } {
 
 /** The four hypotheses the tamper fixtures describe. */
 const TAMPERED = {
-  board: fixture("board-latest-per.json"),
+  board: fixture("board-latest-per-include-retracted.json"),
+  boardDefault: fixture("board-latest-per.json"),
   details: {
     "1a2b3c4d": fixture("detail-1a2b3c4d-include-retracted.json"),
     "2b3c4d5e": fixture("detail-2b3c4d5e-include-retracted.json"),
@@ -444,7 +460,7 @@ describe("store_board", () => {
   it("store_board: the all-trusted case issues exactly ONE memory request", async () => {
     const { store, stub } = harness({
       sessions: sessionsNamed("hyp-1a2b3c4d", "hyp-2b3c4d5e", "hyp-3c4d5e6f"),
-      board: fixture("board-all-trusted.json"),
+      board: fixture("board-all-trusted-include-retracted.json"),
     });
     const records = await store.readBoard();
     expect(records).toHaveLength(3);
@@ -458,13 +474,19 @@ describe("store_board", () => {
     expect(query.get("selector")).toBe("kind=hypothesis");
     expect(query.get("latest_per")).toBe("name");
     expect(query.get("limit")).toBe("100");
-    expect(query.get("include_retracted")).toBeNull();
+    // LOAD-BEARING, and absent from the plan's board criterion. Orange applies
+    // its retraction filter before the `latest_per` reduction, so without this
+    // a hostile retraction of the newest row promotes the OLDER trusted row and
+    // the board rolls back with no warning — see the resurrection tests below,
+    // and `readBoard`'s comment. It costs nothing here: the fast path is still
+    // one request.
+    expect(query.get("include_retracted")).toBe("1");
   });
 
   it("store_board: the board read carries the title, owner slug and updated_at from the trusted row", async () => {
     const { store } = harness({
       sessions: sessionsNamed("hyp-1a2b3c4d", "hyp-2b3c4d5e", "hyp-3c4d5e6f"),
-      board: fixture("board-all-trusted.json"),
+      board: fixture("board-all-trusted-include-retracted.json"),
     });
     const records = await store.readBoard();
     const live = records.find((r) => r.id === "1a2b3c4d");
@@ -479,24 +501,26 @@ describe("store_board", () => {
     expect(live?.updatedAtMs).toBeGreaterThan(1_700_000_000_000);
   });
 
-  it("store_board: a follow-up is issued ONLY for the ids whose newest row is untrusted or missing", async () => {
+  it("store_board: a follow-up is issued ONLY for the ids the newest row cannot settle", async () => {
     const { store, stub } = harness(TAMPERED);
     await store.readBoard();
     const followUps = stub.memoryRequests.filter(
       (r) => new URL(r.path, BASE_URL).searchParams.get("latest_per") === null,
     );
-    // 1a2b3c4d's newest row is trusted, so it costs nothing extra. The other
-    // three are anomalies: one forged, two that vanished from the default read
-    // because they were retracted.
-    expect(followUps).toHaveLength(3);
+    // Two, not three. The newest row settles the hypothesis whenever it is
+    // trusted and Wolf has not withdrawn it:
+    //   1a2b3c4d — trusted, no retraction              → free
+    //   3c4d5e6f — trusted, retracted BY A SESSION     → free, plus a Tamper;
+    //              a container cannot withdraw Wolf's word, so there is
+    //              nothing older to look for
+    //   2b3c4d5e — newest row written by a researcher  → follow-up
+    //   4d5e6f70 — trusted but retracted BY WOLF       → follow-up, because the
+    //              answer is whatever row lies underneath
+    expect(followUps).toHaveLength(2);
     const ids = followUps
       .map((r) => new URL(r.path, BASE_URL).searchParams.get("selector") ?? "")
       .sort();
-    expect(ids).toEqual([
-      "kind=hypothesis,name=2b3c4d5e",
-      "kind=hypothesis,name=3c4d5e6f",
-      "kind=hypothesis,name=4d5e6f70",
-    ]);
+    expect(ids).toEqual(["kind=hypothesis,name=2b3c4d5e", "kind=hypothesis,name=4d5e6f70"]);
     for (const request of followUps) {
       const query = new URL(request.path, BASE_URL).searchParams;
       expect(query.get("include_retracted")).toBe("1");
@@ -507,7 +531,7 @@ describe("store_board", () => {
   it("store_board: a hypothesis in the session index whose state row is missing is an anomaly, never a drop", async () => {
     const { store } = harness({
       sessions: sessionsNamed("hyp-1a2b3c4d", "hyp-2b3c4d5e", "hyp-3c4d5e6f", "hyp-4d5e6f70"),
-      board: fixture("board-all-trusted.json"),
+      board: fixture("board-all-trusted-include-retracted.json"),
       details: {},
     });
     const records = await store.readBoard();
@@ -527,10 +551,127 @@ describe("store_board", () => {
     // likes, including a name for a hypothesis that does not exist.
     const { store } = harness({
       sessions: sessionsNamed("hyp-1a2b3c4d"),
-      board: fixture("board-all-trusted.json"),
+      board: fixture("board-all-trusted-include-retracted.json"),
     });
     const records = await store.readBoard();
     expect(records.map((r) => r.id)).toEqual(["1a2b3c4d"]);
+  });
+});
+
+// ── The resurrection: a hostile retraction rolling the BOARD back ────────
+//
+// This block is the fix round's reason for existing. The board's fast path
+// used to read WITHOUT `include_retracted=1`, exactly as the plan's board
+// criterion is written. Orange applies its retraction filter BEFORE the
+// `latest_per` reduction, so a hostile retraction of Wolf's NEWEST state row
+// did not hide the hypothesis — it promoted the OLDER trusted row beneath it,
+// which passes every clause of `isTrusted` and was accepted as authoritative.
+// The board silently showed the previous status, with no tamper warning, while
+// the detail read showed the true one.
+//
+// The three fixtures here are the same seeded project read three ways from a
+// running build (see `__fixtures__/README.md` → "The second capture"): the
+// board without the flag, the board with it, and the per-name follow-up.
+
+describe("store_resurrection", () => {
+  const RESURRECTION = {
+    board: fixture("board-resurrection-include-retracted.json"),
+    boardDefault: fixture("board-resurrection-default.json"),
+    details: {
+      "1a2b3c4d": fixture("detail-1a2b3c4d-resurrection-include-retracted.json"),
+      "3c4d5e6f": fixture("detail-3c4d5e6f-wolf-retraction-include-retracted.json"),
+    },
+    sessions: sessionsNamed("hyp-1a2b3c4d", "hyp-2b3c4d5e", "hyp-3c4d5e6f"),
+  };
+
+  it("store_resurrection: RECORDED — without the flag Orange hands back the OLDER trusted row", () => {
+    // Not an assertion about Wolf's code: about Orange's. Two captured bodies,
+    // the same query, one query parameter apart.
+    type Row = { id: string; labels: Record<string, string>; created_by_worker: string };
+    const rowsOf = (name: string): Row[] =>
+      (JSON.parse(fixture(name)) as { memories: Row[] }).memories;
+    const withoutFlag = rowsOf("board-resurrection-default.json").find(
+      (m) => m.labels["name"] === "1a2b3c4d",
+    );
+    const withFlag = rowsOf("board-resurrection-include-retracted.json").find(
+      (m) => m.labels["name"] === "1a2b3c4d",
+    );
+    // The unflagged read reports the PREVIOUS status, from a different row.
+    expect(withoutFlag?.labels["status"]).toBe("draft");
+    expect(withFlag?.labels["status"]).toBe("live");
+    expect(withoutFlag?.id).not.toBe(withFlag?.id);
+    // And nothing about the row it hands back looks wrong: it is one of Wolf's
+    // own, with empty provenance. No provenance check can catch this; only
+    // asking for the retracted rows can.
+    expect(withoutFlag?.created_by_worker).toBe("");
+  });
+
+  it("store_resurrection: the board does NOT roll back — status stays live, with the retractor named", async () => {
+    const { store, stub } = harness(RESURRECTION);
+    const records = await store.readBoard();
+    const attacked = records.find((r) => r.id === "1a2b3c4d");
+    expect(attacked?.status).toBe("live");
+    expect(attacked?.statusMemoryId).toBe("ae3e8b7b-03e8-4e83-8fcd-f0193e7ac2cc");
+    expect(tamperOf(attacked ?? {}, "hostile_retraction")).toEqual([
+      {
+        reason: "hostile_retraction",
+        written_by_worker: "researcher-1a2b3c4d",
+        written_by_session: "sess-c0ffee11",
+        memory_id: "dcd8e753-010f-4c9b-a95c-ba17944a443e",
+      },
+    ]);
+    // The attack costs the attacked hypothesis nothing: its newest row is
+    // trusted and a container cannot withdraw it, so there is no follow-up.
+    const followUps = stub.memoryRequests.filter(
+      (r) => new URL(r.path, BASE_URL).searchParams.get("latest_per") === null,
+    );
+    expect(followUps.map((r) => new URL(r.path, BASE_URL).searchParams.get("selector"))).toEqual([
+      "kind=hypothesis,name=3c4d5e6f",
+    ]);
+  });
+
+  it("store_resurrection: the board and the detail read give the SAME answer", async () => {
+    // The defect this closes was two surfaces disagreeing, with the wrong one
+    // being the one the product renders.
+    const { store } = harness(RESURRECTION);
+    const board = (await store.readBoard()).find((r) => r.id === "1a2b3c4d");
+    const detail = await store.readHypothesis("1a2b3c4d");
+    expect(board?.status).toBe(detail.status);
+    expect(board?.statusMemoryId).toBe(detail.statusMemoryId);
+    expect(board?.tamper).toEqual(detail.tamper);
+    expect(detail.status).toBe("live");
+  });
+
+  it("store_resurrection: WOLF's own retraction still falls through to the row underneath", async () => {
+    // The mirror image, and the reason the fast path cannot simply trust the
+    // newest row: when the retraction is Wolf's own it IS honoured, and the
+    // answer is the trusted row beneath — which only the follow-up can see.
+    const { store, stub } = harness(RESURRECTION);
+    const records = await store.readBoard();
+    const withdrawn = records.find((r) => r.id === "3c4d5e6f");
+    expect(withdrawn?.status).toBe("live");
+    expect(withdrawn?.statusMemoryId).toBe("3dd171ed-5bb4-4bba-8be1-2aa4ab02407d");
+    // Wolf correcting itself is not tamper.
+    expect(withdrawn?.tamper).toBeUndefined();
+    expect(stub.memoryRequests).toHaveLength(2); // the board, plus one follow-up
+  });
+
+  it("store_resurrection: a clean board is unchanged by the flag — which is why it stays free", () => {
+    // Orange attaches `retracted_by` only where there IS a retraction, so the
+    // flag adds no key, no row and no request to an untampered board. Both
+    // captured all-trusted bodies carry the same three names and no
+    // `retracted_by` anywhere.
+    for (const name of ["board-all-trusted.json", "board-all-trusted-include-retracted.json"]) {
+      const body = fixture(name);
+      expect(body).not.toContain("retracted_by");
+      const rows = (JSON.parse(body) as { memories: Array<{ labels: Record<string, string> }> })
+        .memories;
+      expect(rows.map((m) => m.labels["name"]).sort()).toEqual([
+        "1a2b3c4d",
+        "2b3c4d5e",
+        "3c4d5e6f",
+      ]);
+    }
   });
 });
 

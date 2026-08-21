@@ -133,3 +133,59 @@ thesis forward into the row it appends. The body has a `content` field and no
 `snippet`; the content is line 1 = title, then the prose thesis, then the
 fenced `json` block this codebase writes `owner_email` into, because the full
 address may never be a label value.
+
+---
+
+## The second capture (W5 fix round 1, 2026-08-21)
+
+The board's fast path originally read **without** `include_retracted=1`, exactly
+as the plan's board criterion is written. That leaves a hole: Orange applies its
+retraction filter **before** the `latest_per` reduction, so a hostile retraction
+of Wolf's *newest* state row does not hide the hypothesis — it promotes the
+**older trusted row beneath it**, which passes every clause of `isTrusted`. The
+board then renders the previous status with no anomaly and no tamper warning,
+while the detail read shows the true one.
+
+Rather than argue that from a mock, the case was **seeded and read from a
+running build**, and the two bodies below are the same query one query parameter
+apart.
+
+| | |
+| --- | --- |
+| Repo / commit | `agent-orange` **`af0e0cb1f4ed91fc9b00f73e8e51b413d6349eaf`** — the same commit as the first capture, extracted with `git archive` and built with `go build -o agentd ./cmd/agentd` |
+| Captured | **2026-08-21** |
+| Store | the same throwaway `pgvector/pgvector:pg16` instance (port 5436), a **fresh database** (`w5fix`), migrations `001`–`045` applied by `agentd` itself at boot |
+| Model | **mock** — `[agentd] ANTHROPIC_API_KEY unset → MOCK model proxy (set it for a real agent)` in the boot log. No billable agent ran |
+| Projects | `wolf` (the tampered set) and `wolfclean` (the untampered board), each reached with its own throwaway API key generated for the capture and never written down |
+| Sessions | **none were created.** These bodies are memory reads only; the session-index fixtures from the first capture are unchanged and still real |
+
+Provenance was written the same two ways as before: every trusted row through
+the real `POST /agent/memories` route (`201`, provenance stamped empty by the
+server), and the hostile retraction through `agentdb.Store.CreateMemory` with
+`CreatedByWorker`/`CreatedBySession` filled the way the core MCP server's
+`memory_create` fills them — there is no HTTP route that can stamp provenance,
+by design.
+
+### What was seeded
+
+- **`1a2b3c4d`** — Wolf appended `status=draft`, then `status=live`. A
+  researcher session (`researcher-1a2b3c4d` / `sess-c0ffee11`) then appended a
+  memory carrying `retracts=<the live row's id>`. **This is the attack.**
+- **`2b3c4d5e`** — one trusted `status=live` row, untouched. The control.
+- **`3c4d5e6f`** — Wolf appended `status=live`, then `status=challenged` in
+  error, then retracted the `challenged` row **itself** (empty provenance). The
+  mirror image: this retraction *is* honoured, and the answer is the row
+  underneath.
+
+### The files
+
+| File | Query | What it pins |
+| --- | --- | --- |
+| `board-resurrection-default.json` | `…&latest_per=name&limit=100` | **The hole.** `1a2b3c4d` comes back as `status=draft` — a different row id, with empty provenance, indistinguishable from the truth. `3c4d5e6f` comes back as `live`. |
+| `board-resurrection-include-retracted.json` | the same **`&include_retracted=1`** | `1a2b3c4d` is `status=live` with the researcher's retraction in `retracted_by`; `3c4d5e6f` is the `challenged` row with **Wolf's own** retraction attached. |
+| `detail-1a2b3c4d-resurrection-include-retracted.json` | `…name%3D1a2b3c4d&limit=50&include_retracted=1` | The follow-up view of the attacked hypothesis: `live` (hostilely retracted) over `draft`. |
+| `detail-3c4d5e6f-wolf-retraction-include-retracted.json` | the same for `3c4d5e6f` | `challenged` (retracted by Wolf) over `live` — the fall-through the board pays one follow-up for. |
+| `board-all-trusted-include-retracted.json` | `…&latest_per=name&limit=100&include_retracted=1` over project `wolfclean` | The **flagged** fast path on a clean board: three trusted rows, and **no `retracted_by` key anywhere** — which is why carrying the flag costs the normal case nothing. |
+
+`board-all-trusted.json` (first capture, unflagged) is kept and is still
+asserted on, as the other half of that last comparison.

@@ -38,6 +38,14 @@
  *   search path, and the hypothesis would simply vanish from a memory-derived
  *   board. The session list cannot be written from inside a container, so that
  *   is what Wolf enumerates.
+ * - **Every read of hypothesis state carries `include_retracted=1`** — the
+ *   board's one-request fast path included. Orange applies its retraction
+ *   filter BEFORE the `latest_per` reduction, so without the flag a hostile
+ *   retraction of Wolf's newest row does not hide the hypothesis: it promotes
+ *   the OLDER trusted row beneath it, and the board silently rolls back to a
+ *   status Wolf had already moved on from. See `readBoard` for the recorded
+ *   proof (`__fixtures__/board-resurrection-*.json`, the same query with and
+ *   without the flag).
  * - **A row counts as retracted iff AT LEAST ONE retraction of it has empty
  *   provenance** (owner decision B5). Reading only the newest retraction lets
  *   an attacker RESURRECT state Wolf legitimately withdrew, by appending their
@@ -600,20 +608,25 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
   }
 
   /**
-   * Resolves one hypothesis from a page read with `include_retracted=1`. The
-   * rows arrive newest first.
+   * Resolves one hypothesis from rows read with `include_retracted=1`. The rows
+   * arrive newest first.
    *
    * A row is skipped, and reported, when it is untrusted (`forged_row`) or when
    * Wolf itself retracted it. A retraction whose OWN provenance is non-empty is
    * ignored for state and reported (`hostile_retraction`) — an untrusted actor
    * cannot withdraw server-written state, and cannot resurrect one either,
    * because "retracted" means *at least one* retraction with empty provenance.
+   *
+   * `settled` says whether a trusted, un-withdrawn row was actually found in
+   * the rows given. The board relies on it: it calls this with the ONE row
+   * `latest_per` returned, and only when that row does not settle does it pay
+   * for the per-name follow-up that can see older rows.
    */
   function resolveFromRows(
     entry: SessionIndexEntry,
     rows: readonly MemorySearchResultRow[],
     sessions: SessionLookup,
-  ): MutableRecord {
+  ): { record: MutableRecord; settled: boolean } {
     const record = blankRecord(entry);
     let settled = false;
     for (const row of rows) {
@@ -637,7 +650,7 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
         settled = true;
       }
     }
-    return record;
+    return { record, settled };
   }
 
   async function readDetailRows(id: string): Promise<MemorySearchResultRow[]> {
@@ -652,10 +665,33 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
   async function readBoard(opts?: ReadOptions): Promise<HypothesisRecord[]> {
     const index = await readSessionIndex(opts);
     // ONE request for the whole board. This is the normal case.
+    //
+    // ⚠️ `include_retracted=1` is LOAD-BEARING on this request, and the plan's
+    // board criterion omits it. Without it Orange applies `notRetractedSQL`
+    // BEFORE the `latest_per` reduction (`go/agentdb/memories.go:467,526` —
+    // "when it is true a retracted row participates in that reduction and can
+    // win its name's slot"), so a hostile retraction of Wolf's NEWEST state row
+    // does not merely hide that row: it hands back the OLDER trusted row
+    // beneath it, which passes `isTrusted` and is accepted as authoritative.
+    // The board then silently ROLLS BACK to the previous status with no
+    // anomaly and no tamper warning, while the detail read — which always
+    // carries the flag — shows the true state. Two surfaces, disagreeing, with
+    // the wrong one being the one the product renders.
+    //
+    // This is not a mock's opinion. It was reproduced against a running build
+    // and both bodies are committed: `__fixtures__/board-resurrection-*.json`
+    // are the SAME query with and without the flag, and the unflagged one
+    // reports `1a2b3c4d` as `draft` where the flagged one reports `live` with
+    // the hostile retraction attached.
+    //
+    // The fast path survives: the flag costs no extra request (Orange attaches
+    // retractions in one further query of its own, server-side), so the
+    // all-trusted board is still exactly ONE memory request.
     const rows = await client.listMemories({
       selector: `kind=${KIND_HYPOTHESIS}`,
       latestPer: "name",
       limit: BOARD_LIMIT,
+      includeRetracted: true,
     });
     const newest = new Map<string, MemorySearchResultRow>();
     for (const row of rows) {
@@ -678,21 +714,25 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
     const anomalies: SessionIndexEntry[] = [];
     for (const entry of index.values()) {
       const row = newest.get(entry.id);
-      if (row !== undefined && isTrusted(row, index)) {
-        const record = blankRecord(entry);
-        applyRow(record, row);
-        records.push(record);
+      // The newest row goes through the SAME resolver the detail read uses, so
+      // the two surfaces cannot answer differently. It settles — the fast path,
+      // no follow-up — when that row is trusted and Wolf has not withdrawn it;
+      // a hostile retraction of it is reported as tamper and changes nothing.
+      const resolved = resolveFromRows(entry, row === undefined ? [] : [row], index);
+      if (resolved.settled) {
+        records.push(resolved.record);
         continue;
       }
-      // Either something inside a container wrote the newest row, or the row is
-      // missing entirely — which, on a default read, is what a retraction looks
-      // like. Both need the audit view.
+      // Not settled: the newest row was written inside a container, or Wolf
+      // itself retracted it, or there is no row at all (which is what a
+      // retraction looked like before the flag above). All three need the
+      // per-name audit view, which can see the rows underneath.
       anomalies.push(entry);
     }
 
     for (const entry of anomalies) {
       const rowsForId = await readDetailRows(entry.id);
-      records.push(resolveFromRows(entry, rowsForId, index));
+      records.push(resolveFromRows(entry, rowsForId, index).record);
     }
 
     // Newest first, and a hypothesis with no resolvable state row sorts last
@@ -708,7 +748,7 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
       throw new WolfError("not_found", `no hypothesis ${id}`, { details: { id } });
     }
     const rows = await readDetailRows(id);
-    return resolveFromRows(entry, rows, index);
+    return resolveFromRows(entry, rows, index).record;
   }
 
   async function appendState(params: AppendStateParams): Promise<MemoryRecord> {
