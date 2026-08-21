@@ -1,8 +1,11 @@
 /**
  * A typed client for every Orange route Wolf touches — the list is
- * exhaustive and closed at twenty-two routes; see
- * design/2026-08-20-agent-wolf.md § W2's Scope. No other file may add a
- * route here except W15 (strictly serial after this ticket).
+ * exhaustive and closed at twenty-three routes; see
+ * design/2026-08-20-agent-wolf.md § W2's Scope and § W2b's Scope (which
+ * added the twenty-third, `GET /agent/workers/{name}`, by owner ruling R91
+ * — the list is closed against casual addition, not against an owner
+ * ruling). No other file may add a route here except W15 and W2b, both
+ * strictly serial after W2.
  *
  * The client reads no environment variable: it is constructed with
  * `createOrangeClient({ baseUrl, apiKey })` and the caller supplies both
@@ -115,6 +118,17 @@ export interface OrangeClient {
   getDataset(name: string): Promise<DatasetMetadata>;
   downloadDataset(name: string, params?: DownloadDatasetParams): Promise<DatasetDownload>;
 
+  /**
+   * `GET /agent/workers/{name}` (W2b, the twenty-third route, R91). Returns
+   * the same `WorkerRecord` shape `putWorker` returns — one type, not a
+   * second one that happens to have the same fields. A 404 maps to
+   * `not_found` (the default `classifyStatus` mapping, no override): this
+   * call's whole purpose downstream (the bootstrap) is "does this worker
+   * exist yet?", and `not_found` is the expected first-run answer — NOT the
+   * retryable `unavailable` kind, which would turn a healthy first run into
+   * a retry loop.
+   */
+  getWorker(name: string): Promise<WorkerRecord>;
   putWorker(name: string, params: PutWorkerParams): Promise<WorkerRecord>;
   deleteWorker(name: string, params?: { rationale?: string }): Promise<void>;
 
@@ -550,7 +564,7 @@ function mapSessionListRow(raw: unknown, where: string): SessionListRow {
   };
 }
 
-// ── The 22 route methods ───────────────────────────────────────────────
+// ── The 23 route methods ───────────────────────────────────────────────
 
 function createSession(
   ctx: ClientContext,
@@ -735,6 +749,17 @@ function downloadDataset(
     query,
     parse: "bytes",
   }).then(({ bytes, contentType }) => ({ contentType: contentType ?? "", body: bytes ?? new ArrayBuffer(0) }));
+}
+
+function getWorker(ctx: ClientContext, name: string): Promise<WorkerRecord> {
+  // No errorOverride: the default classifyStatus mapping already sends 404
+  // -> not_found and 5xx -> unavailable, exactly like every other route on
+  // this client — the same retry, timeout, error-mapping and logging path,
+  // no bespoke handling (W2b).
+  return doRequest(ctx, {
+    method: "GET",
+    path: `/agent/workers/${encodeURIComponent(name)}`,
+  }).then(({ json }) => mapWorkerRecord(json, `GET /agent/workers/${name}`));
 }
 
 function putWorker(ctx: ClientContext, name: string, params: PutWorkerParams): Promise<WorkerRecord> {
@@ -932,6 +957,7 @@ export function createOrangeClient(options: CreateOrangeClientOptions): OrangeCl
     getDataset: (name) => getDataset(ctx, name),
     downloadDataset: (name, params) => downloadDataset(ctx, name, params),
 
+    getWorker: (name) => getWorker(ctx, name),
     putWorker: (name, params) => putWorker(ctx, name, params),
     deleteWorker: (name, params) => deleteWorker(ctx, name, params),
 
