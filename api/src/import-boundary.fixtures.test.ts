@@ -129,4 +129,60 @@ describe("import-boundary checker: F1/F2/F3 closures (W1 round-4 escalation)", (
       rmSync(repoRoot, { recursive: true, force: true });
     }
   });
+
+  // R85 (merge integration, 2026-08-21): the checker scanned raw source, so
+  // PROSE inside a comment could manufacture a specifier. W7's config.ts
+  // carries the line "a shell `export` in X1's `run.sh`" — pattern 1 matched
+  // the export keyword, the backtick closing it, " in X1", and the apostrophe
+  // in X1's, yielding a bare specifier that resolved to nothing. Neither W1b
+  // nor W7 failed alone; the merge produced it. The fix strips comments first.
+  it("R85: a comment containing the export keyword against a quote does not manufacture a specifier", async () => {
+    const { repoRoot, srcDir, packageManifestPath } = makeFixtureRepo();
+    try {
+      const prose =
+        `/**\n * a shell ${BACKTICK}ex` + `port${BACKTICK} in X1${String.fromCharCode(39)}s ` +
+        `${BACKTICK}run.sh${BACKTICK}\n */\nexport const ok = 1;\n`;
+      writeFileSync(join(srcDir, "prose.ts"), prose, "utf8");
+
+      const report = await checkImportBoundary({
+        label: "fixture",
+        srcDir,
+        repoRoot,
+        packageManifestPath,
+        rootManifestPath: packageManifestPath,
+        tsconfigPaths: [],
+      });
+
+      expect(report.bareViolations).toEqual([]);
+      expect(report.relativeViolations).toEqual([]);
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  // The other half of R85: stripping comments must not blind the checker to
+  // a REAL escaping import sitting in code below a comment.
+  it("R85: a real escaping import below a comment is still caught after comment stripping", async () => {
+    const { repoRoot, srcDir, packageManifestPath } = makeFixtureRepo();
+    try {
+      writeFileSync(
+        join(srcDir, "leak-below-comment.ts"),
+        `// a leading line comment\n/* and a block one */\n${IMPORT_WORD} { evil } ${FROM_WORD} "${OUTSIDE_SPECIFIER}";\n`,
+        "utf8",
+      );
+
+      const report = await checkImportBoundary({
+        label: "fixture",
+        srcDir,
+        repoRoot,
+        packageManifestPath,
+        rootManifestPath: packageManifestPath,
+        tsconfigPaths: [],
+      });
+
+      expect(report.relativeViolations.length).toBeGreaterThan(0);
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
 });

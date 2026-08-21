@@ -97,8 +97,30 @@ export function collectSourceFiles(dir: string): string[] {
   return files;
 }
 
+/**
+ * Strip `//` and block comments from TypeScript/JavaScript source before
+ * scanning it for import specifiers.
+ *
+ * Without this the patterns below happily match *prose*. A real example,
+ * found when W1b's checker met W7's `api/src/config.ts` at merge: the
+ * comment
+ *
+ *     a shell `export` in X1's `run.sh`
+ *
+ * matches pattern 1 as `export` + the backtick that closes it + " in X1" +
+ * the apostrophe in `X1's` — manufacturing a bare specifier `" in X1"` that
+ * resolves to nothing and fails the boundary. Neither branch failed alone;
+ * only the merge produced it (**R85**).
+ *
+ * The `[^:]` guard on the line-comment arm keeps `"https://…"` intact, the
+ * same guard `stripJsonComments` uses.
+ */
+function stripSourceComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+}
+
 export function allImportSpecifiers(filePath: string): string[] {
-  const src = readFileSync(filePath, "utf8");
+  const src = stripSourceComments(readFileSync(filePath, "utf8"));
   const specifiers: string[] = [];
   for (const pattern of IMPORT_SPECIFIER_PATTERNS) {
     for (const match of src.matchAll(pattern)) {
