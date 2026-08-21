@@ -1,9 +1,15 @@
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
+import cookieParser from "cookie-parser";
 import type { Logger } from "./logger.js";
 import type { WolfConfig } from "./config.js";
 import { WolfError } from "./errors.js";
 import { createWolfMcp, originFromMcpUrl } from "./mcp/server.js";
 import { createMarketDataAccess } from "./mcp/tools.js";
+import { assertSessionConfigured } from "./auth/session.js";
+import { createOrangeClient } from "./orange/client.js";
+import { createHypothesisStore } from "./hypothesis/store.js";
+import { createAuthRouter } from "./routes/auth.js";
+import { createHypothesesRouter } from "./routes/hypotheses.js";
 
 /**
  * The one shared error-handling middleware: any route that throws (or
@@ -84,6 +90,37 @@ export function createApp(logger: Logger, config: WolfConfig): Express {
   });
   app.use(mcpRouter);
   app.use(seriesDownloadRouter);
+
+  // ── W8: sign-in and the hypothesis routes ─────────────────────────────
+  //
+  // Everything below this line is cookie-authenticated and lives under the
+  // literal /api prefix. Everything ABOVE it is deliberately not: see the ⚠️
+  // in auth/session.ts (R79).
+  //
+  // Checked here rather than in loadConfig, following W7's WOLF_MCP_TOKEN
+  // precedent: every boot goes through createApp, so an unset variable is a
+  // one-line fatal naming it (index.ts), while `loadConfig` stays usable by
+  // scripts/bootstrap-project.ts — which signs nobody in and would otherwise
+  // need a session secret and an allowlist to provision a project.
+  assertSessionConfigured(config);
+
+  // ONE Orange client and ONE hypothesis store for the process. The store's
+  // transition mutex is per INSTANCE, not per process (W5's Notes), so a
+  // second store built elsewhere would silently stop serialising transitions.
+  const client = createOrangeClient({
+    baseUrl: config.orangeBaseUrl,
+    apiKey: config.orangeApiKey,
+    logger,
+  });
+  const store = createHypothesisStore({ client, logger });
+
+  // cookie-parser's BUILT-IN signing is the pinned session mechanism: Wolf
+  // holds no server-side session state, so a session store would be
+  // machinery for nothing. Mounted AFTER the market-data routers so those
+  // never even parse a cookie.
+  app.use(cookieParser(config.sessionSecret));
+  app.use(createAuthRouter({ client, config, logger }));
+  app.use(createHypothesesRouter({ store, client, logger }));
 
   app.use(createErrorHandler(logger));
 

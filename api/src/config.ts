@@ -134,6 +134,42 @@ export interface WolfConfig {
    * `critic` worker's weekly schedule. Must be a plain 5-field expression —
    * see `isFiveFieldCron`'s doc comment for why. */
   criticCron: string;
+  /** `ORANGE_BASE_URL` (default `http://localhost:8099`): where Orange's
+   * agentd answers. In the compose stack wolf-api shares DinD's network
+   * namespace, so agentd is on `localhost:8099` — which is why that is the
+   * default rather than a compose service name. Pinned here (R92) because
+   * W12's bootstrap had to read it straight from `process.env` with its own
+   * hardcoded default: no ticket in its dependency set owned `config.ts`.
+   * A later ticket moves that reader onto this field; W12's bootstrap is
+   * deliberately NOT edited here. */
+  orangeBaseUrl: string;
+  /** `WOLF_API_KEY`: the `wolf` project's Orange API key, sent as
+   * `X-API-Key` on every call wolf-api makes to Orange. Empty when unset —
+   * `createApp` refuses to build without it, so an unset key is a loud boot
+   * failure naming the variable rather than a 403 on the first request.
+   * It is a DIFFERENT credential from `WOLF_MCP_TOKEN` (which authenticates
+   * a session container TO wolf-api). **Never log this value.** */
+  orangeApiKey: string;
+  /** `WOLF_ALLOWED_EMAILS`, parsed: lowercased, whitespace-trimmed full
+   * addresses. EMPTY WHEN UNSET, and `createApp` refuses to build on an
+   * empty set — an empty allowlist must never silently mean "everyone".
+   * Orange verifying a Google credential is necessary, never sufficient. */
+  allowedEmails: ReadonlySet<string>;
+  /** `WOLF_SESSION_SECRET`: the key `cookie-parser` signs the `wolf_session`
+   * cookie with. Empty when unset; `createApp` refuses to build without it.
+   * At least 32 characters when set. **Never log this value.** */
+  sessionSecret: string;
+  /** `WOLF_TEST_LOGIN`, parsed from `email:password` — the test-only login
+   * (owner decision B6). `null` unless the variable is set, and setting it
+   * alongside `NODE_ENV=production` is a boot-time failure: the route it
+   * mounts skips Google entirely. **Never log the password.** */
+  testLogin: TestLogin | null;
+}
+
+/** The one test-only credential pair, parsed from `WOLF_TEST_LOGIN`. */
+export interface TestLogin {
+  email: string;
+  password: string;
 }
 
 /**
@@ -159,6 +195,83 @@ export const DEFAULT_WOLF_BASE_IMAGE = "agent-wolf:dev";
 
 /** Default cron for the project-level `critic` schedule (W12): Mondays at 04:00. */
 export const DEFAULT_WOLF_CRITIC_CRON = "0 4 * * 1";
+
+/** Default `ORANGE_BASE_URL` (R92): agentd, seen from inside DinD's netns. */
+export const DEFAULT_ORANGE_BASE_URL = "http://localhost:8099";
+
+/** Minimum length of `WOLF_SESSION_SECRET`. */
+export const MIN_SESSION_SECRET_LENGTH = 32;
+
+/**
+ * A plausible full email address. Deliberately strict about the two things
+ * that would silently WIDEN the allowlist: a bare domain (`@badcode.dev`)
+ * and a wildcard (`*`) are rejected rather than accepted-and-ignored, so
+ * `WOLF_ALLOWED_EMAILS=@badcode.dev` fails at boot instead of allowlisting
+ * nobody (or, worse, being read by some later reader as a domain rule).
+ */
+const EMAIL_PATTERN = /^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/;
+
+/**
+ * Parses `WOLF_ALLOWED_EMAILS`: comma-separated, case-insensitive,
+ * whitespace-trimmed full Google addresses.
+ *
+ * Returns an EMPTY set when the variable is unset or empty — this function
+ * does not decide whether that is fatal (`createApp` does, at boot), because
+ * `loadConfig` is also what `scripts/bootstrap-project.ts` runs through and
+ * that tool signs nobody in. What it does refuse is a value that is present
+ * but malformed: a token that is not an address at all is a typo, and
+ * silently dropping it removes a person from the allowlist with no error
+ * anywhere.
+ */
+export function parseAllowedEmails(raw: string | undefined): ReadonlySet<string> {
+  const value = present(raw);
+  if (value === undefined) return new Set<string>();
+  const out = new Set<string>();
+  for (const part of value.split(",")) {
+    const trimmed = part.trim();
+    if (trimmed === "") continue;
+    if (!EMAIL_PATTERN.test(trimmed)) {
+      throw WolfError.misconfigured(
+        "WOLF_ALLOWED_EMAILS",
+        "WOLF_ALLOWED_EMAILS must be a comma-separated list of full email addresses; " +
+          `${JSON.stringify(trimmed)} is not one (a bare domain or a wildcard is not accepted)`,
+      );
+    }
+    out.add(trimmed.toLowerCase());
+  }
+  return out;
+}
+
+/**
+ * Parses `WOLF_TEST_LOGIN` (`email:password`) into its two halves, or null
+ * when the variable is unset. Split on the FIRST colon: an email address
+ * cannot contain one, a password very well may.
+ */
+export function parseTestLogin(raw: string | undefined, nodeEnv: string): TestLogin | null {
+  const value = present(raw);
+  if (value === undefined) return null;
+  // Owner decision B6: the dev-login route "refus[es] to boot alongside
+  // production settings". It verifies no Google credential at all, so a
+  // production process that has it mounted is a sign-in bypass for anyone
+  // who can reach the port.
+  if (nodeEnv === "production") {
+    throw WolfError.misconfigured(
+      "WOLF_TEST_LOGIN",
+      "WOLF_TEST_LOGIN mounts a test-only login that verifies no Google credential; " +
+        "it must not be set when NODE_ENV=production (unset one of the two)",
+    );
+  }
+  const colon = value.indexOf(":");
+  const email = colon < 0 ? "" : value.slice(0, colon).trim();
+  const password = colon < 0 ? "" : value.slice(colon + 1);
+  if (email === "" || password === "") {
+    throw WolfError.misconfigured(
+      "WOLF_TEST_LOGIN",
+      'WOLF_TEST_LOGIN must be "email:password" with both halves non-empty',
+    );
+  }
+  return { email: email.toLowerCase(), password };
+}
 
 // ── DinD gateway discovery (R43) ────────────────────────────────────────
 //
@@ -357,10 +470,35 @@ export function loadConfig(
     );
   }
 
+  const orangeBaseUrl = present(env.ORANGE_BASE_URL)?.trim() ?? DEFAULT_ORANGE_BASE_URL;
+  if (!/^https?:\/\/[^\s]+$/.test(orangeBaseUrl)) {
+    throw WolfError.misconfigured(
+      "ORANGE_BASE_URL",
+      "ORANGE_BASE_URL must be an absolute http(s) URL (e.g. http://localhost:8099), got " +
+        JSON.stringify(env.ORANGE_BASE_URL),
+    );
+  }
+
+  // Shape-checked here; PRESENCE is enforced by `createApp` (see WOLF_MCP_TOKEN
+  // above for the same split, and W7's precedent for why): `loadConfig` is also
+  // what `scripts/bootstrap-project.ts` runs through, and that tool signs
+  // nobody in — requiring a session secret to provision a project would make
+  // the bootstrap unrunnable for a variable it never reads.
+  const sessionSecret = env.WOLF_SESSION_SECRET ?? "";
+  if (sessionSecret !== "" && sessionSecret.length < MIN_SESSION_SECRET_LENGTH) {
+    throw WolfError.misconfigured(
+      "WOLF_SESSION_SECRET",
+      `WOLF_SESSION_SECRET must be at least ${MIN_SESSION_SECRET_LENGTH} characters ` +
+        "(generate one with: openssl rand -base64 32)",
+    );
+  }
+
+  const nodeEnv = env.NODE_ENV ?? "development";
+
   return {
     port: portResult.data,
     logLevel: logLevelResult.data,
-    nodeEnv: env.NODE_ENV ?? "development",
+    nodeEnv,
     mcpUrl,
     mcpUrlSource,
     mcpToken,
@@ -371,5 +509,10 @@ export function loadConfig(
     seriesUrlTtlSeconds: seriesTtlResult.data,
     wolfBaseImage,
     criticCron,
+    orangeBaseUrl,
+    orangeApiKey: env.WOLF_API_KEY ?? "",
+    allowedEmails: parseAllowedEmails(env.WOLF_ALLOWED_EMAILS),
+    sessionSecret,
+    testLogin: parseTestLogin(env.WOLF_TEST_LOGIN, nodeEnv),
   };
 }

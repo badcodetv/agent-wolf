@@ -6,11 +6,19 @@ import { createLogger } from "./logger.js";
 import { loadConfig } from "./config.js";
 
 /** A config good enough to build the app: a well-formed MCP token (W7 —
- * `createWolfMcp` refuses to build without one) and no route table, so
- * gateway discovery does not depend on the machine running the test. */
+ * `createWolfMcp` refuses to build without one), the three variables W8's
+ * `assertSessionConfigured` requires at boot (session secret, allowlist,
+ * Orange API key), and no route table, so gateway discovery does not depend
+ * on the machine running the test. */
 function testConfig(env: NodeJS.ProcessEnv = {}) {
   return loadConfig(
-    { WOLF_MCP_TOKEN: "wolf-mcp-token-for-tests-0123456789abcdef", ...env },
+    {
+      WOLF_MCP_TOKEN: "wolf-mcp-token-for-tests-0123456789abcdef",
+      WOLF_SESSION_SECRET: "session-secret-for-tests-0123456789abcdef",
+      WOLF_ALLOWED_EMAILS: "kai@badcode.dev",
+      WOLF_API_KEY: "wolf-api-key-for-tests",
+      ...env,
+    },
     { readRouteTable: () => undefined },
   );
 }
@@ -86,7 +94,12 @@ describe("createApp", () => {
     });
 
     it("refuses to build at all when WOLF_MCP_TOKEN is unset, naming the variable", () => {
-      const withoutToken = loadConfig({}, { readRouteTable: () => undefined });
+      // W7's check runs BEFORE W8's session checks in createApp, deliberately:
+      // this assertion is what would otherwise start naming WOLF_SESSION_SECRET.
+      const withoutToken = loadConfig(
+        { WOLF_SESSION_SECRET: "session-secret-for-tests-0123456789abcdef", WOLF_ALLOWED_EMAILS: "kai@badcode.dev", WOLF_API_KEY: "k" },
+        { readRouteTable: () => undefined },
+      );
       expect(() => createApp(createLogger({ logLevel: "silent" }), withoutToken)).toThrow(
         /WOLF_MCP_TOKEN/,
       );

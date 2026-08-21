@@ -352,3 +352,110 @@ describe("WOLF_BASE_IMAGE / WOLF_CRITIC_CRON (W12)", () => {
     expect(config.criticCron).toBe("0   4 *\t* 1");
   });
 });
+
+// ── W8: the auth + Orange-credential variables ──────────────────────────
+//
+// R92: `ORANGE_BASE_URL` and `WOLF_API_KEY` are pinned HERE, in the typed
+// config, and documented in `.env.example`. W12's bootstrap still reads them
+// straight from `process.env` with its own default — that reader moves in a
+// later ticket; this is the variables' home.
+
+describe("loadConfig — W8's variables", () => {
+  const noRoutes: RouteSource = { readRouteTable: () => undefined };
+
+  it("defaults ORANGE_BASE_URL to agentd as seen from inside DinD's netns", () => {
+    expect(loadConfig({}, noRoutes).orangeBaseUrl).toBe("http://localhost:8099");
+  });
+
+  it("reads ORANGE_BASE_URL when set, and treats an EMPTY value as unset (R80)", () => {
+    expect(loadConfig({ ORANGE_BASE_URL: "http://orange:8099" }, noRoutes).orangeBaseUrl).toBe(
+      "http://orange:8099",
+    );
+    // docker compose forwards an unset optional variable as "", not as absent.
+    expect(loadConfig({ ORANGE_BASE_URL: "" }, noRoutes).orangeBaseUrl).toBe(
+      "http://localhost:8099",
+    );
+  });
+
+  it("fails fast naming ORANGE_BASE_URL when it is not an absolute http(s) URL", () => {
+    for (const bad of ["orange:8099", "/agent", "ftp://orange"]) {
+      try {
+        loadConfig({ ORANGE_BASE_URL: bad }, noRoutes);
+        throw new Error(`expected loadConfig to throw for ${JSON.stringify(bad)}`);
+      } catch (err) {
+        expect(err).toBeInstanceOf(WolfError);
+        expect((err as WolfError).kind).toBe("misconfigured");
+        expect((err as WolfError).message).toContain("ORANGE_BASE_URL");
+      }
+    }
+  });
+
+  it("reads WOLF_API_KEY, and leaves it empty when unset (createApp is what refuses to boot)", () => {
+    expect(loadConfig({ WOLF_API_KEY: "wolf-key" }, noRoutes).orangeApiKey).toBe("wolf-key");
+    expect(loadConfig({}, noRoutes).orangeApiKey).toBe("");
+  });
+
+  it("parses WOLF_ALLOWED_EMAILS: comma-separated, trimmed, lowercased", () => {
+    const config = loadConfig(
+      { WOLF_ALLOWED_EMAILS: " Kai@BadCode.dev ,jack@badcode.dev, " },
+      noRoutes,
+    );
+    expect([...config.allowedEmails]).toEqual(["kai@badcode.dev", "jack@badcode.dev"]);
+  });
+
+  it("leaves the allowlist EMPTY when unset — and empty never means everyone", () => {
+    // The fatal decision is `assertSessionConfigured`'s (see auth/session.ts):
+    // `loadConfig` is also what scripts/bootstrap-project.ts runs through.
+    expect(loadConfig({}, noRoutes).allowedEmails.size).toBe(0);
+  });
+
+  it("fails fast naming WOLF_ALLOWED_EMAILS on a token that is not a full address", () => {
+    for (const bad of ["@badcode.dev", "*", "kai", "kai@badcode"]) {
+      try {
+        loadConfig({ WOLF_ALLOWED_EMAILS: bad }, noRoutes);
+        throw new Error(`expected loadConfig to throw for ${JSON.stringify(bad)}`);
+      } catch (err) {
+        expect(err).toBeInstanceOf(WolfError);
+        expect((err as WolfError).message).toContain("WOLF_ALLOWED_EMAILS");
+      }
+    }
+  });
+
+  it("fails fast naming WOLF_SESSION_SECRET when it is shorter than 32 characters", () => {
+    expect(loadConfig({ WOLF_SESSION_SECRET: "x".repeat(32) }, noRoutes).sessionSecret).toHaveLength(
+      32,
+    );
+    try {
+      loadConfig({ WOLF_SESSION_SECRET: "x".repeat(31) }, noRoutes);
+      throw new Error("expected loadConfig to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(WolfError);
+      expect((err as WolfError).kind).toBe("misconfigured");
+      expect((err as WolfError).message).toContain("WOLF_SESSION_SECRET");
+    }
+  });
+
+  it("parses WOLF_TEST_LOGIN into email:password, splitting on the FIRST colon", () => {
+    const config = loadConfig(
+      { WOLF_TEST_LOGIN: "Kai@BadCode.dev:pass:with:colons", NODE_ENV: "test" },
+      noRoutes,
+    );
+    expect(config.testLogin).toEqual({ email: "kai@badcode.dev", password: "pass:with:colons" });
+  });
+
+  it("leaves testLogin null when WOLF_TEST_LOGIN is unset or empty", () => {
+    expect(loadConfig({}, noRoutes).testLogin).toBeNull();
+    expect(loadConfig({ WOLF_TEST_LOGIN: "" }, noRoutes).testLogin).toBeNull();
+  });
+
+  it("refuses WOLF_TEST_LOGIN alongside NODE_ENV=production (owner decision B6)", () => {
+    try {
+      loadConfig({ WOLF_TEST_LOGIN: "kai@badcode.dev:pw", NODE_ENV: "production" }, noRoutes);
+      throw new Error("expected loadConfig to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(WolfError);
+      expect((err as WolfError).kind).toBe("misconfigured");
+      expect((err as WolfError).message).toContain("WOLF_TEST_LOGIN");
+    }
+  });
+});

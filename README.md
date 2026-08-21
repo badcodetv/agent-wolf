@@ -51,6 +51,15 @@ cp .env.example .env
 # .env (never commit the value); the same value must reach session
 # containers through Orange's MCP config.
 echo "WOLF_MCP_TOKEN=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')" >> .env
+# Three more are REQUIRED, and wolf-api names the missing one at boot:
+#   WOLF_SESSION_SECRET  signs the wolf_session cookie (>= 32 chars)
+#   WOLF_API_KEY         the "wolf" project's Orange API key (X-API-Key)
+#   WOLF_ALLOWED_EMAILS  who may sign in; empty NEVER means everyone
+echo "WOLF_SESSION_SECRET=$(openssl rand -base64 32)" >> .env
+# WOLF_API_KEY must match the key Orange's project map names for the wolf
+# project (`"api_key_env": "WOLF_API_KEY"`), and the allowlist is yours:
+#   echo "WOLF_API_KEY=…"                     >> .env
+#   echo "WOLF_ALLOWED_EMAILS=you@example.com" >> .env
 docker compose up --build
 # → http://localhost:8081 (WOLF_WEB_PORT)
 ```

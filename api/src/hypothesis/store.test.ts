@@ -23,6 +23,7 @@ import {
   buildHypothesisContent,
   createHypothesisStore,
   hypothesisIdFromSessionName,
+  parseEvaluationSummaryLine,
   isTrusted,
   newHypothesisId,
   parseHypothesisContent,
@@ -102,6 +103,12 @@ interface StubConfig {
    * fails if the flag is ever dropped.
    */
   boardDefault?: string;
+  /**
+   * Raw body for the `kind=evaluation` `latest_per=name` read (W8). Separate
+   * from `board` because the two are different queries against the same
+   * route, and answering one with the other would hide a wrong selector.
+   */
+  evaluations?: string;
   /** Raw bodies for the per-name follow-up, keyed by bare id. */
   details?: Record<string, string>;
   /** Raw bodies for `GET /agent/memories/{id}`, keyed by memory id. */
@@ -180,6 +187,9 @@ class Stub {
     }
     if (url.pathname === "/agent/memories") {
       if (url.searchParams.get("latest_per") !== null) {
+        if ((url.searchParams.get("selector") ?? "").startsWith("kind=evaluation")) {
+          return { status: 200, data: this.config.evaluations ?? EMPTY_MEMORIES };
+        }
         if (url.searchParams.get("include_retracted") === "1") {
           return { status: 200, data: this.config.board ?? EMPTY_MEMORIES };
         }
@@ -1148,5 +1158,147 @@ describe("store_content", () => {
   it("store_content: a title-only content is legal; an empty one is not", () => {
     expect(parseHypothesisContent("Just a title").title).toBe("Just a title");
     expect(() => buildHypothesisContent({ title: "   " })).toThrow(WolfError);
+  });
+});
+
+// ── The evaluation summary line (W8) ────────────────────────────────────
+
+describe("store_evaluation_summary_line", () => {
+  const LINE = "score=-0.42 tripped=1 holding=3 indeterminate=0 evaluated=2026-08-20T06:05:00Z";
+
+  it("store_evaluation_summary_line: parses the pinned format", () => {
+    expect(parseEvaluationSummaryLine(LINE)).toEqual({
+      supportScore: -0.42,
+      tripped: 1,
+      holding: 3,
+      indeterminate: 0,
+      evaluatedAtMs: Date.parse("2026-08-20T06:05:00Z"),
+    });
+  });
+
+  it("store_evaluation_summary_line: IGNORES unrecognised key=value tokens", () => {
+    // W10 must be able to extend the line without breaking the board.
+    const extended = `${LINE} horizon_days_left=12 version=2`;
+    expect(parseEvaluationSummaryLine(extended)?.supportScore).toBe(-0.42);
+  });
+
+  it("store_evaluation_summary_line: all five keys are REQUIRED", () => {
+    for (const key of ["score", "tripped", "holding", "indeterminate", "evaluated"]) {
+      const without = LINE.split(" ")
+        .filter((token) => !token.startsWith(`${key}=`))
+        .join(" ");
+      expect(parseEvaluationSummaryLine(without)).toBeNull();
+    }
+  });
+
+  it("store_evaluation_summary_line: a line that does not parse yields null and never throws", () => {
+    for (const bad of [
+      "",
+      "   ",
+      "this is prose, not a summary",
+      "score=NaN tripped=1 holding=3 indeterminate=0 evaluated=2026-08-20T06:05:00Z",
+      "score=0.1 tripped=one holding=3 indeterminate=0 evaluated=2026-08-20T06:05:00Z",
+      "score=0.1 tripped=-1 holding=3 indeterminate=0 evaluated=2026-08-20T06:05:00Z",
+      "score=0.1 tripped=1 holding=3 indeterminate=0 evaluated=never",
+      "=1 score=0.1",
+    ]) {
+      expect(() => parseEvaluationSummaryLine(bad)).not.toThrow();
+      expect(parseEvaluationSummaryLine(bad)).toBeNull();
+    }
+  });
+
+  it("store_evaluation_summary_line: the FIRST occurrence of a key wins", () => {
+    expect(parseEvaluationSummaryLine(`${LINE} score=1`)?.supportScore).toBe(-0.42);
+  });
+});
+
+describe("store_read_evaluation_summaries", () => {
+  const ID = "1a2b3c4d";
+  const LINE = "score=0.75 tripped=0 holding=4 indeterminate=1 evaluated=2026-08-20T06:05:00Z";
+
+  function evalRow(extra: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: "eval-1",
+      labels: { kind: "evaluation", name: ID },
+      snippet: `${LINE}\n{"support_score":0.75}`,
+      score: 0,
+      created_by_worker: "",
+      created_by_session: "",
+      created_at: 1787334047000,
+      ...extra,
+    };
+  }
+
+  it("store_read_evaluation_summaries: ONE request, latest_per=name, with include_retracted", async () => {
+    const { store, stub } = harness({ evaluations: JSON.stringify({ memories: [evalRow()] }) });
+    const summaries = await store.readEvaluationSummaries(new Set([ID]));
+
+    expect(summaries.get(ID)?.supportScore).toBe(0.75);
+    expect(summaries.get(ID)?.memoryId).toBe("eval-1");
+    expect(stub.memoryRequests).toHaveLength(1);
+    const path = stub.memoryRequests[0]?.path ?? "";
+    expect(path).toContain("selector=kind%3Devaluation");
+    expect(path).toContain("latest_per=name");
+    // Same reason the board read carries it: without the flag a hostile
+    // retraction of the newest row hands back the OLDER one (R90).
+    expect(path).toContain("include_retracted=1");
+  });
+
+  it("store_read_evaluation_summaries: an untrusted row sets no score", async () => {
+    const { store } = harness({
+      evaluations: JSON.stringify({
+        memories: [evalRow({ created_by_worker: `researcher-${ID}` })],
+      }),
+    });
+    expect((await store.readEvaluationSummaries(new Set([ID]))).size).toBe(0);
+  });
+
+  // One harness per test: the stub installs a PERSISTENT undici interceptor
+  // on the shared pool, so two harnesses in one test would leave the first one
+  // answering the second one's requests.
+  it("store_read_evaluation_summaries: a row Wolf itself retracted is skipped", async () => {
+    const { store } = harness({
+      evaluations: JSON.stringify({
+        memories: [
+          evalRow({
+            retracted_by: [
+              { memory_id: "r1", created_by_worker: "", created_by_session: "", created_at: 1787334047100 },
+            ],
+          }),
+        ],
+      }),
+    });
+    expect((await store.readEvaluationSummaries(new Set([ID]))).size).toBe(0);
+  });
+
+  it("store_read_evaluation_summaries: a HOSTILE retraction changes nothing — an untrusted actor cannot withdraw server-written state", async () => {
+    const { store } = harness({
+      evaluations: JSON.stringify({
+        memories: [
+          evalRow({
+            retracted_by: [
+              {
+                memory_id: "r2",
+                created_by_worker: "",
+                created_by_session: "sess-hostile",
+                created_at: 1787334047100,
+              },
+            ],
+          }),
+        ],
+      }),
+    });
+    const summaries = await store.readEvaluationSummaries(new Set([ID]));
+    expect(summaries.size).toBe(1);
+    expect(summaries.get(ID)?.supportScore).toBe(0.75);
+  });
+
+  it("store_read_evaluation_summaries: a row naming something that is not a hypothesis is ignored", async () => {
+    const { store } = harness({
+      evaluations: JSON.stringify({
+        memories: [evalRow({ labels: { kind: "evaluation", name: "99999999" } })],
+      }),
+    });
+    expect((await store.readEvaluationSummaries(new Set([ID]))).size).toBe(0);
   });
 });
