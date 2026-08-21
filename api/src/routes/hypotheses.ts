@@ -32,7 +32,9 @@ import type {
   UnixSec,
 } from "../orange/types.js";
 import { requireSignedIn, signedInUser } from "../auth/session.js";
+import { loadConfig, type WolfConfig } from "../config.js";
 import { validateSpec, type SpecError } from "../hypothesis/spec.js";
+import { createProvisioner, researcherWorkerFor, type Provisioner } from "../hypothesis/provision.js";
 import type { HypothesisStatus } from "../hypothesis/lifecycle.js";
 import {
   INTERVIEWER_WORKER,
@@ -56,12 +58,10 @@ const KIND_VERDICT = "verdict";
 const KIND_RESEARCH_NOTE = "research-note";
 const KIND_SPEC_AMENDMENT = "spec-amendment";
 
-/** The per-hypothesis daily researcher's worker name (§ "Orange atoms"). */
-export const RESEARCHER_WORKER_PREFIX = "researcher-";
-
-export function researcherWorkerFor(id: string): string {
-  return `${RESEARCHER_WORKER_PREFIX}${id}`;
-}
+// The per-hypothesis daily researcher's worker name (§ "Orange atoms").
+// Defined in `hypothesis/provision.ts` — the module that creates and deletes
+// it — and re-exported here so W8's callers keep their import site.
+export { RESEARCHER_WORKER_PREFIX, researcherWorkerFor } from "../hypothesis/provision.js";
 
 /** How many rows of one kind a detail read pulls back. */
 const DETAIL_ROW_LIMIT = 50;
@@ -174,12 +174,44 @@ export interface CreateHypothesesRouterOptions {
   sessionPollIntervalMs?: number;
   sessionPollTimeoutMs?: number;
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * W9's four human routes need `WOLF_SCHEDULE_CRON` and
+   * `WOLF_TEARDOWN_DRAIN_SECONDS`. `app.ts` is NOT on W9's Files line, so it
+   * still constructs this router with three options — when neither this nor
+   * `provisioner` is supplied, the provisioner is built LAZILY on the first
+   * call to one of those four routes, from `loadConfig()`. Nothing is read
+   * from the environment, and no prompt file is opened, until then.
+   */
+  config?: WolfConfig;
+  provisioner?: Provisioner;
 }
 
 const createBody = z.object({
   title: z.string().trim().min(1).max(500),
   /** Optional prose thesis; line 1 of the memory is always the title. */
   thesis: z.string().max(20_000).optional(),
+});
+
+/**
+ * ⚠️ `POST /api/hypotheses/:id/go-live` takes **NO REQUEST BODY**. The spec
+ * it locks is the newest `kind=hypothesis-spec-candidate` memory — the
+ * untrusted kind by which an interview running inside a container gets its
+ * proposal to the human who approves it. A body here would be a second,
+ * unaudited way to set the scoreboard.
+ */
+const verdictBody = z.object({
+  verdict: z.enum(["confirmed", "invalidated"]),
+  rationale: z.string().trim().min(1).max(20_000),
+});
+
+const retireBody = z.object({
+  rationale: z.string().trim().min(1).max(20_000),
+});
+
+const amendBody = z.object({
+  amendment_id: z.string().trim().min(1).max(200),
+  decision: z.enum(["accept", "reject"]),
+  rationale: z.string().trim().min(1).max(20_000),
 });
 
 function parseBody<T>(schema: z.ZodType<T>, body: unknown, what: string): T {
@@ -363,6 +395,28 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
   // a public route after this one is not silently 401ed).
   router.use("/api/hypotheses", requireSignedIn);
 
+  /**
+   * Built on FIRST USE, never at construction: `app.ts` is not on W9's Files
+   * line and still passes three options, so the fallback has to read
+   * `loadConfig()` itself — and doing that eagerly would make every existing
+   * route test depend on the ambient environment and open two prompt files.
+   */
+  let built: Provisioner | undefined = options.provisioner;
+  function provisioner(): Provisioner {
+    built ??= createProvisioner({
+      client,
+      store,
+      logger,
+      config: options.config ?? loadConfig(),
+    });
+    return built;
+  }
+
+  function idParam(req: Request): string | undefined {
+    const raw: unknown = req.params["id"];
+    return typeof raw === "string" ? raw : undefined;
+  }
+
   async function listKind(
     id: string,
     kind: string,
@@ -518,8 +572,7 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
 
   router.get("/api/hypotheses/:id", (req: Request, res: Response, next) => {
     void (async () => {
-      const raw: unknown = req.params["id"];
-      const id = requireHypothesisId(typeof raw === "string" ? raw : undefined);
+      const id = requireHypothesisId(idParam(req));
       // 404s when the id is not in the session index — the authoritative
       // index of hypotheses is the SESSION LIST, never memory.
       const record = await store.readHypothesis(id);
@@ -592,6 +645,69 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
         },
       };
       res.status(200).json(detail);
+    })().catch(next);
+  });
+
+  // ── The four human routes (W9) ────────────────────────────────────────
+  //
+  // All four sit behind `requireSignedIn` (mounted on this router's own path
+  // prefix above), and they are the ONLY path to `confirmed`, `invalidated`
+  // or `archived`. Nothing inside a container can reach them: they are
+  // cookie-authenticated, and every memory they write goes out over
+  // `POST /agent/memories` with Wolf's own API key, which is what makes the
+  // provenance empty and the row trusted.
+
+  router.post("/api/hypotheses/:id/go-live", (req: Request, res: Response, next) => {
+    void (async () => {
+      const user = signedInUser(req);
+      const id = requireHypothesisId(idParam(req));
+      const result = await provisioner().goLive({ id, email: user.email });
+      res.status(200).json(result);
+    })().catch(next);
+  });
+
+  router.post("/api/hypotheses/:id/verdict", (req: Request, res: Response, next) => {
+    void (async () => {
+      const user = signedInUser(req);
+      const id = requireHypothesisId(idParam(req));
+      const body = parseBody(verdictBody, req.body, "POST /api/hypotheses/:id/verdict");
+      const result = await provisioner().verdict({
+        id,
+        email: user.email,
+        verdict: body.verdict,
+        rationale: body.rationale,
+      });
+      res.status(200).json(result);
+    })().catch(next);
+  });
+
+  router.post("/api/hypotheses/:id/retire", (req: Request, res: Response, next) => {
+    void (async () => {
+      const user = signedInUser(req);
+      const id = requireHypothesisId(idParam(req));
+      const body = parseBody(retireBody, req.body, "POST /api/hypotheses/:id/retire");
+      const result = await provisioner().retire({
+        id,
+        email: user.email,
+        rationale: body.rationale,
+      });
+      res.status(200).json(result);
+    })().catch(next);
+  });
+
+  router.post("/api/hypotheses/:id/amend", (req: Request, res: Response, next) => {
+    void (async () => {
+      const user = signedInUser(req);
+      const id = requireHypothesisId(idParam(req));
+      const body = parseBody(amendBody, req.body, "POST /api/hypotheses/:id/amend");
+      const result = await provisioner().amend({
+        id,
+        email: user.email,
+        amendmentId: body.amendment_id,
+        decision: body.decision,
+        rationale: body.rationale,
+      });
+      res.status(200).json(result);
     })().catch(next);
   });
 

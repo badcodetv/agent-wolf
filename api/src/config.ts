@@ -134,6 +134,20 @@ export interface WolfConfig {
    * `critic` worker's weekly schedule. Must be a plain 5-field expression —
    * see `isFiveFieldCron`'s doc comment for why. */
   criticCron: string;
+  /** `WOLF_SCHEDULE_CRON` (default `0 6 * * *`, i.e. every day at 06:00):
+   * the cron W9 registers for each hypothesis's per-hypothesis daily
+   * `researcher-<id>` schedule at go-live. A plain 5-field expression,
+   * never a nickname — `agentdb.Schedule.Cron` is validated on write and
+   * refuses `@daily` outright (`go/agentdb/schedules.go:827`), so a bad
+   * value is caught here, at boot, naming this variable, rather than as a
+   * 4xx in the middle of provisioning. Overridable precisely so X1 can run
+   * `* * * * *` and see a tick inside a test run. */
+  scheduleCron: string;
+  /** `WOLF_TEARDOWN_DRAIN_SECONDS` (default 60): how long W9's ordered
+   * teardown waits for this hypothesis's already-queued deliveries to
+   * drain after its schedule is deleted, before proceeding anyway and
+   * logging the delivery ids it left behind. A whole count of SECONDS. */
+  teardownDrainSeconds: number;
   /** `ORANGE_BASE_URL` (default `http://localhost:8099`): where Orange's
    * agentd answers. In the compose stack wolf-api shares DinD's network
    * namespace, so agentd is on `localhost:8099` — which is why that is the
@@ -195,6 +209,12 @@ export const DEFAULT_WOLF_BASE_IMAGE = "agent-wolf:dev";
 
 /** Default cron for the project-level `critic` schedule (W12): Mondays at 04:00. */
 export const DEFAULT_WOLF_CRITIC_CRON = "0 4 * * 1";
+
+/** Default cron for a hypothesis's daily `researcher-<id>` schedule (W9): 06:00 every day. */
+export const DEFAULT_WOLF_SCHEDULE_CRON = "0 6 * * *";
+
+/** Default drain bound for W9's ordered teardown, in whole seconds. */
+export const DEFAULT_WOLF_TEARDOWN_DRAIN_SECONDS = 60;
 
 /** Default `ORANGE_BASE_URL` (R92): agentd, seen from inside DinD's netns. */
 export const DEFAULT_ORANGE_BASE_URL = "http://localhost:8099";
@@ -470,6 +490,36 @@ export function loadConfig(
     );
   }
 
+  // W9's per-hypothesis daily schedule. Same 5-field rule as WOLF_CRITIC_CRON
+  // above, and for the same reason: Orange validates `cron` on write and
+  // refuses nicknames, so `@daily` would fail inside go-live's step 3 —
+  // after the locked spec has already been appended, which is a rollback
+  // this ticket then has to perform for a value that could have been
+  // rejected at boot.
+  const scheduleCron = present(env.WOLF_SCHEDULE_CRON) ?? DEFAULT_WOLF_SCHEDULE_CRON;
+  if (!isFiveFieldCron(scheduleCron)) {
+    throw WolfError.misconfigured(
+      "WOLF_SCHEDULE_CRON",
+      "WOLF_SCHEDULE_CRON must be a plain 5-field cron expression (never a nickname like " +
+        `@daily — Orange's schedule store rejects those), got ${JSON.stringify(env.WOLF_SCHEDULE_CRON)}`,
+    );
+  }
+
+  // `present()` (R80) rather than `??` on the raw value: compose forwards an
+  // unset optional variable as the EMPTY STRING, and `z.coerce.number()`
+  // turns "" into 0 — which here would mean "never wait for a delivery to
+  // drain" while looking exactly like the default.
+  const drainResult = secondsSchema.safeParse(
+    present(env.WOLF_TEARDOWN_DRAIN_SECONDS) ?? DEFAULT_WOLF_TEARDOWN_DRAIN_SECONDS,
+  );
+  if (!drainResult.success) {
+    throw WolfError.misconfigured(
+      "WOLF_TEARDOWN_DRAIN_SECONDS",
+      "WOLF_TEARDOWN_DRAIN_SECONDS must be a whole number of seconds (>= 0), got " +
+        JSON.stringify(env.WOLF_TEARDOWN_DRAIN_SECONDS),
+    );
+  }
+
   const orangeBaseUrl = present(env.ORANGE_BASE_URL)?.trim() ?? DEFAULT_ORANGE_BASE_URL;
   if (!/^https?:\/\/[^\s]+$/.test(orangeBaseUrl)) {
     throw WolfError.misconfigured(
@@ -509,6 +559,8 @@ export function loadConfig(
     seriesUrlTtlSeconds: seriesTtlResult.data,
     wolfBaseImage,
     criticCron,
+    scheduleCron,
+    teardownDrainSeconds: drainResult.data,
     orangeBaseUrl,
     orangeApiKey: env.WOLF_API_KEY ?? "",
     allowedEmails: parseAllowedEmails(env.WOLF_ALLOWED_EMAILS),

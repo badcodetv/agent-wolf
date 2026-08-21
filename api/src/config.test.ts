@@ -459,3 +459,73 @@ describe("loadConfig — W8's variables", () => {
     }
   });
 });
+
+// design/2026-08-20-agent-wolf.md, W9's Files line: "modify … api/src/config.ts,
+// … .env.example and docker-compose.yml (WOLF_TEARDOWN_DRAIN_SECONDS,
+// WOLF_SCHEDULE_CRON — both files, R81/R110)". `config.test.ts` moves with
+// `config.ts` on the ownership table (R94).
+describe("WOLF_SCHEDULE_CRON / WOLF_TEARDOWN_DRAIN_SECONDS (W9)", () => {
+  const noRoutes = routeSourceReturning(undefined);
+
+  it("defaults to a once-daily 5-field cron and a 60-second drain bound", () => {
+    const config = loadConfig({}, noRoutes);
+    expect(config.scheduleCron).toBe("0 6 * * *");
+    expect(config.scheduleCron.trim().split(/\s+/)).toHaveLength(5);
+    expect(config.teardownDrainSeconds).toBe(60);
+  });
+
+  it("is overridable, so an e2e run can schedule * * * * * and see a tick", () => {
+    const config = loadConfig(
+      { WOLF_SCHEDULE_CRON: "* * * * *", WOLF_TEARDOWN_DRAIN_SECONDS: "5" },
+      noRoutes,
+    );
+    expect(config.scheduleCron).toBe("* * * * *");
+    expect(config.teardownDrainSeconds).toBe(5);
+  });
+
+  it("treats BOTH as absent when compose forwards them as the empty string (R80)", () => {
+    // `${VAR:-}` arrives as "" — and `z.coerce.number()` turns "" into 0,
+    // which here would silently mean "never wait for a delivery to drain"
+    // while looking exactly like the default.
+    const config = loadConfig(
+      { WOLF_SCHEDULE_CRON: "", WOLF_TEARDOWN_DRAIN_SECONDS: "" },
+      noRoutes,
+    );
+    expect(config.scheduleCron).toBe("0 6 * * *");
+    expect(config.teardownDrainSeconds).toBe(60);
+  });
+
+  it("fails fast naming WOLF_SCHEDULE_CRON on a nickname — @daily is never emitted", () => {
+    // agentdb.Schedule.Cron is validated on write and refuses nicknames
+    // outright, and go-live would hit that AFTER the locked spec memory has
+    // already been appended — which nothing can take back.
+    for (const bad of ["@daily", "@hourly", "0 6 * *", "0 6 * * * *"]) {
+      try {
+        loadConfig({ WOLF_SCHEDULE_CRON: bad }, noRoutes);
+        throw new Error(`expected loadConfig to throw for ${JSON.stringify(bad)}`);
+      } catch (err) {
+        expect(err).toBeInstanceOf(WolfError);
+        expect((err as WolfError).kind).toBe("misconfigured");
+        expect((err as WolfError).message).toContain("WOLF_SCHEDULE_CRON");
+      }
+    }
+  });
+
+  it("fails fast naming WOLF_TEARDOWN_DRAIN_SECONDS when it is not a whole count of seconds", () => {
+    for (const bad of ["-1", "1.5", "a minute", "60s"]) {
+      try {
+        loadConfig({ WOLF_TEARDOWN_DRAIN_SECONDS: bad }, noRoutes);
+        throw new Error(`expected loadConfig to throw for ${JSON.stringify(bad)}`);
+      } catch (err) {
+        expect(err).toBeInstanceOf(WolfError);
+        expect((err as WolfError).kind).toBe("misconfigured");
+        expect((err as WolfError).message).toContain("WOLF_TEARDOWN_DRAIN_SECONDS");
+      }
+    }
+  });
+
+  it("accepts a zero drain bound: proceed immediately, but still POLL once", () => {
+    const config = loadConfig({ WOLF_TEARDOWN_DRAIN_SECONDS: "0" }, noRoutes);
+    expect(config.teardownDrainSeconds).toBe(0);
+  });
+});

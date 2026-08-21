@@ -158,7 +158,7 @@ class Stub {
   }
 
   install(): void {
-    for (const method of ["GET", "POST"]) {
+    for (const method of ["GET", "POST", "PUT", "DELETE"]) {
       this.pool
         .intercept({ method, path: () => true })
         .reply((opts) => {
@@ -309,6 +309,11 @@ async function harness(stubConfig: StubConfig): Promise<Harness> {
       store,
       client,
       logger,
+      // W9's four human routes need WOLF_SCHEDULE_CRON and
+      // WOLF_TEARDOWN_DRAIN_SECONDS. Passing the config builds the REAL
+      // provisioner, so a 401 below proves that nothing was written rather
+      // than that a fake was not called.
+      config: cfg,
       // The create poll must not take real seconds in a unit test.
       sessionPollIntervalMs: 1,
       sessionPollTimeoutMs: 40,
@@ -944,5 +949,133 @@ describe("hypotheses_detail", () => {
     for (const request of h.stub.requests) {
       expect(request.path).not.toContain("hyp-hyp-");
     }
+  });
+});
+
+// ── The four human routes (W9) ──────────────────────────────────────────
+//
+// The provisioner's own behaviour — the two orderings, the rollback, the
+// drain — is graded in `hypothesis/provision.test.ts`. What is graded HERE is
+// the HTTP surface: the guard, the status codes and the body shapes. The
+// harness builds the REAL provisioner (it is handed a real `WolfConfig`), so
+// "zero memory writes" below is a genuine observation of the wire and not a
+// fake that was never called.
+
+describe("hypotheses_human_routes", () => {
+  const ID = "1a1a1a1a";
+  const SESSION_ID = "sess-hyp-1a1a1a1a";
+
+  function draftStub(): StubConfig {
+    return {
+      sessions: [sessionRow(`hyp-${ID}`, SESSION_ID)],
+      details: { [`hypothesis:${ID}`]: page([stateRow(ID, "draft", "Copper is the new oil")]) },
+    };
+  }
+
+  const ROUTES: { path: string; body: unknown }[] = [
+    { path: `/api/hypotheses/${ID}/go-live`, body: {} },
+    { path: `/api/hypotheses/${ID}/verdict`, body: { verdict: "confirmed", rationale: "held" } },
+    { path: `/api/hypotheses/${ID}/retire`, body: { rationale: "done" } },
+    {
+      path: `/api/hypotheses/${ID}/amend`,
+      body: { amendment_id: "amend-1", decision: "accept", rationale: "regime change" },
+    },
+  ];
+
+  it("hypotheses_human_routes: all four are 401 with NO cookie, and write zero memories", async () => {
+    // Only the human-initiated routes can produce confirmed / invalidated /
+    // archived, and this is the gate that makes that true.
+    for (const route of ROUTES) {
+      const h = await harness(draftStub());
+      const res = await post(h, route.path, route.body, false);
+      expect(res.status, route.path).toBe(401);
+      expect(res.json.kind).toBe("forbidden");
+      expect(h.stub.appendRequests, route.path).toHaveLength(0);
+    }
+  });
+
+  it("hypotheses_human_routes: go-live takes NO body and refuses a hypothesis with no candidate, 422", async () => {
+    const h = await harness(draftStub());
+    const res = await post(h, `/api/hypotheses/${ID}/go-live`, undefined);
+
+    expect(res.status).toBe(422);
+    expect(res.json.kind).toBe("invalid");
+    expect(res.json.details.errors).toEqual([{ path: "", message: "no spec proposed yet" }]);
+    // Nothing provisioned on that path.
+    expect(h.stub.appendRequests).toHaveLength(0);
+    expect(h.stub.requests.filter((r) => r.method === "PUT")).toHaveLength(0);
+  });
+
+  it("hypotheses_human_routes: go-live returns 422 with EVERY spec error, each carrying its path", async () => {
+    const stub = draftStub();
+    stub.details![`hypothesis-spec-candidate:${ID}`] = page([
+      memoryRow({
+        id: "cand-bad",
+        labels: { kind: "hypothesis-spec-candidate", name: ID },
+        createdBySession: SESSION_ID,
+      }),
+    ]);
+    stub.memoriesById = {
+      "cand-bad": JSON.stringify({
+        id: "cand-bad",
+        labels: { kind: "hypothesis-spec-candidate", name: ID },
+        content: `a summary\n${JSON.stringify({ thesis: "t", horizon_days: 1, metrics: [], invalidation: [] })}`,
+        created_by_worker: "",
+        created_by_session: SESSION_ID,
+        created_at: 1787334047000,
+      }),
+    };
+    const h = await harness(stub);
+    const res = await post(h, `/api/hypotheses/${ID}/go-live`, {});
+
+    expect(res.status).toBe(422);
+    expect(res.json.details.errors.length).toBeGreaterThan(1);
+    for (const error of res.json.details.errors) {
+      expect(typeof error.path).toBe("string");
+      expect(typeof error.message).toBe("string");
+    }
+    expect(h.stub.appendRequests).toHaveLength(0);
+  });
+
+  it("hypotheses_human_routes: /verdict refuses any verdict outside the two, and an empty rationale, 400", async () => {
+    const h = await harness(draftStub());
+    for (const body of [
+      { verdict: "maybe", rationale: "x" },
+      { verdict: "confirmed", rationale: "" },
+      { verdict: "confirmed", rationale: "   " },
+      { rationale: "x" },
+    ]) {
+      const res = await post(h, `/api/hypotheses/${ID}/verdict`, body);
+      expect(res.status, JSON.stringify(body)).toBe(400);
+      expect(res.json.kind).toBe("invalid");
+    }
+    expect(h.stub.appendRequests).toHaveLength(0);
+  });
+
+  it("hypotheses_human_routes: /amend refuses any decision outside accept|reject, 400", async () => {
+    const h = await harness(draftStub());
+    for (const body of [
+      { amendment_id: "a", decision: "defer", rationale: "x" },
+      { amendment_id: "", decision: "accept", rationale: "x" },
+      { amendment_id: "a", decision: "accept", rationale: "" },
+    ]) {
+      const res = await post(h, `/api/hypotheses/${ID}/amend`, body);
+      expect(res.status, JSON.stringify(body)).toBe(400);
+    }
+    expect(h.stub.appendRequests).toHaveLength(0);
+  });
+
+  it("hypotheses_human_routes: /retire refuses an empty rationale, 400", async () => {
+    const h = await harness(draftStub());
+    expect((await post(h, `/api/hypotheses/${ID}/retire`, {})).status).toBe(400);
+    expect((await post(h, `/api/hypotheses/${ID}/retire`, { rationale: " " })).status).toBe(400);
+    expect(h.stub.appendRequests).toHaveLength(0);
+  });
+
+  it("hypotheses_human_routes: a malformed id is 400 before anything is read", async () => {
+    const h = await harness(draftStub());
+    const res = await post(h, `/api/hypotheses/hyp-${ID}/go-live`, {});
+    expect(res.status).toBe(400);
+    expect(h.stub.requests.filter((r) => r.path.includes("hyp-hyp-"))).toHaveLength(0);
   });
 });
