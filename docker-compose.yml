@@ -68,6 +68,14 @@ services:
       # in wave 6 and fixed on the trunk; the same R81/R110 rule as above.
       WOLF_BASE_IMAGE: ${WOLF_BASE_IMAGE:-}
       WOLF_CRITIC_CRON: ${WOLF_CRITIC_CRON:-}
+      # W16's report-layer budgets. Optional, and both carry their defaults
+      # from api/src/config.ts when left empty — which is exactly why they
+      # need a line here (R81/R110): without one, a value an operator sets in
+      # .env never reaches this container and the process silently runs the
+      # default. api/src/config.test.ts's "R81/R110" block fails if either is
+      # missing from this block.
+      WOLF_REPORT_MAX_BYTES: ${WOLF_REPORT_MAX_BYTES:-}
+      WOLF_SERIES_MAX_POINTS: ${WOLF_SERIES_MAX_POINTS:-}
     restart: unless-stopped
 
   wolf-web:

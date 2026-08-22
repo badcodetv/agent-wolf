@@ -35,6 +35,12 @@ const logLevelSchema = z.enum(["fatal", "error", "warn", "info", "debug", "trace
  * ambiguity § Vocabulary exists to prevent. */
 const secondsSchema = z.coerce.number().int().min(0);
 
+/** A whole COUNT (of bytes, of points, …), at least one. Zero is never a
+ * meaningful budget: a 0-byte template limit rejects every template and a
+ * 0-point series limit draws an empty chart, and both look exactly like the
+ * default when compose forwards an unset variable as "" (R80). */
+const countSchema = z.coerce.number().int().min(1);
+
 /**
  * `WOLF_MCP_TOKEN`'s pinned shape (**W7 owner pick — R49 records that its
  * length and charset were pinned nowhere**): at least 32 and at most 128
@@ -173,6 +179,21 @@ export interface WolfConfig {
    * cookie with. Empty when unset; `createApp` refuses to build without it.
    * At least 32 characters when set. **Never log this value.** */
   sessionSecret: string;
+  /** `WOLF_REPORT_MAX_BYTES` (default 512000): the byte budget for one
+   * report template, handed to `parseTemplate(html, maxBytes)` as a
+   * PARAMETER — that function reads no config itself, so this is the one
+   * place the number lives. A template is a memory row that a human reviews
+   * at go-live and that every frame render re-reads; the cap is what stops
+   * an interview from locking half a megabyte of minified chart library into
+   * the scoreboard. Whole BYTES, not characters: `parseTemplate` measures
+   * `Buffer.byteLength(html, "utf8")`. */
+  reportMaxBytes: number;
+  /** `WOLF_SERIES_MAX_POINTS` (default 5000): the per-metric cap on points
+   * injected into the report frame (W18's `buildSeriesPayload` downsamples
+   * to it, always keeping the first and last point). It bounds the size of
+   * the `window.__WOLF_SERIES__` blob the frame carries, which is inlined
+   * into the document on every render. A whole COUNT of points. */
+  seriesMaxPoints: number;
   /** `WOLF_TEST_LOGIN`, parsed from `email:password` — the test-only login
    * (owner decision B6). `null` unless the variable is set, and setting it
    * alongside `NODE_ENV=production` is a boot-time failure: the route it
@@ -215,6 +236,12 @@ export const DEFAULT_WOLF_SCHEDULE_CRON = "0 6 * * *";
 
 /** Default drain bound for W9's ordered teardown, in whole seconds. */
 export const DEFAULT_WOLF_TEARDOWN_DRAIN_SECONDS = 60;
+
+/** Default byte budget for one report template (W16): 512000 bytes. */
+export const DEFAULT_WOLF_REPORT_MAX_BYTES = 512_000;
+
+/** Default per-metric point cap for the report frame's series payload (W16/W18): 5000. */
+export const DEFAULT_WOLF_SERIES_MAX_POINTS = 5000;
 
 /** Default `ORANGE_BASE_URL` (R92): agentd, seen from inside DinD's netns. */
 export const DEFAULT_ORANGE_BASE_URL = "http://localhost:8099";
@@ -543,6 +570,34 @@ export function loadConfig(
     );
   }
 
+  // W16's two report-layer budgets. Both go through `present()` (R80) for
+  // the reason that helper exists: compose forwards an unset optional
+  // variable as the EMPTY STRING, and `z.coerce.number()` turns "" into 0 —
+  // which here would be a 0-byte template limit that rejects every template
+  // and a 0-point series cap that draws an empty chart, both while looking
+  // exactly like the default.
+  const reportMaxBytesResult = countSchema.safeParse(
+    present(env.WOLF_REPORT_MAX_BYTES) ?? DEFAULT_WOLF_REPORT_MAX_BYTES,
+  );
+  if (!reportMaxBytesResult.success) {
+    throw WolfError.misconfigured(
+      "WOLF_REPORT_MAX_BYTES",
+      "WOLF_REPORT_MAX_BYTES must be a whole number of BYTES (>= 1), got " +
+        JSON.stringify(env.WOLF_REPORT_MAX_BYTES),
+    );
+  }
+
+  const seriesMaxPointsResult = countSchema.safeParse(
+    present(env.WOLF_SERIES_MAX_POINTS) ?? DEFAULT_WOLF_SERIES_MAX_POINTS,
+  );
+  if (!seriesMaxPointsResult.success) {
+    throw WolfError.misconfigured(
+      "WOLF_SERIES_MAX_POINTS",
+      "WOLF_SERIES_MAX_POINTS must be a whole COUNT of points (>= 1), got " +
+        JSON.stringify(env.WOLF_SERIES_MAX_POINTS),
+    );
+  }
+
   const nodeEnv = env.NODE_ENV ?? "development";
 
   return {
@@ -561,6 +616,8 @@ export function loadConfig(
     criticCron,
     scheduleCron,
     teardownDrainSeconds: drainResult.data,
+    reportMaxBytes: reportMaxBytesResult.data,
+    seriesMaxPoints: seriesMaxPointsResult.data,
     orangeBaseUrl,
     orangeApiKey: env.WOLF_API_KEY ?? "",
     allowedEmails: parseAllowedEmails(env.WOLF_ALLOWED_EMAILS),
