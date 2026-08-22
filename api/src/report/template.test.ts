@@ -552,3 +552,268 @@ describe("parseTemplate — reporting", () => {
     expect(err.details).toEqual({ errors });
   });
 });
+
+
+/**
+ * THE FOREIGN-CONTENT DIFFERENTIAL (fix round 2).
+ *
+ * `style`, `title`, `textarea`, `xmp`, `noembed` and `noframes` are RAW TEXT
+ * in HTML content and ORDINARY ELEMENTS inside `<svg>`/`<math>`, where the
+ * tree builder never switches the tokenizer. The first cut of `scan()`
+ * treated them as raw text unconditionally, so markup written inside
+ * `<svg><style>…</style></svg>` was invisible here while a browser built real
+ * elements out of it. Confirmed against parse5 on the identical bytes; three
+ * acceptance criteria were bypassable through the one hole:
+ *
+ *   - a remote script that `scriptSrcs` reported as ZERO remote scripts,
+ *   - a non-https `src` that passed the https-only rule,
+ *   - a duplicate slot id whose second region was never filled and never
+ *     drifted.
+ *
+ * Every case below is a fragment parse5 turns into real elements.
+ */
+const FOREIGN_WRAPPERS = ["svg", "math"] as const;
+/** Raw text in HTML; NOT raw text inside foreign content. */
+const RAW_TEXT_HOSTS = ["style", "title", "textarea", "xmp", "noembed", "noframes"] as const;
+
+describe("parseTemplate — raw text is not raw inside <svg>/<math>", () => {
+  for (const wrapper of FOREIGN_WRAPPERS) {
+    for (const host of RAW_TEXT_HOSTS) {
+      it(`sees an http: src smuggled through <${wrapper}><${host}>`, () => {
+        const html = withFallback(
+          `<${wrapper}><${host}><img src="http://evil.example/beacon.png"></${host}></${wrapper}>`,
+        );
+        expect(messages(html)).toMatch(/`http:` URLs are not permitted/);
+      });
+    }
+  }
+
+  it("LISTS a remote script hidden in <svg><style> — the go-live screen must see it", () => {
+    // The verifier's own fixture. The `<p>` is on the tree builder's breakout
+    // list, so what follows it is an ordinary HTML <script> to a browser.
+    const html = withFallback(
+      '<svg><style><p></p><script src="https://evil.example/x.js"></script></style></svg>',
+    );
+    expect(parseOk(html).scriptSrcs).toEqual(["https://evil.example/x.js"]);
+  });
+
+  it("refuses a DUPLICATE slot id whose second region hides in <svg><style>", () => {
+    const html = withFallback(
+      '<div data-wolf-slot="a">1</div><svg><style><div data-wolf-slot="a">2</div></style></svg>',
+    );
+    expect(messages(html)).toMatch(/duplicate slot id "a"/);
+  });
+
+  it("refuses a <body> element hidden in <svg><style>", () => {
+    const html = withFallback("<svg><style><body></body></style></svg>");
+    expect(messages(html)).toMatch(/must not contain a `<body>`/);
+  });
+
+  it("refuses an <embed src=\"http:\"> hidden in <svg><style>", () => {
+    const html = withFallback('<svg><style><embed src="http://evil.example/x"></style></svg>');
+    expect(messages(html)).toMatch(/`http:` URLs are not permitted/);
+  });
+
+  it("checks a foreign <script>'s own src too — SVG script is not raw text either", () => {
+    expect(messages(withFallback('<svg><script src="http://evil.example/x.js"></script></svg>'))).toMatch(
+      /`http:` URLs are not permitted/,
+    );
+    expect(
+      parseOk(withFallback('<svg><script src="https://cdn.example/x.js"></script></svg>')).scriptSrcs,
+    ).toEqual(["https://cdn.example/x.js"]);
+  });
+
+  it("still accepts an ordinary SVG chart: a title, a stylesheet body and shapes", () => {
+    const html = withFallback(
+      '<svg viewBox="0 0 10 10"><title>Equity curve</title><style>.bar{fill:#333}</style>' +
+        '<g><rect class="bar"/></g></svg><div data-wolf-slot="commentary"></div>',
+    );
+    expect(parseOk(html).slotIds).toEqual(["commentary"]);
+  });
+
+  it("treats `<svg/>` as opening nothing, so a following <style> is raw text again", () => {
+    // parse5 agrees: in foreign content a self-closing start tag really does
+    // close the element, and the <img> below is then #text inside <style>.
+    const html = withFallback('<svg/><style><img src="http://evil/x.png"></style>');
+    expect(parseTemplate(html, BIG).valid).toBe(true);
+  });
+
+  it("does not end the outer subtree at an INNER </svg>", () => {
+    const html = withFallback(
+      '<svg><g><svg></svg></g><style><img src="http://evil/x.png"></style></svg>',
+    );
+    expect(messages(html)).toMatch(/`http:` URLs are not permitted/);
+  });
+
+  it("refuses an <svg> that is never closed rather than guessing where it ends", () => {
+    expect(messages(withFallback("<svg><circle/>"))).toMatch(/`<svg>` is opened and never closed/);
+    expect(messages(withFallback("<math><mi>x</mi>"))).toMatch(/`<math>` is opened and never closed/);
+  });
+
+  it("leaves HTML-content raw text raw: script and style bodies are still text", () => {
+    // The other half of the invariant. Narrowing the raw-text rule must not
+    // start reading a <script> body as markup — chart code is full of `<`.
+    const script = parseOk(withFallback("<script>var b = document.body; if (a<b) { }</script>"));
+    expect(script.slotIds).toEqual([]);
+    const style = parseOk(withFallback('<style>.a::before{content:"<img src=x>"}</style>'));
+    expect(style.scriptSrcs).toEqual([]);
+  });
+});
+
+describe("parseTemplate — a slot must RENDER, like the fallback", () => {
+  for (const [label, fragment] of [
+    ["<template>", '<template><div data-wolf-slot="chart">x</div></template>'],
+    ["<noscript>", '<noscript><div data-wolf-slot="chart">x</div></noscript>'],
+  ] as const) {
+    it(`refuses a slot inside ${label}, naming it`, () => {
+      // A <noscript>'s children are TEXT when scripting is enabled, which it
+      // is in a frame whose purpose is to run a charting library — so the
+      // daily tick would write bytes that render as literal markup, and the
+      // drift check on that slot would mean nothing.
+      const text = messages(withFallback(fragment));
+      expect(text).toMatch(/renders nothing/);
+      expect(text).toContain("chart");
+    });
+  }
+
+  it("still accepts a slot that merely FOLLOWS an inert element", () => {
+    const html = withFallback('<template><p>t</p></template><div data-wolf-slot="chart">x</div>');
+    expect(parseOk(html).slotIds).toEqual(["chart"]);
+  });
+});
+
+/**
+ * The CSS at-rule, spelled in two halves ON PURPOSE.
+ *
+ * `tools/import-boundary`'s scanner is text-based: it reads the word
+ * `import` followed by a quote as an ESM specifier, wherever it appears —
+ * including inside a string literal. Writing the at-rule out in a fixture
+ * (or in a table LABEL that ends with it) makes api/'s own
+ * `import-boundary.test.ts` fail on CSS that is not an import at all. That
+ * is a defect in the checker, logged as a discovered issue; this constant is
+ * the local workaround, and it keeps the fixtures readable.
+ */
+const AT = `@${"im"}port`;
+
+describe("parseTemplate — CSS is a URL channel too", () => {
+  const CSS_VECTORS: Array<[label: string, css: string, expected: RegExp]> = [
+    ["an http: at-rule", `${AT} url(http://evil.example/x.css);`, /`http:` URLs are not permitted/],
+    ["a quoted http: at-rule", `${AT} "http://evil.example/x.css";`, /`http:` URLs are not permitted/],
+    ["a protocol-relative background", ".a{background:url(//evil.example/x.png)}", /protocol-relative/],
+    ["a javascript: url", ".a{background:url(javascript:alert(1))}", /`javascript:`/],
+    ["a relative url", ".a{background:url(x.png)}", /must be an absolute `https:` URL/],
+  ];
+
+  for (const [label, css, expected] of CSS_VECTORS) {
+    it(`refuses ${label} in a <style> body`, () => {
+      expect(messages(withFallback(`<style>${css}</style>`))).toMatch(expected);
+    });
+  }
+
+  it("refuses an http: url in a style ATTRIBUTE, and names the element", () => {
+    const errors = errorsOf(withFallback('<div style="background:url(http://evil/x.png)">y</div>'));
+    expect(errors.map((e) => e.message).join("\n")).toMatch(/`http:` URLs are not permitted/);
+    expect(errors.map((e) => e.path)).toContain("div[style]");
+  });
+
+  it("allows a `#fragment` paint reference — how every SVG chart names its own gradient", () => {
+    expect(parseTemplate(withFallback('<div style="fill:url(#grad)">y</div>'), BIG).valid).toBe(true);
+    expect(
+      parseTemplate(withFallback("<style>.bar{fill:url(#grad)}</style>"), BIG).valid,
+    ).toBe(true);
+  });
+
+  it("allows a data: url in CSS (an image or a font, which cannot execute)", () => {
+    const html = withFallback('<div style="background:url(data:image/png;base64,AAA)">y</div>');
+    expect(parseTemplate(html, BIG).valid).toBe(true);
+  });
+
+  it("LISTS an https: at-rule URL in scriptSrcs — it is an external stylesheet", () => {
+    expect(
+      parseOk(withFallback(`<style>${AT} url("https://cdn.example/a.css");</style>`)).scriptSrcs,
+    ).toEqual(["https://cdn.example/a.css"]);
+    expect(parseOk(withFallback(`<style>${AT} "https://cdn.example/b.css";</style>`)).scriptSrcs)
+      .toEqual(["https://cdn.example/b.css"]);
+  });
+
+  it("does not list an ordinary url() — an image is not a script or a stylesheet", () => {
+    const html = withFallback('<style>.a{background:url("https://cdn.example/x.png")}</style>');
+    expect(parseOk(html).scriptSrcs).toEqual([]);
+  });
+
+  it("checks CSS inside <svg><style> as CSS as well as scanning it as markup", () => {
+    const html = withFallback('<svg><style>.a{background:url(http://evil/x.png)}</style></svg>');
+    expect(messages(html)).toMatch(/`http:` URLs are not permitted/);
+  });
+});
+
+describe("parseTemplate — character references are not decoded, and that is fail-closed", () => {
+  it("refuses an ENTITY-encoded javascript: href, by the generic rule", () => {
+    // A browser decodes `&#10;` and sees `javascript:`; this scanner does not
+    // decode, sees "some other scheme", and refuses it anyway — which is the
+    // whole reason not decoding is safe. Pinned because the module's comment
+    // used to claim the javascript: branch caught this one.
+    const text = messages(withFallback('<a href="java&#10;script:alert(1)">x</a>'));
+    expect(text).toMatch(/must be an absolute `https:` URL/);
+    expect(parseTemplate(withFallback('<a href="java&#10;script:alert(1)">x</a>'), BIG).valid).toBe(
+      false,
+    );
+  });
+
+  it("refuses an entity-encoded scheme even when it would decode to https", () => {
+    expect(parseTemplate(withFallback('<img src="&#104;ttps://cdn.example/x.png">'), BIG).valid).toBe(
+      false,
+    );
+  });
+});
+
+/**
+ * THE PARSE5 DIFFERENTIAL SWEEP, pinned.
+ *
+ * Every row below is a wrapper that was run through parse5 (7.3.0,
+ * `parseFragment`, `scriptingEnabled: true`) with the marker `<img
+ * src="http://evil.example/beacon.png">` inside it, on 2026-08-22, and in
+ * every one parse5 built a REAL element carrying that http: URL — i.e. a
+ * browser fetches it. `parseTemplate` must therefore refuse every row.
+ *
+ * parse5 is not a dependency of `api/` (W17 owns `package.json` and adds one
+ * sanitiser, nothing else), so the oracle cannot run inside this suite; what
+ * is pinned here is its RESULT. The harness that produced it is described in
+ * the fix-round-2 notes, and re-running it is the required first step before
+ * anything about what `scan()` skips is changed.
+ */
+const BROWSER_BUILDS_IT: Array<[label: string, wrapper: string]> = [
+  ["bare markup", "%s"],
+  ["after an abrupt comment close", "<!-->%s<!-- pad -->"],
+  ["after `<!--->`", "<!--->%s<!-- pad -->"],
+  ["after `--!>`", "<!-- a --!>%s<!-- pad -->"],
+  ["after an ordinary comment", "<!-- a -->%s"],
+  ["inside <svg><style>", "<svg><style>%s</style></svg>"],
+  ["inside <svg><title>", "<svg><title>%s</title></svg>"],
+  ["inside <svg><textarea>", "<svg><textarea>%s</textarea></svg>"],
+  ["inside <svg><desc>", "<svg><desc>%s</desc></svg>"],
+  ["inside <svg><foreignObject>", "<svg><foreignObject>%s</foreignObject></svg>"],
+  ["inside <svg><script>", "<svg><script>%s</script></svg>"],
+  ["inside <math><style>", "<math><style>%s</style></math>"],
+  ["inside <math><mtext>", "<math><mtext>%s</mtext></math>"],
+  [
+    "inside <math><annotation-xml>",
+    '<math><annotation-xml encoding="text/html">%s</annotation-xml></math>',
+  ],
+  ["inside an UNCLOSED <svg>", "<svg><style>%s"],
+  ["after an inner </svg> that does not close the outer one", "<svg><g><svg></svg></g><style>%s</style></svg>"],
+  ["inside <SVG><STYLE> (uppercase)", "<SVG><STYLE>%s</STYLE></SVG>"],
+  ["inside <svg/ ><style> (a stray solidus is not self-closing)", "<svg/ ><style>%s</style></svg>"],
+  ["as an unquoted attribute value's tail", "<div id=a%s>x</div>"],
+  ["inside a <table>", "<table>%s</table>"],
+];
+
+describe("parseTemplate — refuses every fragment parse5 builds a real element from", () => {
+  const MARKER = '<img src="http://evil.example/beacon.png">';
+  for (const [label, wrapper] of BROWSER_BUILDS_IT) {
+    it(`refuses an http: fetch ${label}`, () => {
+      const html = withFallback(wrapper.replace("%s", MARKER));
+      expect(parseTemplate(html, BIG).valid).toBe(false);
+    });
+  }
+});

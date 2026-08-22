@@ -39,6 +39,16 @@
  * tokenizer closely enough for the decisions it makes — raw-text elements,
  * void elements, comments, bogus comments, all three attribute-value
  * quotings — and treats anything it cannot tokenise as an error.
+ *
+ * ⚠️ **A hand-written scanner earns its keep only where it agrees with a real
+ * parser about what a TAG is**, and it has been wrong twice, both times in
+ * the same shape: a region this file skipped and a browser did not. Round one
+ * was the comment close (`commentEnd`); round two was raw text inside SVG and
+ * MathML (`FOREIGN_ROOTS`). Both were found by running parse5 over the same
+ * bytes and diffing, and both let a remote script through `scriptSrcs`
+ * unreported. Before changing anything about what this scanner SKIPS, do that
+ * diff again — the rule is that this module may be stricter than a browser,
+ * never more permissive.
  */
 
 import { createHash } from "node:crypto";
@@ -157,10 +167,47 @@ const VOID_ELEMENTS = new Set([
  * and end tag is skipped wholesale — which is why `<script>var b =
  * document.body;</script>` is not read as a `<body>` element, and why the
  * `<div>` inside a `<textarea>` is not read as a slot container.
+ *
+ * ⚠️ **Only in HTML content.** See `FOREIGN_ROOTS`.
  */
 const RAW_TEXT_ELEMENTS = new Set([
   "script", "style", "textarea", "title", "xmp", "noembed", "noframes",
 ]);
+
+/**
+ * The two elements that open FOREIGN CONTENT — SVG and MathML — inside which
+ * the HTML tree builder does **not** switch the tokenizer to raw text.
+ *
+ * ⚠️ **This is a parser differential that walked three acceptance criteria at
+ * once** (fix round 2). `style`, `title`, `textarea`, `xmp`, `noembed` and
+ * `noframes` are raw-text elements in HTML content and ordinary elements in
+ * foreign content, so a browser builds REAL elements out of markup written
+ * inside `<svg><style>…</style></svg>` while a scanner that treats raw text
+ * unconditionally sees nothing at all. Verified against parse5 on the
+ * identical bytes, three rules were bypassable through that one hole:
+ *
+ *  - `<svg><style><p></p><script src="https://evil…"></script></style></svg>`
+ *    builds an HTML `<script>` (the `<p>` is on the tree builder's breakout
+ *    list, so what follows it is HTML again) — a remote script the go-live
+ *    review screen would have reported as ZERO remote scripts, after which
+ *    `structureHash` freezes it in place;
+ *  - `<svg><style><img src="http://evil…"></style></svg>` builds an HTML
+ *    `<img>` — a non-https fetch, and `<embed src="http://…">` the same;
+ *  - `<svg><style><div data-wolf-slot="a">…</div></style></svg>` builds a
+ *    second real slot region, so a duplicate id passes and the second region
+ *    is never filled and never drifts.
+ *
+ * So the raw-text skip below is suppressed inside an `<svg>`/`<math>`
+ * subtree: everything there is TOKENISED, and every rule sees it. That is
+ * strictly the fail-closed direction. It also makes this scanner *stricter*
+ * than a browser in two places — inside an SVG integration point (`<title>`,
+ * `<desc>`, `<foreignObject>`) HTML rules resume, so a browser would treat a
+ * nested `<style>` body as text again, and the tree builder's breakout list
+ * can return to HTML content before this scanner's `</svg>` does. Refusing
+ * markup a browser would have ignored is a fixable authoring complaint;
+ * accepting markup a browser would have FETCHED is a forged lock.
+ */
+const FOREIGN_ROOTS = new Set(["svg", "math"]);
 
 /** The skeleton `composeFrame` owns. None of these may appear in a fragment. */
 const SKELETON_ELEMENTS = new Set(["html", "head", "body"]);
@@ -191,6 +238,12 @@ interface StartTag {
   selfClosing: boolean;
   start: number;
   end: number;
+  /**
+   * For a `<style>` element only: the CSS text between its tags. CSS is a URL
+   * channel of its own (`@import`, `url(…)`) and is checked as one — see
+   * `cssUrls`.
+   */
+  cssText?: string;
 }
 
 interface EndTag {
@@ -360,6 +413,8 @@ function commentEnd(html: string, start: number): number | null {
 function scan(html: string): ScanResult {
   const tokens: Token[] = [];
   const errors: TemplateError[] = [];
+  /** The open `<svg>`/`<math>` elements, innermost last. See `FOREIGN_ROOTS`. */
+  const foreign: Array<{ name: string; offset: number }> = [];
   let i = 0;
 
   while (i < html.length) {
@@ -434,6 +489,16 @@ function scan(html: string): ScanResult {
       }
       tokens.push({ type: "end", name, start: i, end: parsed.end });
       i = parsed.end;
+      if (FOREIGN_ROOTS.has(name)) {
+        // Innermost matching open element, if any; an unmatched `</svg>` is
+        // ignored exactly as the tree builder ignores it.
+        for (let f = foreign.length - 1; f >= 0; f -= 1) {
+          if (foreign[f]?.name === name) {
+            foreign.length = f;
+            break;
+          }
+        }
+      }
       continue;
     }
 
@@ -457,17 +522,31 @@ function scan(html: string): ScanResult {
       });
       break;
     }
-    tokens.push({
+    const token: StartTag = {
       type: "start",
       name,
       attributes: parsed.attributes,
       selfClosing: parsed.selfClosing,
       start: i,
       end: parsed.end,
-    });
+    };
+    tokens.push(token);
     i = parsed.end;
 
-    if (RAW_TEXT_ELEMENTS.has(name) && !parsed.selfClosing) {
+    // In foreign content a self-closing start tag really does close the
+    // element, so `<svg/>` opens nothing.
+    if (FOREIGN_ROOTS.has(name) && !parsed.selfClosing) {
+      foreign.push({ name, offset: token.start });
+      continue;
+    }
+
+    // The raw-text skip — suppressed inside foreign content (FOREIGN_ROOTS),
+    // where these are ordinary elements whose children a browser really
+    // builds. `<style>` is special twice over: its body is CSS, a URL channel
+    // of its own, so it is CAPTURED here whether or not it is skipped.
+    const isRawText = RAW_TEXT_ELEMENTS.has(name) && !parsed.selfClosing;
+    const inForeign = foreign.length > 0;
+    if (isRawText && (!inForeign || name === "style")) {
       const closer = new RegExp(`</${name}[\\s/>]`, "i");
       const rest = html.slice(i);
       const match = closer.exec(rest);
@@ -479,8 +558,23 @@ function scan(html: string): ScanResult {
         });
         break;
       }
-      i += match.index;
+      if (name === "style") token.cssText = rest.slice(0, match.index);
+      // Inside foreign content the body is scanned as markup as well: the
+      // element is a real one there, and its children are real children.
+      if (!inForeign) i += match.index;
     }
+  }
+
+  if (errors.length === 0 && foreign.length > 0) {
+    const open = foreign[0];
+    errors.push({
+      path: "template",
+      message:
+        `\`<${open?.name}>\` is opened and never closed: inside SVG and MathML the parser ` +
+        "cannot tell where foreign content ends, so an unclosed one is refused rather than " +
+        "guessed at",
+      offset: open?.offset,
+    });
   }
 
   return { tokens, errors };
@@ -510,8 +604,19 @@ type UrlVerdict =
 /**
  * Strips exactly what a browser strips before it resolves a URL attribute:
  * leading and trailing ASCII whitespace, and every tab/newline/CR ANYWHERE
- * in the value. Without this, `java&#10;script:` — a real, historical bypass
- * — classifies as "some other scheme" instead of as `javascript:`.
+ * in the value. Without this, a RAW newline or tab inside `java\nscript:` —
+ * a real, historical bypass — would classify as "some other scheme" instead
+ * of as `javascript:`.
+ *
+ * ⚠️ Character references are **not** decoded, here or anywhere in this
+ * module: the scanner keeps attribute values as written. A browser decodes
+ * them, so `java&#10;script:alert(1)` really is a `javascript:` URL to a
+ * browser and is merely "some other scheme" here — it is still REFUSED, by
+ * the generic branch of `classifyUrl`, because anything that is not an
+ * absolute `https:` URL is refused. That is the only reason not decoding is
+ * safe: no undecoded spelling of a hostile URL can start with `https:`, so
+ * the fail-closed default catches every one of them. Do not "improve" this
+ * into a permissive decoder.
  *
  * This is a classification-only view. The stored bytes are never touched.
  */
@@ -519,8 +624,18 @@ function urlForClassification(raw: string): string {
   return raw.replace(/[\t\n\r]/g, "").trim();
 }
 
-/** Classifies ONE URL value. The four vectors get four DISTINCT messages. */
-function classifyUrl(raw: string, tag: string): UrlVerdict {
+/**
+ * Classifies ONE URL value. The four vectors get four DISTINCT messages.
+ *
+ * `subject` names what is being classified in the generic (not-a-known-vector)
+ * message, so a CSS `url(…)` failure does not tell an author to fix an `href`
+ * they never wrote.
+ */
+function classifyUrl(
+  raw: string,
+  tag: string,
+  subject = "every src and href in a report template",
+): UrlVerdict {
   const value = urlForClassification(raw);
   const lower = value.toLowerCase();
 
@@ -563,9 +678,49 @@ function classifyUrl(raw: string, tag: string): UrlVerdict {
   return {
     ok: false,
     message:
-      `every src and href in a report template must be an absolute \`https:\` URL; ` +
+      `${subject} must be an absolute \`https:\` URL; ` +
       `${JSON.stringify(value)} is not one`,
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* CSS is a URL channel too                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Every URL a stylesheet can fetch: `@import` (in both its spellings) and
+ * `url(…)` in any of its three quotings.
+ *
+ * ⚠️ This is not in the ticket's wording — that names `src` and `href` — but
+ * `<style>@import url(http://evil/x.css)</style>` and
+ * `<div style="background:url(http://evil/x.png)">` are the same daily,
+ * human-unreviewed egress channel the https-only rule exists to close, and
+ * W25's authoring contract states the rule as "every URL must be `https:`".
+ * A CSS URL is therefore held to the same rule, with one carve-out the
+ * attribute rule does not need: a bare `#fragment` is allowed, because
+ * `fill:url(#gradient)` is how every SVG chart references its own paint
+ * server and resolves inside the document rather than over the network.
+ */
+function cssUrls(css: string): Array<{ value: string; isImport: boolean }> {
+  const found: Array<{ value: string; isImport: boolean }> = [];
+  const pattern =
+    /@import\s+(?:url\(\s*(?:"([^"]*)"|'([^']*)'|([^)"'\s]*))\s*\)|"([^"]*)"|'([^']*)')|url\(\s*(?:"([^"]*)"|'([^']*)'|([^)"'\s]*))\s*\)/gi;
+  for (const match of css.matchAll(pattern)) {
+    const value =
+      match[1] ?? match[2] ?? match[3] ?? match[4] ?? match[5] ??
+      match[6] ?? match[7] ?? match[8] ?? "";
+    found.push({ value, isImport: /^@import/i.test(match[0]) });
+  }
+  return found;
+}
+
+/** Classifies ONE CSS URL. See `cssUrls` for why `#fragment` is allowed. */
+function classifyCssUrl(raw: string): UrlVerdict {
+  const value = urlForClassification(raw);
+  if (value === "" || value.startsWith("#")) return { ok: true };
+  // `img` as the tag: a `data:` URL in CSS is an image or a font, and cannot
+  // execute — the same allowance `<img src="data:…">` gets.
+  return classifyUrl(value, "img", "every URL in a report template's CSS");
 }
 
 /**
@@ -754,6 +909,29 @@ export function parseTemplate(html: string, maxBytes: number): ParseTemplateResu
       }
     }
 
+    // (4b) CSS IS A URL CHANNEL TOO — see `cssUrls`.
+    const styleAttribute = attributeValue(token, "style");
+    const cssSources: Array<{ path: string; css: string }> = [];
+    if (styleAttribute !== undefined && styleAttribute !== "") {
+      cssSources.push({ path: `${token.name}[style]`, css: styleAttribute });
+    }
+    if (token.name === "style" && token.cssText !== undefined) {
+      cssSources.push({ path: "style", css: token.cssText });
+    }
+    for (const source of cssSources) {
+      for (const { value, isImport } of cssUrls(source.css)) {
+        const verdict = classifyCssUrl(value);
+        if (!verdict.ok) {
+          errors.push({ path: source.path, message: verdict.message, offset: token.start });
+          continue;
+        }
+        // An `@import` fetches an external STYLESHEET, which is exactly what
+        // the go-live review screen exists to show a human.
+        const url = urlForClassification(value);
+        if (isImport && url !== "" && !url.startsWith("#")) scriptSrcs.push(url);
+      }
+    }
+
     // The URLs a human approves at go-live: remote script, remote stylesheet.
     if (token.name === "script") {
       const src = attributeValue(token, "src");
@@ -776,6 +954,22 @@ export function parseTemplate(html: string, maxBytes: number): ParseTemplateResu
         message:
           `slot id ${JSON.stringify(slotId)} must match ${SLOT_ID_PATTERN.source} ` +
           "(lowercase, starting with a letter, at most 32 characters)",
+        offset: token.start,
+      });
+      continue;
+    }
+    if (inert) {
+      // Same reasoning as the fallback rule above, applied to slots: a
+      // `<template>`'s content is an inert fragment and a `<noscript>`'s
+      // children are TEXT whenever scripting is enabled — which it is, in a
+      // frame whose whole purpose is to run a charting library. Filling a
+      // slot in there writes bytes that render as literal markup or not at
+      // all, and W20's drift check on that slot would be meaningless.
+      errors.push({
+        path: `[${SLOT_ATTRIBUTE}="${slotId}"]`,
+        message:
+          `slot ${JSON.stringify(slotId)} is inside a \`<template>\` or \`<noscript>\`, which ` +
+          "renders nothing: the daily tick would fill bytes no operator ever sees",
         offset: token.start,
       });
       continue;
