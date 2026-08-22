@@ -6,6 +6,7 @@ import { WolfError } from "./errors.js";
 import { parseTemplate } from "./report/template.js";
 import {
   DEFAULT_GATEWAY_FALLBACK,
+  DEFAULT_WOLF_POLL_INTERVAL_SECONDS,
   loadConfig,
   parseDefaultGatewayFromProcRoute,
   resolveMcpUrl,
@@ -598,6 +599,57 @@ describe("WOLF_REPORT_MAX_BYTES / WOLF_SERIES_MAX_POINTS (W16)", () => {
     const { reportMaxBytes } = loadConfig({}, noRoutes);
     expect(parseTemplate(html, reportMaxBytes).valid).toBe(true);
     expect(parseTemplate(html, 10).valid).toBe(false);
+  });
+});
+
+// design/2026-08-20-agent-wolf.md, W10's Files line: "modify … api/src/config.ts,
+// api/src/config.test.ts, .env.example AND docker-compose.yml
+// (WOLF_POLL_INTERVAL_SECONDS — all three places, R81/R110/R111)". The third
+// place is enforced by the block at the bottom of this file; these cases
+// gate the VALUE.
+describe("WOLF_POLL_INTERVAL_SECONDS (W10)", () => {
+  const noRoutes = routeSourceReturning(undefined);
+
+  it("defaults to 300 seconds", () => {
+    expect(loadConfig({}, noRoutes).pollIntervalSeconds).toBe(
+      DEFAULT_WOLF_POLL_INTERVAL_SECONDS,
+    );
+    expect(DEFAULT_WOLF_POLL_INTERVAL_SECONDS).toBe(300);
+  });
+
+  it("is overridable, so an e2e run can poll every second", () => {
+    expect(loadConfig({ WOLF_POLL_INTERVAL_SECONDS: "1" }, noRoutes).pollIntervalSeconds).toBe(1);
+  });
+
+  it("treats the empty string as ABSENT and falls back to the default (R80)", () => {
+    // Compose forwards `${WOLF_POLL_INTERVAL_SECONDS:-}` as "", and
+    // `z.coerce.number()` turns "" into 0 — a 0 ms interval that spins the
+    // event loop while looking exactly like the default. `present()` is what
+    // stops that, and this is the test that says so.
+    expect(loadConfig({ WOLF_POLL_INTERVAL_SECONDS: "" }, noRoutes).pollIntervalSeconds).toBe(300);
+    expect(Number("")).toBe(0); // the coercion this guards against
+  });
+
+  it("fails fast naming the variable on a value that is not a whole count of seconds in range", () => {
+    for (const bad of ["0", "-1", "1.5", "5m", "300s", "86401", "abc"]) {
+      try {
+        loadConfig({ WOLF_POLL_INTERVAL_SECONDS: bad }, noRoutes);
+        throw new Error(`expected loadConfig to throw for ${JSON.stringify(bad)}`);
+      } catch (err) {
+        expect(err).toBeInstanceOf(WolfError);
+        expect((err as WolfError).kind).toBe("misconfigured");
+        expect((err as WolfError).message).toContain("WOLF_POLL_INTERVAL_SECONDS");
+      }
+    }
+  });
+
+  it("is documented in .env.example with its _SECONDS unit spelled out", () => {
+    const example = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".env.example"),
+      "utf8",
+    );
+    expect(example).toContain("WOLF_POLL_INTERVAL_SECONDS=300");
+    expect(example).toContain("SECONDS");
   });
 });
 

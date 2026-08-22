@@ -12,7 +12,14 @@ import {
 
 import { WolfError } from "../errors.js";
 import { createOrangeClient, type OrangeClient } from "../orange/client.js";
+import { toMs, toSec, type DeliveryRecord } from "../orange/types.js";
 import {
+  IN_FLIGHT_DELIVERY_STATUSES,
+  evaluationLineWithoutTimestamp,
+  formatEvaluationSummaryLine,
+  inFlightSessionIds,
+  parseEvaluationContent,
+  type EvaluationSnapshot,
   HYPOTHESIS_ID_PATTERN,
   LABEL_VALUE_PATTERN,
   MAX_LABEL_VALUE_LENGTH,
@@ -1717,5 +1724,372 @@ describe("store_read_latest_report", () => {
   it("store_read_latest_report: an id absent from the session index is not_found", async () => {
     const { store } = harness({ sessions: [] });
     await expect(store.readLatestReport(ID)).rejects.toMatchObject({ kind: "not_found" });
+  });
+});
+
+// ── W10: the kind=evaluation append, its summary line, and the in-flight
+//        exclusion the poller shares with W9's teardown ─────────────────
+//
+// ⚠️ The Orange bodies in this block are SYNTHETIC, not captured — unlike
+// every other body in this file. Nothing has ever written a `kind=evaluation`
+// row against a live stack (W10's poller is the first writer, and it is this
+// commit), so there is nothing to capture. They are built out of the same
+// wire shape the recorded rows above use, and the recorded rows are what pins
+// that shape; they are NOT presented as recordings.
+
+describe("store_evaluation_line", () => {
+  const AT = toMs(Date.UTC(2026, 7, 20, 6, 5, 0));
+
+  it("store_evaluation_line: is byte-for-byte the line § 'Where the board's numbers come from' prints", () => {
+    expect(
+      formatEvaluationSummaryLine({
+        supportScore: -0.42,
+        tripped: 1,
+        holding: 3,
+        indeterminate: 0,
+        evaluatedAtMs: AT,
+      }),
+    ).toBe("score=-0.42 tripped=1 holding=3 indeterminate=0 evaluated=2026-08-20T06:05:00Z");
+  });
+
+  it("store_evaluation_line: round-trips through the ONE parser the board reads it with", () => {
+    // Writer and reader in one assertion: a second parser, or a writer that
+    // drifted from it, shows the board no score at all — silently, because
+    // `parseEvaluationSummaryLine` never throws.
+    const line = formatEvaluationSummaryLine({
+      supportScore: 0.5,
+      tripped: 0,
+      holding: 2,
+      indeterminate: 1,
+      evaluatedAtMs: AT,
+      attention: 2,
+    });
+    expect(line.endsWith(" attention=2")).toBe(true);
+    expect(parseEvaluationSummaryLine(line)).toEqual({
+      supportScore: 0.5,
+      tripped: 0,
+      holding: 2,
+      indeterminate: 1,
+      evaluatedAtMs: AT,
+    });
+  });
+
+  it("store_evaluation_line: emits no attention token when nothing is raised", () => {
+    const line = formatEvaluationSummaryLine({
+      supportScore: 0,
+      tripped: 0,
+      holding: 1,
+      indeterminate: 0,
+      evaluatedAtMs: AT,
+      attention: 0,
+    });
+    expect(line).not.toContain("attention");
+  });
+
+  it("store_evaluation_line: `evaluationLineWithoutTimestamp` strips ONLY the clock", () => {
+    // This is the comparison the "append only when the line changes" rule
+    // uses. `evaluated=` moves every tick, so comparing whole lines would
+    // append 288 rows a day for a hypothesis nothing happened to.
+    const a = formatEvaluationSummaryLine({
+      supportScore: 0.5, tripped: 0, holding: 2, indeterminate: 1, evaluatedAtMs: AT,
+    });
+    const b = formatEvaluationSummaryLine({
+      supportScore: 0.5, tripped: 0, holding: 2, indeterminate: 1, evaluatedAtMs: toMs(AT + 3_600_000),
+    });
+    expect(a).not.toBe(b);
+    expect(evaluationLineWithoutTimestamp(a)).toBe(evaluationLineWithoutTimestamp(b));
+    expect(evaluationLineWithoutTimestamp(a)).toBe(
+      "score=0.50 tripped=0 holding=2 indeterminate=1",
+    );
+  });
+
+  it("store_evaluation_line: a changed attention count IS a change to the line", () => {
+    const without = formatEvaluationSummaryLine({
+      supportScore: 0, tripped: 0, holding: 0, indeterminate: 1, evaluatedAtMs: AT,
+    });
+    const with1 = formatEvaluationSummaryLine({
+      supportScore: 0, tripped: 0, holding: 0, indeterminate: 1, evaluatedAtMs: AT, attention: 1,
+    });
+    expect(evaluationLineWithoutTimestamp(without)).not.toBe(
+      evaluationLineWithoutTimestamp(with1),
+    );
+  });
+});
+
+describe("store_evaluation_append", () => {
+  const ID = "1a2b3c4d";
+  const SESSIONS = sessionsNamed("hyp-1a2b3c4d");
+
+  function snapshot(overrides: Partial<EvaluationSnapshot> = {}): EvaluationSnapshot {
+    return {
+      evaluated_at_ms: Date.UTC(2026, 7, 20, 6, 5, 0),
+      support_score: -0.42,
+      conditions: [
+        {
+          id: "inv-1",
+          metric: "basket",
+          state: "tripped",
+          reason: "condition_tripped",
+          value: -30,
+          threshold: -25,
+          op: "lt",
+          window_start_ms: Date.UTC(2026, 6, 21),
+          window_end_ms: Date.UTC(2026, 7, 20),
+          observations_in_window: 21,
+        },
+      ],
+      metrics: [
+        {
+          slug: "basket",
+          direction: "up",
+          realised_change_pct: -30,
+          last_observation_ms: Date.UTC(2026, 7, 19),
+          stale: false,
+          stale_reason: null,
+        },
+      ],
+      ...overrides,
+    };
+  }
+
+  it("store_evaluation_append: labels are exactly kind + name, and line 1 is the summary line", async () => {
+    const { store, stub } = harness({ sessions: SESSIONS });
+    await store.appendEvaluation({ id: ID, snapshot: snapshot() });
+
+    const body = JSON.parse(stub.appendRequests[0]?.body ?? "{}") as {
+      labels: Record<string, string>;
+      content: string;
+      embed: boolean;
+    };
+    // § "Memory kinds" gives this row no `status` and no `owner`.
+    expect(body.labels).toEqual({ kind: "evaluation", name: ID });
+    expect(body.embed).toBe(false);
+    const [line, ...rest] = body.content.split("\n");
+    expect(line).toBe(
+      "score=-0.42 tripped=1 holding=0 indeterminate=0 evaluated=2026-08-20T06:05:00Z",
+    );
+    // ...and the rest is the WHOLE snapshot, which is what makes the memory
+    // outlive O3's 30-version dataset reaper.
+    expect(JSON.parse(rest.join("\n"))).toEqual(snapshot());
+  });
+
+  it("store_evaluation_append: attention rides in the body AND on line 1", async () => {
+    const { store, stub } = harness({ sessions: SESSIONS });
+    const withAttention = snapshot({
+      attention: [{ condition_id: "inv-1", reason: "insufficient_coverage", since_ms: toMs(1) }],
+    });
+    await store.appendEvaluation({ id: ID, snapshot: withAttention });
+    const content = (JSON.parse(stub.appendRequests[0]?.body ?? "{}") as { content: string })
+      .content;
+    expect(content.split("\n")[0]).toContain(" attention=1");
+    expect(parseEvaluationContent(content).snapshot).toEqual(withAttention);
+  });
+
+  it("store_evaluation_append: refuses anything that is not a bare 8-hex id", async () => {
+    const { store, stub } = harness({ sessions: SESSIONS });
+    await expect(
+      store.appendEvaluation({ id: "hyp-1a2b3c4d", snapshot: snapshot() }),
+    ).rejects.toMatchObject({ kind: "invalid" });
+    expect(stub.appendRequests).toHaveLength(0);
+  });
+
+  it("store_evaluation_append: parseEvaluationContent survives a body that does not parse", () => {
+    // A row Wolf cannot fully read is still a row the board has to render.
+    expect(parseEvaluationContent("score=1.00 tripped=0\nnot json at all")).toEqual({
+      line: "score=1.00 tripped=0",
+      snapshot: null,
+    });
+  });
+});
+
+describe("store_evaluation_rows", () => {
+  const ID = "1a2b3c4d";
+  const SESSIONS = sessionsNamed("hyp-1a2b3c4d");
+
+  function evalRow(extra: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: "ev-1",
+      labels: { kind: "evaluation", name: ID },
+      snippet: "score=0.00 tripped=0 holding=1 indeterminate=0 evaluated=2026-08-20T00:00:00Z\n{",
+      score: 0,
+      created_by_worker: "",
+      created_by_session: "",
+      created_at: 1787334048000,
+      ...extra,
+    };
+  }
+
+  it("store_evaluation_rows: reads with include_retracted=1 and the kind+name selector", async () => {
+    const { store, stub } = harness({
+      sessions: SESSIONS,
+      details: { [ID]: JSON.stringify({ memories: [evalRow()] }) },
+    });
+    const rows = await store.readEvaluationRows(ID);
+    expect(rows.map((r) => r.id)).toEqual(["ev-1"]);
+    const request = stub.memoryRequests.find((r) => r.path.includes("kind%3Devaluation"));
+    expect(request?.path).toContain("include_retracted=1");
+    expect(request?.path).toContain(`name%3D${ID}`);
+  });
+
+  it("store_evaluation_rows: an UNTRUSTED row is dropped — a container cannot set the score", async () => {
+    const { store } = harness({
+      sessions: SESSIONS,
+      details: {
+        [ID]: JSON.stringify({
+          memories: [
+            evalRow({ id: "ev-forged", created_by_session: "sess-77c1e2d5" }),
+            evalRow({ id: "ev-real" }),
+          ],
+        }),
+      },
+    });
+    expect((await store.readEvaluationRows(ID)).map((r) => r.id)).toEqual(["ev-real"]);
+  });
+
+  it("store_evaluation_rows: a row WOLF retracted is gone; one a container 'retracted' is not", async () => {
+    const { store } = harness({
+      sessions: SESSIONS,
+      details: {
+        [ID]: JSON.stringify({
+          memories: [
+            evalRow({
+              id: "ev-withdrawn",
+              retracted_by: [
+                {
+                  memory_id: "ret-1",
+                  created_by_worker: "",
+                  created_by_session: "",
+                  created_at: 1787334049000,
+                },
+              ],
+            }),
+            evalRow({
+              id: "ev-attacked",
+              retracted_by: [
+                {
+                  memory_id: "ret-2",
+                  created_by_worker: "researcher-1a2b3c4d",
+                  created_by_session: "",
+                  created_at: 1787334049000,
+                },
+              ],
+            }),
+          ],
+        }),
+      },
+    });
+    expect((await store.readEvaluationRows(ID)).map((r) => r.id)).toEqual(["ev-attacked"]);
+  });
+
+  it("store_evaluation_rows: readEvaluationSnapshot returns the parsed body, null when it does not parse", async () => {
+    const { store } = harness({
+      sessions: SESSIONS,
+      memoriesById: {
+        "ev-1": JSON.stringify({
+          id: "ev-1",
+          labels: { kind: "evaluation", name: ID },
+          content: "score=0.00 tripped=0 holding=0 indeterminate=1 evaluated=2026-08-20T00:00:00Z\n" +
+            JSON.stringify({ evaluated_at_ms: 1, support_score: 0, conditions: [], metrics: [] }),
+          created_by_worker: "",
+          created_by_session: "",
+          created_at: 1787334048000,
+        }),
+        "ev-2": JSON.stringify({
+          id: "ev-2",
+          labels: { kind: "evaluation", name: ID },
+          content: "score=0.00\nnot json",
+          created_by_worker: "",
+          created_by_session: "",
+          created_at: 1787334048000,
+        }),
+      },
+    });
+    expect(await store.readEvaluationSnapshot("ev-1")).toMatchObject({ support_score: 0 });
+    expect(await store.readEvaluationSnapshot("ev-2")).toBeNull();
+  });
+});
+
+describe("store_in_flight_exclusion", () => {
+  const WORKER = "researcher-1a2b3c4d";
+
+  function delivery(over: Partial<DeliveryRecord>): DeliveryRecord {
+    return {
+      id: "d-1",
+      project: "wolf",
+      eventId: "evt",
+      subscriptionId: "sub",
+      sessionId: "sess-tick-1",
+      worker: WORKER,
+      scheduleId: "sched-1",
+      status: "running",
+      failureReason: "",
+      startedAtSec: toSec(0),
+      endedAtSec: toSec(0),
+      createdAtSec: toSec(1787334311),
+      updatedAtSec: toSec(1787334311),
+      ...over,
+    };
+  }
+
+  it("store_in_flight_exclusion: pending and running count; every other status does not", () => {
+    // ENUMERATED, never `!isTerminal(...)`: a status Orange adds later must be
+    // classified deliberately rather than inherited as "safe to delete".
+    expect([...IN_FLIGHT_DELIVERY_STATUSES].sort()).toEqual(["pending", "running"]);
+    for (const status of ["pending", "running"]) {
+      expect([...inFlightSessionIds([delivery({ status })], WORKER)]).toEqual(["sess-tick-1"]);
+    }
+    for (const status of ["succeeded", "failed", "dropped", "skipped"]) {
+      expect([...inFlightSessionIds([delivery({ status })], WORKER)]).toEqual([]);
+    }
+  });
+
+  it("store_in_flight_exclusion: another worker's in-flight delivery protects nothing here", () => {
+    expect([
+      ...inFlightSessionIds([delivery({ worker: "researcher-99999999" })], WORKER),
+    ]).toEqual([]);
+  });
+
+  it("store_in_flight_exclusion: a delivery with no session yet contributes no id", () => {
+    // A `pending` delivery has not started a session; adding "" would make the
+    // set's size lie about how many sessions are protected.
+    expect([...inFlightSessionIds([delivery({ status: "pending", sessionId: "" })], WORKER)])
+      .toEqual([]);
+  });
+});
+
+describe("store_shared_transition_mutex", () => {
+  const ID = "1a2b3c4d";
+
+  it("store_shared_transition_mutex: two stores in one process still serialise the same id", async () => {
+    // W10's poller runs beside the Express app and cannot share its store —
+    // `createApp` builds its own and returns only the app. A per-instance
+    // mutex would let the poller's `live -> challenged` and a human's
+    // `/verdict` both read `live` and both append, which is the exact race
+    // W5's machine exists to close.
+    const { stub } = harness({
+      sessions: sessionsNamed("hyp-1a2b3c4d"),
+      board: fixture("board-all-trusted-include-retracted.json"),
+      details: { [ID]: fixture("detail-1a2b3c4d-include-retracted.json") },
+      memoriesById: {
+        "9d253a61-79f6-46b1-ad25-a552761b0a6d": fixture("memory-by-id-1a2b3c4d.json"),
+      },
+    });
+    const a = createHypothesisStore({ client: orange() });
+    const b = createHypothesisStore({ client: orange() });
+
+    await Promise.allSettled([
+      a.transition({ id: ID, to: "challenged" }),
+      b.transition({ id: ID, to: "challenged" }),
+    ]);
+
+    // Serialised: B's reads happen AFTER A's append, so requests fall between
+    // the two POSTs. Interleaved, both stores would have finished reading
+    // before either wrote and the two POSTs would be adjacent.
+    const posts = stub.requests
+      .map((r, i) => ({ r, i }))
+      .filter(({ r }) => r.method === "POST")
+      .map(({ i }) => i);
+    expect(posts).toHaveLength(2);
+    expect((posts[1] ?? 0) - (posts[0] ?? 0)).toBeGreaterThan(1);
   });
 });

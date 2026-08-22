@@ -61,6 +61,13 @@ services:
       # process silently runs the default instead.
       WOLF_SCHEDULE_CRON: ${WOLF_SCHEDULE_CRON:-}
       WOLF_TEARDOWN_DRAIN_SECONDS: ${WOLF_TEARDOWN_DRAIN_SECONDS:-}
+      # W10's evaluation poller. Optional, and it carries its default from
+      # api/src/config.ts when left empty — which is exactly why it needs a
+      # line here (R81/R110/R111): without one, the interval an operator sets
+      # in .env never reaches this container and the process silently sweeps
+      # every 300 seconds. api/src/config.test.ts's "R81/R110" block fails if
+      # this line is missing.
+      WOLF_POLL_INTERVAL_SECONDS: ${WOLF_POLL_INTERVAL_SECONDS:-}
       # W12's session image and critic schedule. Both are documented in
       # .env.example and read by api/src/config.ts, but W12 never added them
       # here — so until now an operator who set WOLF_CRITIC_CRON in .env got

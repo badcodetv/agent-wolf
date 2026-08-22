@@ -2,6 +2,9 @@ import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { createLogger } from "./logger.js";
 import { WolfError } from "./errors.js";
+import { createOrangeClient } from "./orange/client.js";
+import { createHypothesisStore } from "./hypothesis/store.js";
+import { createPoller } from "./hypothesis/poller.js";
 
 /**
  * A `WolfError` raised while wiring the process up is fatal and gets one
@@ -62,6 +65,39 @@ function main(): void {
 
   app.listen(config.port, () => {
     logger.info({ port: config.port, nodeEnv: config.nodeEnv }, "wolf-api listening");
+
+    // ⚠️ THE EVALUATION POLLER STARTS HERE, AFTER `listen`, AND NOWHERE ELSE.
+    //
+    // W10's second acceptance criterion: "The interval is started in
+    // api/src/index.ts after app.listen, NEVER as an import side effect. A
+    // test that imports createApp asserts no timer was scheduled — otherwise
+    // every route test in the repo starts a live poller." `app.ts` therefore
+    // does not import this module at all, and `createPoller` schedules
+    // nothing until `start()` is called. `poller.test.ts` gates both halves.
+    //
+    // Started INSIDE the listen callback rather than after it so the first
+    // tick cannot race the port actually being bound — the poller talks to
+    // Orange, not to this process, but a poller running while the process is
+    // still failing to bind would delete tick sessions for a service that is
+    // about to exit.
+    //
+    // This is a SECOND Orange client and a second hypothesis store: createApp
+    // builds its own and returns only the Express app, and app.ts belongs to
+    // other tickets. The per-id transition mutex is shared at module scope in
+    // store.ts precisely so those two stores still serialise state changes
+    // against each other.
+    const client = createOrangeClient({
+      baseUrl: config.orangeBaseUrl,
+      apiKey: config.orangeApiKey,
+      logger,
+    });
+    const poller = createPoller({
+      client,
+      store: createHypothesisStore({ client, logger }),
+      logger,
+      config: { pollIntervalSeconds: config.pollIntervalSeconds },
+    });
+    poller.start();
   });
 }
 

@@ -64,6 +64,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { WolfError } from "../errors.js";
 import type { Logger } from "../logger.js";
 import type {
+  DeliveryRecord,
   MemoryRecord,
   MemoryRetraction,
   MemorySearchResultRow,
@@ -72,8 +73,14 @@ import type {
   UnixSec,
 } from "../orange/types.js";
 import type { ListMemoriesParams, ListSessionsParams, OrangeClient } from "../orange/client.js";
-import type { EvaluationResult } from "./evaluate.js";
+// The ONE sanctioned plain-number -> UnixMs conversion. W4's `EvaluationResult`
+// types its own timestamps with a plain `number` alias, so every value that
+// crosses from an evaluation into this module's branded `UnixMs` goes through
+// here rather than through a cast.
+import { toMs } from "../orange/types.js";
+import type { EvaluationResult, Reason } from "./evaluate.js";
 import {
+  KeyedMutex,
   createTransitioner,
   type HypothesisStatus,
   type TransitionOutcome,
@@ -476,6 +483,231 @@ export function parseEvaluationSummaryLine(line: string): EvaluationSummaryLine 
   };
 }
 
+// ── Writing the evaluation memory (W10) ─────────────────────────────────
+
+/**
+ * One derived attention entry (W10). Raised when the SAME condition id has
+ * been `indeterminate` in three consecutive `kind=evaluation` memories.
+ *
+ * There is deliberately no counter field anywhere: the run length is derived
+ * from the last three memories on every tick, which is what makes a restart
+ * not reset it.
+ */
+export interface AttentionEntry {
+  condition_id: string;
+  /** W4's closed `Reason` vocabulary, never a free string. `null` is legal. */
+  reason: Reason | null;
+  /** When the run started — the first evaluation in it. Unix MILLISECONDS. */
+  since_ms: UnixMs;
+}
+
+/**
+ * The JSON body of a `kind=evaluation` memory: W4's `EvaluationResult`
+ * verbatim, plus `attention` when — and only when — the poller derived some.
+ *
+ * `attention` is an ADDITION to the pinned shape, not a change to it: W8's
+ * summary-line parser ignores unrecognised `key=value` tokens and W4's own
+ * consumers read named fields, so an absent key and an empty array must not
+ * both be written. Absent means "nothing to raise".
+ */
+export interface EvaluationSnapshot extends EvaluationResult {
+  attention?: AttentionEntry[];
+}
+
+/** The condition-state tally the summary line carries. */
+export interface ConditionTally {
+  tripped: number;
+  holding: number;
+  indeterminate: number;
+}
+
+export function tallyConditions(evaluation: EvaluationResult): ConditionTally {
+  const tally: ConditionTally = { tripped: 0, holding: 0, indeterminate: 0 };
+  for (const condition of evaluation.conditions) {
+    if (condition.state === "tripped") tally.tripped += 1;
+    else if (condition.state === "holding") tally.holding += 1;
+    else tally.indeterminate += 1;
+  }
+  return tally;
+}
+
+/** RFC3339 in UTC with whole seconds — the spelling § "Where the board's
+ * numbers come from" prints in the summary line, and the one the canonical
+ * dataset CSV uses. `toISOString()` alone would append `.000`. */
+export function toRfc3339Seconds(ms: UnixMs): string {
+  return new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+/** How many decimals `score=` carries. Two, as § "Where the board's numbers
+ * come from" prints it — and deliberately fewer than the JSON body's exact
+ * value, so float noise in the last bits cannot make an unchanged evaluation
+ * look like a changed one and append a memory every five minutes. */
+const SCORE_DECIMALS = 2;
+
+/**
+ * Line 1 of a `kind=evaluation` memory:
+ *
+ * ```
+ * score=-0.42 tripped=1 holding=3 indeterminate=0 evaluated=2026-08-20T06:05:00Z
+ * ```
+ *
+ * ...with ` attention=<n>` APPENDED when the poller derived attention, `<n>`
+ * being the number of conditions raising it. Appending to line 1 is not
+ * cosmetic: the memory is written only when this line changes, so if
+ * attention did not alter the line, the write that carries the attention
+ * would be suppressed by the very rule that keeps a quiet hypothesis to one
+ * row a day.
+ *
+ * `parseEvaluationSummaryLine` (above) is the only reader, and it ignores
+ * unrecognised tokens — which is what makes this extension safe.
+ */
+export function formatEvaluationSummaryLine(input: {
+  supportScore: number;
+  tripped: number;
+  holding: number;
+  indeterminate: number;
+  evaluatedAtMs: UnixMs;
+  /** Omitted, or 0, when nothing is raised: no token is emitted. */
+  attention?: number;
+}): string {
+  // `-0` prints as "0.00" through toFixed, which is what we want: a score of
+  // negative zero is zero, and the JSON body carries the exact value anyway.
+  const score = input.supportScore.toFixed(SCORE_DECIMALS);
+  const parts = [
+    `score=${score}`,
+    `tripped=${input.tripped}`,
+    `holding=${input.holding}`,
+    `indeterminate=${input.indeterminate}`,
+    `evaluated=${toRfc3339Seconds(input.evaluatedAtMs)}`,
+  ];
+  if (input.attention !== undefined && input.attention > 0) {
+    parts.push(`attention=${input.attention}`);
+  }
+  return parts.join(" ");
+}
+
+/** The summary line for a whole snapshot — the one call site both the writer
+ * and its tests use, so the tally and the line cannot disagree. */
+export function evaluationSummaryLine(snapshot: EvaluationSnapshot): string {
+  const tally = tallyConditions(snapshot);
+  return formatEvaluationSummaryLine({
+    supportScore: snapshot.support_score,
+    ...tally,
+    evaluatedAtMs: toMs(snapshot.evaluated_at_ms),
+    attention: snapshot.attention?.length ?? 0,
+  });
+}
+
+/**
+ * The summary line with its `evaluated=` token removed — the part that
+ * carries MEANING rather than the clock.
+ *
+ * This is the comparison the "append only when the summary line differs"
+ * rule actually uses, and it has to be: `evaluated=` is `Date.now()` on every
+ * tick, so comparing whole lines would make every tick a change and append
+ * 288 rows a day for a hypothesis nothing happened to — the exact outcome the
+ * rule exists to prevent (§ "Where the board's numbers come from": "a quiet
+ * hypothesis produces one row a day, not 288").
+ */
+export function evaluationLineWithoutTimestamp(line: string): string {
+  return line
+    .trim()
+    .split(/\s+/)
+    .filter((token) => !token.startsWith("evaluated="))
+    .join(" ");
+}
+
+/**
+ * A `kind=evaluation` memory's content: the summary line, then the full
+ * snapshot as JSON (§ "Memory kinds": "Line 1 is the summary line ... then the
+ * full evaluation snapshot as JSON").
+ */
+export function buildEvaluationContent(snapshot: EvaluationSnapshot): string {
+  return `${evaluationSummaryLine(snapshot)}\n${JSON.stringify(snapshot, null, 2)}`;
+}
+
+/**
+ * The inverse, and deliberately forgiving in the same way
+ * `parseHypothesisContent` is: a body that does not parse still yields line 1,
+ * because a row Wolf cannot fully read is still a row the board has to render.
+ */
+export function parseEvaluationContent(content: string): {
+  line: string;
+  snapshot: EvaluationSnapshot | null;
+} {
+  const newline = content.indexOf("\n");
+  const line = (newline < 0 ? content : content.slice(0, newline)).trim();
+  const rest = newline < 0 ? "" : content.slice(newline + 1);
+  const start = rest.indexOf("{");
+  const end = rest.lastIndexOf("}");
+  if (start < 0 || end <= start) return { line, snapshot: null };
+  try {
+    const parsed: unknown = JSON.parse(rest.slice(start, end + 1));
+    if (parsed === null || typeof parsed !== "object") return { line, snapshot: null };
+    return { line, snapshot: parsed as EvaluationSnapshot };
+  } catch {
+    return { line, snapshot: null };
+  }
+}
+
+// ── The in-flight exclusion (R112) ──────────────────────────────────────
+
+/**
+ * The two delivery statuses that mean "a container may be running right now".
+ *
+ * `pending` is queued-but-not-dispatched and `running` is executing; every
+ * other status is terminal history. Enumerated, never expressed as
+ * `!isTerminal(...)`: a new status added to Orange must be classified
+ * deliberately rather than inherited as "in flight" or "safe to delete"
+ * depending on which way the negation happened to fall.
+ */
+export const IN_FLIGHT_DELIVERY_STATUSES: readonly string[] = Object.freeze([
+  "pending",
+  "running",
+]);
+
+/**
+ * **The ONE in-flight exclusion, shared by W10's tick-session sweep and W9's
+ * teardown step 4 (R112).**
+ *
+ * The rule: *never delete a session that is the `session_id` of a delivery
+ * currently `pending` or `running` for that worker.*
+ *
+ * Both callers need it for the same reason. Orange has no "completed" session
+ * status — a finished tick session reads `running`/`active` for up to the
+ * 30-minute idle timeout and `archived` only afterwards — so a status filter
+ * either sweeps nothing on a stack with a long idle timeout or deletes a
+ * session that is at that moment mid-`dataset_put`. The delivery log is the
+ * only place that says whether a container is actually working.
+ *
+ * W9 shipped teardown step 4 literally ("delete every row it returns")
+ * because it was never given this predicate, which contradicted its own
+ * neighbouring rule that "a tick session still in flight is allowed to
+ * finish": a `/verdict` or `/retire` issued while a tick is running could
+ * delete that tick's session row out from under it. W10 has to write the
+ * predicate anyway, so it lands here — once — and both call sites import it.
+ *
+ * `worker` filtering is CLIENT-SIDE by necessity: `agentdb.DeliveryQuery` has
+ * no `worker` field (`go/agentdb/events.go:296-307`) although the row itself
+ * does (`EventDelivery.Worker`, `go/agentdb/events.go:263`).
+ */
+export function inFlightSessionIds(
+  deliveries: readonly DeliveryRecord[],
+  worker: string,
+): ReadonlySet<string> {
+  const out = new Set<string>();
+  for (const delivery of deliveries) {
+    if (delivery.worker !== worker) continue;
+    if (!IN_FLIGHT_DELIVERY_STATUSES.includes(delivery.status)) continue;
+    // A pending delivery has not started a session yet and carries "";
+    // adding it would exclude every session whose id is the empty string,
+    // which is none, but it would also make the set's size lie.
+    if (delivery.sessionId === "") continue;
+    out.add(delivery.sessionId);
+  }
+  return out;
+}
+
 // ── The session index ───────────────────────────────────────────────────
 
 export interface SessionIndexEntry {
@@ -557,6 +789,27 @@ export function hostileRetractionTamper(retraction: MemoryRetraction): Tamper {
     written_by_session: retraction.createdBySession,
     memory_id: retraction.memoryId,
   };
+}
+
+/**
+ * The newest row that is trusted AND that Wolf itself has not withdrawn.
+ *
+ * A retraction whose own provenance is NON-empty is ignored: an untrusted
+ * actor cannot withdraw server-written state (§ "Retraction"). Exported so
+ * the provisioner and the poller share one definition of "the current
+ * trusted row of this kind" — two copies is how the two tickets end up
+ * disagreeing about whether a hostile retraction hid a locked spec.
+ */
+export function newestTrustedRow(
+  rows: readonly MemorySearchResultRow[],
+  sessions: SessionLookup,
+): MemorySearchResultRow | undefined {
+  for (const row of rows) {
+    if (!isTrusted(row, sessions)) continue;
+    if ((row.retractedBy ?? []).some(hasEmptyProvenance)) continue;
+    return row;
+  }
+  return undefined;
 }
 
 // ── The hypothesis record ───────────────────────────────────────────────
@@ -653,6 +906,11 @@ export interface AppendStateParams {
   restatedFrom?: string;
 }
 
+export interface AppendEvaluationParams {
+  id: string;
+  snapshot: EvaluationSnapshot;
+}
+
 export interface TransitionParams {
   id: string;
   to: HypothesisStatus;
@@ -710,6 +968,30 @@ export interface HypothesisStore {
   readLatestReport(id: string, options?: ReportReadOptions): Promise<ReportRead>;
   /** Appends a trusted `kind=hypothesis` row through `POST /agent/memories`. */
   appendState(params: AppendStateParams): Promise<MemoryRecord>;
+  /**
+   * Appends the trusted `kind=evaluation, name=<id>` row W10's poller writes:
+   * line 1 is the summary line the board parses, the rest is the full
+   * snapshot as JSON. The ONLY writer of that kind.
+   */
+  appendEvaluation(params: AppendEvaluationParams): Promise<MemoryRecord>;
+  /**
+   * The newest trusted `kind=evaluation` rows for ONE hypothesis, newest
+   * first — snippets, so line 1 and `created_at` are available for the
+   * change/20-hour test without paying a full read per row.
+   *
+   * `include_retracted=1` for the same reason every other read here carries
+   * it: without it Orange applies `notRetractedSQL` before the reduction, so
+   * a hostile retraction of the newest row silently hands back an older one.
+   * A retraction WOLF wrote (empty provenance) is honoured; one written from
+   * inside a container is ignored.
+   */
+  readEvaluationRows(id: string, limit?: number): Promise<MemorySearchResultRow[]>;
+  /**
+   * One evaluation memory's full JSON body — the per-condition detail the
+   * 500-character snippet cannot carry, and therefore the only way to derive
+   * the attention run. `null` when the body does not parse.
+   */
+  readEvaluationSnapshot(memoryId: string): Promise<EvaluationSnapshot | null>;
   /** The serialised state machine; re-reads the current state under the lock. */
   transition(params: TransitionParams): Promise<TransitionOutcome>;
 }
@@ -726,6 +1008,16 @@ const DETAIL_LIMIT = 50;
 
 const KIND_HYPOTHESIS = "hypothesis";
 const KIND_EVALUATION = "evaluation";
+
+/** How many `kind=evaluation` rows one hypothesis's history read pulls back.
+ * Three is what the attention rule needs and nothing reads more. */
+export const EVALUATION_HISTORY_LIMIT = 3;
+
+/**
+ * The ONE transition mutex for this process. See `createTransitioner`'s
+ * `mutex` argument below for why it is module-scoped rather than per store.
+ */
+const SHARED_TRANSITION_MUTEX = new KeyedMutex();
 
 type MutableRecord = HypothesisRecord & { tamper?: Tamper[] };
 
@@ -1147,8 +1439,65 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
     return client.appendMemory({ labels, content, embed: false });
   }
 
+  async function appendEvaluation(params: AppendEvaluationParams): Promise<MemoryRecord> {
+    if (!isHypothesisId(params.id)) {
+      throw new WolfError("invalid", `not a hypothesis id: ${JSON.stringify(params.id)}`, {
+        details: { id: params.id },
+      });
+    }
+    // `kind` and `name` only: § "Memory kinds" gives this row no `status` and
+    // no `owner`, and a label Wolf invents here is a label the board's
+    // `latest_per=name` reduction would have to reason about.
+    return client.appendMemory({
+      labels: { kind: KIND_EVALUATION, name: params.id },
+      content: buildEvaluationContent(params.snapshot),
+      embed: false,
+    });
+  }
+
+  async function readEvaluationRows(
+    id: string,
+    limit: number = EVALUATION_HISTORY_LIMIT,
+  ): Promise<MemorySearchResultRow[]> {
+    const rows = await client.listMemories({
+      selector: `kind=${KIND_EVALUATION},name=${id}`,
+      limit,
+      includeRetracted: true,
+    });
+    const sessions: SessionLookup = new Set([id]);
+    const out: MemorySearchResultRow[] = [];
+    for (const row of rows) {
+      if (row.labels["name"] !== id) continue;
+      if (!isTrusted(row, sessions)) {
+        logger?.warn(
+          { memory_id: row.id, name: id },
+          "untrusted kind=evaluation memory ignored (the poller will not count it)",
+        );
+        continue;
+      }
+      if ((row.retractedBy ?? []).some(hasEmptyProvenance)) continue;
+      out.push(row);
+    }
+    return out;
+  }
+
+  async function readEvaluationSnapshot(memoryId: string): Promise<EvaluationSnapshot | null> {
+    const full = await client.getMemoryById(memoryId);
+    return parseEvaluationContent(full.content).snapshot;
+  }
+
   const transitioner: Transitioner = createTransitioner({
     readCurrentStatus: async (id) => (await readHypothesis(id)).status,
+    // ⚠️ PROCESS-WIDE, not per store instance. W10's poller runs beside the
+    // Express app but cannot share its store: `createApp` builds its own and
+    // returns only the app, and `app.ts` belongs to other tickets. Two
+    // KeyedMutexes would mean the poller's `live -> challenged` and a human's
+    // `/verdict` could both read `live` and both append, which is exactly the
+    // race W5's machine exists to close. Sharing the mutex at module scope
+    // closes it for every store in the process, which is the only scope that
+    // is true. Serialisation is still PER HYPOTHESIS ID: different ids never
+    // wait on each other.
+    mutex: SHARED_TRANSITION_MUTEX,
   });
 
   async function transition(params: TransitionParams): Promise<TransitionOutcome> {
@@ -1186,6 +1535,9 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
     readTemplate,
     readLatestReport,
     appendState,
+    appendEvaluation,
+    readEvaluationRows,
+    readEvaluationSnapshot,
     transition,
   };
 }
