@@ -149,6 +149,15 @@ export interface WolfConfig {
    * 4xx in the middle of provisioning. Overridable precisely so X1 can run
    * `* * * * *` and see a tick inside a test run. */
   scheduleCron: string;
+  /** `WOLF_POLL_INTERVAL_SECONDS` (default 300): how often W10's evaluation
+   * poller sweeps every `live` hypothesis — re-evaluating its conditions
+   * from its datasets, writing the board's numbers and tripping
+   * `live -> challenged`. A whole count of SECONDS, at least 1: a 0 would
+   * spin the event loop, and `setInterval(fn, 0)` looks exactly like the
+   * default when compose forwards an unset variable as "" (R80). The
+   * interval is started in `index.ts` AFTER `app.listen` and never as an
+   * import side effect, so this value is read once, at boot. */
+  pollIntervalSeconds: number;
   /** `WOLF_TEARDOWN_DRAIN_SECONDS` (default 60): how long W9's ordered
    * teardown waits for this hypothesis's already-queued deliveries to
    * drain after its schedule is deleted, before proceeding anyway and
@@ -236,6 +245,15 @@ export const DEFAULT_WOLF_SCHEDULE_CRON = "0 6 * * *";
 
 /** Default drain bound for W9's ordered teardown, in whole seconds. */
 export const DEFAULT_WOLF_TEARDOWN_DRAIN_SECONDS = 60;
+
+/** Default interval between evaluation-poller sweeps (W10): 300 seconds. */
+export const DEFAULT_WOLF_POLL_INTERVAL_SECONDS = 300;
+
+/** The poller's interval bounds, in seconds: at least once a second, at most
+ * once a day. A value outside them is a boot-time `misconfigured` error
+ * naming the variable, not a poller that never fires. */
+export const MIN_WOLF_POLL_INTERVAL_SECONDS = 1;
+export const MAX_WOLF_POLL_INTERVAL_SECONDS = 86_400;
 
 /** Default byte budget for one report template (W16): 512000 bytes. */
 export const DEFAULT_WOLF_REPORT_MAX_BYTES = 512_000;
@@ -547,6 +565,25 @@ export function loadConfig(
     );
   }
 
+  // W10's evaluation poller. `present()` (R80), not `??` on the raw value:
+  // compose forwards an unset optional variable as the EMPTY STRING and
+  // `z.coerce.number()` turns "" into 0 — a 0-second interval that looks
+  // exactly like the default while spinning the event loop.
+  const pollIntervalResult = secondsSchema
+    .refine(
+      (value) =>
+        value >= MIN_WOLF_POLL_INTERVAL_SECONDS && value <= MAX_WOLF_POLL_INTERVAL_SECONDS,
+    )
+    .safeParse(present(env.WOLF_POLL_INTERVAL_SECONDS) ?? DEFAULT_WOLF_POLL_INTERVAL_SECONDS);
+  if (!pollIntervalResult.success) {
+    throw WolfError.misconfigured(
+      "WOLF_POLL_INTERVAL_SECONDS",
+      "WOLF_POLL_INTERVAL_SECONDS must be a whole number of seconds between " +
+        `${MIN_WOLF_POLL_INTERVAL_SECONDS} and ${MAX_WOLF_POLL_INTERVAL_SECONDS}, got ` +
+        JSON.stringify(env.WOLF_POLL_INTERVAL_SECONDS),
+    );
+  }
+
   const orangeBaseUrl = present(env.ORANGE_BASE_URL)?.trim() ?? DEFAULT_ORANGE_BASE_URL;
   if (!/^https?:\/\/[^\s]+$/.test(orangeBaseUrl)) {
     throw WolfError.misconfigured(
@@ -616,6 +653,7 @@ export function loadConfig(
     criticCron,
     scheduleCron,
     teardownDrainSeconds: drainResult.data,
+    pollIntervalSeconds: pollIntervalResult.data,
     reportMaxBytes: reportMaxBytesResult.data,
     seriesMaxPoints: seriesMaxPointsResult.data,
     orangeBaseUrl,

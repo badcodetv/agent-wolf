@@ -84,6 +84,8 @@ interface DeliveryRow {
   id: string;
   worker: string;
   status: string;
+  /** The tick session this delivery is running in, if any (R112). */
+  sessionId?: string;
 }
 
 interface StubConfig {
@@ -387,7 +389,7 @@ class Stub {
             project: "wolf",
             event_id: "evt",
             subscription_id: "sub",
-            session_id: "",
+            session_id: d.sessionId ?? "",
             worker: d.worker,
             schedule_id: "sched-1",
             status: d.status,
@@ -898,7 +900,59 @@ describe("provision_teardown", () => {
     expect(result.teardown.pending_left_behind).toEqual([]);
     const polls = h.stub.requests.filter((r) => r.path.startsWith("/agent/deliveries"));
     expect(polls).toHaveLength(1);
-    expect(polls[0]?.path).toContain("status=pending");
+    // The `pending`-only wait is asserted by BEHAVIOUR, not by the query
+    // string: the one poll above saw a `running` delivery for this very
+    // worker and still returned immediately. The status filter moved
+    // client-side with R112 — the same page now also answers "which tick
+    // sessions are in flight" for step 4, and `?status=pending` would hide
+    // exactly the rows that question needs. Asserting the URL here would gate
+    // the mechanism rather than the rule.
+    expect(polls[0]?.path).not.toContain("status=");
+    expect(result.teardown.drained).toBe(true);
+  });
+
+  it("provision_teardown: a tick session that is the session of a RUNNING delivery is NOT deleted (R112)", async () => {
+    // design/2026-08-20-agent-wolf.md, W10: "The in-flight exclusion is ONE
+    // predicate, shared with W9's teardown (R112)." W9 shipped step 4
+    // literally — "delete every row it returns" — which contradicted its own
+    // rule three lines below that "a tick session still in flight is allowed
+    // to finish": a /verdict issued while a tick is running deleted that
+    // tick's session row out from under it, mid-`dataset_put`. The predicate
+    // lives in store.ts and W10's sweep uses the same one.
+    const h = harness(
+      torndown({
+        tickSessions: ["sess-tick-1", "sess-tick-2", "sess-tick-live"],
+        deliveries: [
+          [
+            { id: "d-live", worker: WORKER, status: "running", sessionId: "sess-tick-live" },
+            // Another worker's running tick is irrelevant, even though it
+            // names one of OUR sessions: the exclusion is per worker.
+            { id: "d-other", worker: "researcher-99999999", status: "running", sessionId: "sess-tick-1" },
+          ],
+        ],
+      }),
+    );
+    const result = await h.provisioner.retire({ id: ID, email: OWNER, rationale: "done" });
+
+    expect(result.teardown.tick_sessions_in_flight).toEqual(["sess-tick-live"]);
+    expect(result.teardown.tick_sessions_deleted).toEqual(["sess-tick-1", "sess-tick-2"]);
+    // And the DELETE never went out — the report is not the only evidence.
+    const deletes = h.stub.requests
+      .filter((r) => r.method === "DELETE" && r.path.startsWith("/agent/session/"))
+      .map((r) => r.path);
+    expect(deletes).not.toContain("/agent/session/sess-tick-live");
+    expect(deletes).toContain("/agent/session/sess-tick-1");
+  });
+
+  it("provision_teardown: the in-flight exclusion costs NO extra request — the drain's own page answers it", async () => {
+    // The five-step ORDER is asserted by recorded call order (the first test
+    // in this block), and `GET /agent/deliveries` is one of the six entries
+    // in that sequence. A second delivery read for the exclusion would appear
+    // in it and change an ordering W9 is graded on, so the exclusion reuses
+    // the page the drain already fetched.
+    const h = harness(torndown());
+    await h.provisioner.retire({ id: ID, email: OWNER, rationale: "done" });
+    expect(h.stub.requests.filter((r) => r.path.startsWith("/agent/deliveries"))).toHaveLength(1);
   });
 
   it("provision_teardown: a schedule that will not delete ABORTS before the worker is removed", async () => {

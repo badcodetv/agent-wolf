@@ -61,7 +61,7 @@ import { readFileSync } from "node:fs";
 import { WolfError } from "../errors.js";
 import type { Logger } from "../logger.js";
 import type { OrangeClient } from "../orange/client.js";
-import type { MemorySearchResultRow } from "../orange/types.js";
+import type { DeliveryRecord, MemorySearchResultRow } from "../orange/types.js";
 import { validateSpec, type Spec, type SpecError } from "./spec.js";
 import type { EvaluationResult } from "./evaluate.js";
 import {
@@ -72,9 +72,9 @@ import {
   type HypothesisStatus,
 } from "./lifecycle.js";
 import {
+  inFlightSessionIds,
   isHypothesisId,
-  isTrusted,
-  hasEmptyProvenance,
+  newestTrustedRow,
   sessionNameForHypothesis,
   type HypothesisStore,
   type SessionLookup,
@@ -217,8 +217,20 @@ export function researcherWorkerFor(id: string): string {
 /** How many rows of one kind a provisioning read pulls back. */
 const ROW_LIMIT = 50;
 
-/** One page of deliveries per drain poll. */
-const DELIVERY_PAGE = 200;
+/**
+ * One page of deliveries per drain poll.
+ *
+ * The poll is deliberately NOT `?status=pending` filtered (R112): the same
+ * page has to answer two questions — "is anything still queued for this
+ * worker" (the drain's wait condition) and "which tick sessions are in
+ * flight right now" (step 4's exclusion) — and the second needs `running`
+ * rows that a `pending` filter would hide. Asking twice would be a second
+ * request; one unfiltered page, split client-side, is one. The page is
+ * therefore raised to Orange's own clamp ceiling, because it now has to
+ * cover terminal rows as well (`clampLimit`, `go/agentdb/events.go`, caps at
+ * 1000).
+ */
+const DELIVERY_PAGE = 1000;
 
 /** How often the drain loop re-polls `GET /agent/deliveries`, in ms. */
 export const DEFAULT_DRAIN_POLL_INTERVAL_MS = 1000;
@@ -235,6 +247,9 @@ export interface TeardownReport {
   worker_deleted: boolean;
   /** The `researcher-<id>` tick sessions deleted. */
   tick_sessions_deleted: string[];
+  /** Tick sessions left alone because a delivery for this worker was
+   * `pending` or `running` on them — R112's in-flight exclusion. */
+  tick_sessions_in_flight: string[];
   /** The `hyp-<id>` session's id, once deleted. */
   session_deleted: string | null;
   /** Non-fatal step failures, in order. Teardown is best-effort after step 1. */
@@ -391,12 +406,10 @@ export function createProvisioner(options: CreateProvisionerOptions): Provisione
     rows: readonly MemorySearchResultRow[],
     sessions: SessionLookup,
   ): MemorySearchResultRow | undefined {
-    for (const row of rows) {
-      if (!isTrusted(row, sessions)) continue;
-      if ((row.retractedBy ?? []).some(hasEmptyProvenance)) continue;
-      return row;
-    }
-    return undefined;
+    // ONE definition, in store.ts, shared with W10's poller (which needs the
+    // same "newest trusted, not withdrawn by Wolf" rule to read a locked
+    // spec). This wrapper is kept so the call sites below read unchanged.
+    return newestTrustedRow(rows, sessions);
   }
 
   /**
@@ -524,19 +537,35 @@ export function createProvisioner(options: CreateProvisionerOptions): Provisione
 
   // ── Teardown ──────────────────────────────────────────────────────────
 
+  /**
+   * Waits for this worker's already-queued deliveries, bounded, and returns
+   * the LAST page it read so step 4 can compute the in-flight exclusion from
+   * it without paying a second request (R112).
+   *
+   * The wait condition is `pending` only, and that is unchanged: a tick
+   * session already RUNNING is allowed to finish (anything it writes carries
+   * a session id in its provenance and is untrusted by construction, so it
+   * cannot change state), and waiting for one would stall every teardown
+   * behind a 30-minute container. What changed is only WHERE the status
+   * filter is applied — client-side, on a page that also carries the
+   * `running` rows step 4 needs.
+   */
   async function drain(
     worker: string,
     report: TeardownReport,
-  ): Promise<void> {
+  ): Promise<readonly DeliveryRecord[]> {
     const deadline = now() + config.teardownDrainSeconds * 1000;
+    let lastPage: readonly DeliveryRecord[] = [];
     for (;;) {
       // `DeliveryQuery` has no `worker` field, so the filter is client-side
       // on the row's own `worker` — which the row does carry.
-      const pending = (await client.listDeliveries({ status: "pending", limit: DELIVERY_PAGE }))
-        .filter((delivery) => delivery.worker === worker);
+      lastPage = await client.listDeliveries({ limit: DELIVERY_PAGE });
+      const pending = lastPage.filter(
+        (delivery) => delivery.worker === worker && delivery.status === "pending",
+      );
       if (pending.length === 0) {
         report.drained = true;
-        return;
+        return lastPage;
       }
       if (now() >= deadline) {
         report.drained = false;
@@ -545,7 +574,7 @@ export function createProvisioner(options: CreateProvisionerOptions): Provisione
           { worker, deliveries: report.pending_left_behind, seconds: config.teardownDrainSeconds },
           "teardown: giving up on the delivery drain and proceeding anyway",
         );
-        return;
+        return lastPage;
       }
       await sleep(drainPollIntervalMs);
     }
@@ -578,6 +607,7 @@ export function createProvisioner(options: CreateProvisionerOptions): Provisione
       pending_left_behind: [],
       worker_deleted: false,
       tick_sessions_deleted: [],
+      tick_sessions_in_flight: [],
       session_deleted: null,
       errors: [],
     };
@@ -600,8 +630,9 @@ export function createProvisioner(options: CreateProvisionerOptions): Provisione
     }
 
     // 2. Drain the deliveries the schedule already queued. Bounded.
+    let lastDeliveryPage: readonly DeliveryRecord[] = [];
     try {
-      await drain(worker, report);
+      lastDeliveryPage = await drain(worker, report);
     } catch (err) {
       noteFailure(report, "drain_deliveries", err);
     }
@@ -614,12 +645,33 @@ export function createProvisioner(options: CreateProvisionerOptions): Provisione
       noteFailure(report, "delete_worker", err);
     }
 
-    // 4. The tick sessions. Nothing else ever deletes them.
+    // 4. The tick sessions. Nothing else ever deletes them — EXCEPT one that
+    //    is in flight right now (R112). W9 shipped this step literally
+    //    ("delete every row it returns") because it was never given the
+    //    exclusion, which contradicted the rule three lines below it: "a tick
+    //    session still in flight is allowed to finish". A /verdict or /retire
+    //    issued while a tick is running would otherwise delete that tick's
+    //    session row out from under it, mid-`dataset_put`. The predicate is
+    //    ONE helper (`inFlightSessionIds`, store.ts), shared with W10's
+    //    sweep, and it reads the page the drain above already fetched — so
+    //    the recorded five-step ORDER is unchanged, which is what W9's
+    //    ordered teardown test gates.
     try {
+      const inFlight = inFlightSessionIds(lastDeliveryPage, worker);
       const ticks = await client.listSessions({ worker });
       for (const tick of ticks) {
+        if (inFlight.has(tick.id)) {
+          report.tick_sessions_in_flight.push(tick.id);
+          continue;
+        }
         await client.deleteSession(tick.id);
         report.tick_sessions_deleted.push(tick.id);
+      }
+      if (report.tick_sessions_in_flight.length > 0) {
+        logger.info(
+          { id, worker, sessions: report.tick_sessions_in_flight },
+          "teardown: left an in-flight tick session alone; the archive loop reclaims its port",
+        );
       }
     } catch (err) {
       noteFailure(report, "delete_tick_sessions", err);
