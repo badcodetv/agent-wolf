@@ -165,6 +165,16 @@ const RAW_TEXT_ELEMENTS = new Set([
 /** The skeleton `composeFrame` owns. None of these may appear in a fragment. */
 const SKELETON_ELEMENTS = new Set(["html", "head", "body"]);
 
+/**
+ * Elements whose contents are PARSED but never RENDERED: `<template>` is an
+ * inert document fragment, and `<noscript>`'s children are raw text whenever
+ * scripting is enabled — which it is, in a frame whose whole purpose is to
+ * run a charting library. A `data-wolf-fallback` hidden in one of these
+ * satisfies a naive "did I see the attribute" scan while showing the operator
+ * nothing at all, so the mandatory-fallback rule looks through them.
+ */
+const INERT_ELEMENTS = new Set(["template", "noscript"]);
+
 const WHITESPACE = new Set([" ", "\t", "\n", "\f", "\r"]);
 
 interface Attribute {
@@ -276,6 +286,73 @@ function parseAttributes(
 }
 
 /**
+ * Consumes an HTML comment whose `<!--` begins at `start`, and returns the
+ * index just past its close — or `null` if it is never closed.
+ *
+ * ⚠️ **A comment ends in FOUR ways, not one.** An earlier version of this
+ * scanner searched for the literal `-->` and nothing else, which let anything
+ * between an abrupt close and the next literal `-->` be markup to a browser
+ * and invisible here: `<!---><script src="http://evil…"></script><!-- pad -->`
+ * validated clean with an EMPTY `scriptSrcs`, and the same six characters
+ * smuggled a `<body>` element and a duplicate slot id past their rules. That
+ * is the exact failure this module exists to prevent — the go-live review
+ * screen would show a human zero remote scripts for a template that loads
+ * one, and `structureHash` would then freeze it.
+ *
+ * So this follows the tokenizer's comment states literally
+ * (https://html.spec.whatwg.org/multipage/parsing.html#comment-start-state):
+ *
+ *  - `<!-->`   — comment start state sees `>`: abrupt-closing-of-empty-comment.
+ *  - `<!--->`  — comment start dash state sees `>`: same.
+ *  - `--!>`    — comment end bang state sees `>`: incorrectly-closed-comment.
+ *  - `-->`     — comment end state sees `>`: the ordinary close.
+ *
+ * The `comment less-than sign` family of states is deliberately not modelled:
+ * those states only raise *nested-comment* parse errors and always reconsume
+ * in `comment end`/`comment` state, so they never move where a comment ENDS,
+ * which is the only question asked here. (`<!--<!--->` closes at the same
+ * index either way.)
+ */
+function commentEnd(html: string, start: number): number | null {
+  type State = "start" | "startDash" | "comment" | "endDash" | "end" | "endBang";
+  let state: State = "start";
+
+  for (let i = start + 4; i < html.length; i += 1) {
+    const ch = html[i];
+    switch (state) {
+      case "start":
+        if (ch === "-") state = "startDash";
+        else if (ch === ">") return i + 1; // <!-->
+        else state = "comment";
+        break;
+      case "startDash":
+        if (ch === "-") state = "end";
+        else if (ch === ">") return i + 1; // <!--->
+        else state = "comment";
+        break;
+      case "comment":
+        if (ch === "-") state = "endDash";
+        break;
+      case "endDash":
+        state = ch === "-" ? "end" : "comment";
+        break;
+      case "end":
+        if (ch === ">") return i + 1; // -->
+        else if (ch === "!") state = "endBang";
+        else if (ch === "-") state = "end";
+        else state = "comment";
+        break;
+      case "endBang":
+        if (ch === ">") return i + 1; // --!>
+        else if (ch === "-") state = "endDash";
+        else state = "comment";
+        break;
+    }
+  }
+  return null; // EOF inside a comment: fail closed, the caller reports it.
+}
+
+/**
  * Walks the template once and yields its tags. Comments, bogus comments,
  * raw-text bodies and ordinary text are consumed and discarded — this
  * function's only job is to decide, correctly, what IS a tag.
@@ -294,8 +371,8 @@ function scan(html: string): ScanResult {
 
     if (next === "!") {
       if (html.startsWith("<!--", i)) {
-        const close = html.indexOf("-->", i + 4);
-        if (close < 0) {
+        const end = commentEnd(html, i);
+        if (end === null) {
           errors.push({
             path: "template",
             message: "a comment is opened with `<!--` and never closed",
@@ -303,7 +380,7 @@ function scan(html: string): ScanResult {
           });
           break;
         }
-        i = close + 3;
+        i = end;
         continue;
       }
       const isDoctype = html.slice(i, i + 9).toLowerCase() === "<!doctype";
@@ -600,7 +677,10 @@ export function parseTemplate(html: string, maxBytes: number): ParseTemplateResu
   const slots: TemplateSlot[] = [];
   const scriptSrcs: string[] = [];
   const seenSlotIds = new Set<string>();
+  const openSkeletons = new Map<string, number>();
   let sawFallback = false;
+  let sawInertFallback = false;
+  let inertDepth = 0;
 
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index];
@@ -618,6 +698,16 @@ export function parseTemplate(html: string, maxBytes: number): ParseTemplateResu
       continue;
     }
     if (SKELETON_ELEMENTS.has(token.name)) {
+      // Reported ONCE PER ELEMENT, not once per tag: `<body>x</body>` is one
+      // mistake, and a review screen printing it twice reads as two. A stray
+      // `</body>` with no start tag of its own is still reported — it is a
+      // skeleton tag either way, and silence there would be a hole.
+      const open = openSkeletons.get(token.name) ?? 0;
+      if (token.type === "end" && open > 0) {
+        openSkeletons.set(token.name, open - 1);
+        continue;
+      }
+      if (token.type === "start") openSkeletons.set(token.name, open + 1);
       errors.push({
         path: token.name,
         message:
@@ -628,9 +718,24 @@ export function parseTemplate(html: string, maxBytes: number): ParseTemplateResu
       continue;
     }
 
-    if (token.type === "end") continue;
+    if (token.type === "end") {
+      if (INERT_ELEMENTS.has(token.name) && inertDepth > 0) inertDepth -= 1;
+      continue;
+    }
 
-    if (hasAttribute(token, FALLBACK_ATTRIBUTE)) sawFallback = true;
+    // (5) THE FALLBACK MUST BE ONE A HUMAN WOULD SEE — see INERT_ELEMENTS.
+    const inert = inertDepth > 0 || INERT_ELEMENTS.has(token.name);
+    if (hasAttribute(token, FALLBACK_ATTRIBUTE)) {
+      if (inert) sawInertFallback = true;
+      else sawFallback = true;
+    }
+    if (
+      INERT_ELEMENTS.has(token.name) &&
+      !token.selfClosing &&
+      !VOID_ELEMENTS.has(token.name)
+    ) {
+      inertDepth += 1;
+    }
 
     // (4) EVERY src AND href MUST BE https:.
     for (const attribute of token.attributes) {
@@ -730,14 +835,17 @@ export function parseTemplate(html: string, maxBytes: number): ParseTemplateResu
     });
   }
 
-  // (5) THE FALLBACK IS MANDATORY.
+  // (5) THE FALLBACK IS MANDATORY — AND MUST RENDER.
   if (!sawFallback) {
     errors.push({
       path: "template",
-      message:
-        `a report template must contain an element carrying \`${FALLBACK_ATTRIBUTE}\`: a CDN ` +
-        "failure is invisible inside an opaque frame, so that element is the operator's only " +
-        "signal that the chart never rendered",
+      message: sawInertFallback
+        ? `the only element carrying \`${FALLBACK_ATTRIBUTE}\` is inside a \`<template>\` or ` +
+          "`<noscript>`, which renders nothing: move it into the document body of the fragment, " +
+          "because it is the operator's only signal that the chart never rendered"
+        : `a report template must contain an element carrying \`${FALLBACK_ATTRIBUTE}\`: a CDN ` +
+          "failure is invisible inside an opaque frame, so that element is the operator's only " +
+          "signal that the chart never rendered",
     });
   }
 

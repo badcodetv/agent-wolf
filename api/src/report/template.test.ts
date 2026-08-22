@@ -185,6 +185,25 @@ describe("parseTemplate — the template is a FRAGMENT", () => {
     );
     expect(parseOk(html).slotIds).toEqual([]);
   });
+
+  it("reports ONE error per skeleton ELEMENT, not one per tag", () => {
+    // `<body>x</body>` is a single mistake. A review screen printing it twice
+    // reads as two, and the reporting contract is one path per finding.
+    const bodyErrors = errorsOf(withFallback("<body>x</body>")).filter((e) => e.path === "body");
+    expect(bodyErrors).toHaveLength(1);
+  });
+
+  it("still reports a stray end tag that never had a start tag", () => {
+    const bodyErrors = errorsOf(withFallback("</body>")).filter((e) => e.path === "body");
+    expect(bodyErrors).toHaveLength(1);
+  });
+
+  it("reports two separate <body> elements twice", () => {
+    const bodyErrors = errorsOf(withFallback("<body>a</body><body>b</body>")).filter(
+      (e) => e.path === "body",
+    );
+    expect(bodyErrors).toHaveLength(2);
+  });
 });
 
 describe("parseTemplate — every src and href must be https:", () => {
@@ -268,6 +287,34 @@ describe("parseTemplate — the fallback element", () => {
 
   it("accepts any element carrying the attribute, whatever its value", () => {
     expect(parseTemplate('<p data-wolf-fallback="yes">nope</p>', BIG).valid).toBe(true);
+  });
+
+  it.each([
+    ["<template>", "<template><div data-wolf-fallback>no chart</div></template><p>x</p>"],
+    ["<noscript>", "<noscript><div data-wolf-fallback>no chart</div></noscript><p>x</p>"],
+    ["the container itself", "<template data-wolf-fallback>no chart</template><p>x</p>"],
+  ])(
+    "rejects a fallback that only exists inside %s — it renders NOTHING",
+    (_label, html) => {
+      // The criterion's whole purpose is a visible signal that the chart never
+      // drew. `<template>` is an inert fragment and `<noscript>`'s children are
+      // raw text with scripting on, so neither puts a pixel on the page.
+      const text = messages(html);
+      expect(text).toMatch(/renders nothing/);
+      expect(text).toMatch(/data-wolf-fallback/);
+    },
+  );
+
+  it("accepts a real fallback even when an inert copy also exists", () => {
+    const html =
+      "<template><div data-wolf-fallback>copy</div></template>" +
+      "<div data-wolf-fallback>no chart</div>";
+    expect(parseTemplate(html, BIG).valid).toBe(true);
+  });
+
+  it("counts a fallback that merely FOLLOWS a closed inert container", () => {
+    const html = "<template><p>t</p></template><div data-wolf-fallback>no chart</div>";
+    expect(parseTemplate(html, BIG).valid).toBe(true);
   });
 });
 
@@ -361,6 +408,104 @@ describe("parseTemplate — scriptSrcs, for the go-live review screen", () => {
   it("lists a stylesheet whose rel carries more than one token", () => {
     const html = withFallback('<link rel="alternate stylesheet" href="https://cdn.test/a.css">');
     expect(parseOk(html).scriptSrcs).toEqual(["https://cdn.test/a.css"]);
+  });
+});
+
+/**
+ * THE COMMENT-CLOSE DIFFERENTIAL (fix round 1).
+ *
+ * The first cut of `scan()` closed a comment only on the literal `-->`. The
+ * HTML tokenizer closes one in three more ways, and everything between such a
+ * close and the next literal `-->` is MARKUP to a browser and was invisible to
+ * the validator: `<!---><script src="http://evil…"></script><!-- pad -->`
+ * validated clean, with an EMPTY `scriptSrcs`, while jsdom/parse5 on the same
+ * bytes reported the script. That single gap walked four acceptance criteria
+ * — https-only, fragment-only, duplicate-slot, and the go-live review list —
+ * and `structureHash` would then have frozen the forged template.
+ *
+ * Each closer below is crossed with each vector, so a regression in any one
+ * comment state fails four ways at once.
+ */
+const COMMENT_CLOSERS: Array<[label: string, prefix: string]> = [
+  ["<!-->  — abrupt closing of an empty comment", "<!-->"],
+  ["<!--->  — abrupt close from the comment start dash state", "<!--->"],
+  ["--!>  — the comment end bang state", "<!-- a --!>"],
+  ["-->  — the ordinary close", "<!-- a -->"],
+];
+
+const HIDDEN_VECTORS: Array<[label: string, markup: string, expected: RegExp]> = [
+  [
+    "an http: remote script",
+    '<script src="http://evil.example/x.js"></script>',
+    /`http:` URLs are not permitted/,
+  ],
+  [
+    "a protocol-relative script",
+    '<script src="//evil.example/x.js"></script>',
+    /protocol-relative/,
+  ],
+  [
+    "a javascript: href",
+    '<a href="javascript:alert(1)">x</a>',
+    /`javascript:` URLs are not permitted/,
+  ],
+  ["a <body> element", '<body data-x="1"></body>', /must not contain a `<body>`/],
+  [
+    "a duplicate slot id",
+    '<div data-wolf-slot="a"></div><div data-wolf-slot="a"></div>',
+    /duplicate slot id "a"/,
+  ],
+];
+
+describe("parseTemplate — a comment ends in FOUR ways, not one", () => {
+  for (const [closerLabel, prefix] of COMMENT_CLOSERS) {
+    for (const [vectorLabel, markup, expected] of HIDDEN_VECTORS) {
+      it(`still refuses ${vectorLabel} hidden behind ${closerLabel}`, () => {
+        // The trailing `<!-- pad -->` is the second half of the original
+        // bypass: it was the literal `-->` the old scanner skipped ahead to.
+        const html = withFallback(`${prefix}${markup}<!-- pad -->`);
+        expect(messages(html)).toMatch(expected);
+      });
+    }
+  }
+
+  for (const [closerLabel, prefix] of COMMENT_CLOSERS) {
+    it(`LISTS a remote script that follows ${closerLabel} in scriptSrcs`, () => {
+      // The go-live review screen exists to show a human every remote URL. An
+      // empty list for a template that loads code is the worst failure here.
+      const html = withFallback(
+        `${prefix}<script src="https://cdn.example/x.js"></script><!-- pad -->`,
+      );
+      expect(parseOk(html).scriptSrcs).toEqual(["https://cdn.example/x.js"]);
+    });
+  }
+
+  it("closes `<!--<!--->` where the tokenizer does, so what follows is scanned", () => {
+    const html = withFallback('<!--<!---><script src="http://evil.example/x.js"></script>');
+    expect(messages(html)).toMatch(/`http:` URLs are not permitted/);
+  });
+
+  it("still treats an ORDINARY comment as a comment — markup inside it is inert", () => {
+    const html = withFallback(
+      '<!-- <script src="http://evil.example/x.js"></script> --><p>ok</p>',
+    );
+    const template = parseOk(html);
+    expect(template.scriptSrcs).toEqual([]);
+    expect(template.slotIds).toEqual([]);
+  });
+
+  it("accepts an empty comment written in either abrupt form", () => {
+    expect(parseOk(withFallback("<!--><p>a</p>")).slotIds).toEqual([]);
+    expect(parseOk(withFallback("<!---><p>a</p>")).slotIds).toEqual([]);
+  });
+
+  it("does not swallow a slot that follows an abrupt close", () => {
+    const html = withFallback('<!---><div data-wolf-slot="chart">x</div>');
+    expect(parseOk(html).slotIds).toEqual(["chart"]);
+  });
+
+  it("still reports a comment that is opened and never closed", () => {
+    expect(messages(withFallback("<!-- never closed"))).toMatch(/never closed/);
   });
 });
 
