@@ -1,30 +1,96 @@
 /**
- * `/hypotheses/:id` — **W14 replaces this page's left column.**
+ * `/hypotheses/:id` — the detail page. UI design § 5 (agent-orange repo).
  *
- * What W13 ships here is deliberately the frame and not the content: the
- * two-column layout of UI design § 4/§ 5 (left column scrolls normally at
- * ~1fr, right column is the sticky rail), the rail itself, the tamper alerts,
- * and the Go Live gate. W14 fills the left column in with the verdict band,
- * the case, the scoreboard, the conditions, the charts and the timeline.
+ * ```
+ * ┌──────────────────────────────────────────────┬──────────────────────┐
+ * │  ← Board   Petrodollar / drone parts    kai  │  Conversation    ⟨⟩  │
+ * │  ◉ CHALLENGED — [Confirm] [Invalidate]       │  ┌────────────────┐  │
+ * │  THE CASE · tripped rows · 3 research notes  │  │  Orange embed  │  │
+ * │  REPORT (fixed height, expand)               │  │  sticky, 100vh │  │
+ * │  SCOREBOARD · CONDITIONS · CHARTS            │  │                │  │
+ * │  PROPOSALS · TIMELINE            ↓ scroll    │  └────────────────┘  │
+ * └──────────────────────────────────────────────┴──────────────────────┘
+ *    left: scrolls normally, ~1fr           right: sticky rail, 100vh
+ * ```
  *
- * What W14 should NOT do: re-implement the rail, add a second detail fetch, or
- * introduce a second layout. `ChatRail` takes a bare id and owns its own
- * token; the left column is a plain child of the flex row below.
+ * ## The shape, and what W23 inherits
+ *
+ * 🔴 **The rail is a SIBLING of the scrolling column, not a child of it.**
+ * That is the whole of D4's sizing argument: a sticky column's height is the
+ * viewport's, known without measuring anything, so `OrangeChatFrame` gets a
+ * meaningful `height: 100%` without anyone trying to measure a cross-origin
+ * document from outside it. W13 built `ChatRail` and owns every part of that;
+ * this page passes it a bare id and does not re-implement the column.
+ *
+ * **W23 composes into the TOP of the left column**: `VerdictBand` above the
+ * verdict actions, and `ReportPanel` as the child of `ReportFrameHost` where
+ * the placeholder sits today. The condition table is unchanged by W23.
+ *
+ * ## One fetch
+ *
+ * `GET /api/hypotheses/:id` is read once, here, and handed down as props.
+ * There is no second detail fetch and no second detail type — the charts
+ * section makes the only other requests on the page, one per metric of the
+ * locked spec.
+ *
+ * ## It degrades; it does not throw
+ *
+ * 🔴 Every block of the payload is optional at runtime whatever the interface
+ * says: `evaluation` is `null` until the poller has run, `verdict` is `null`
+ * until a human decides, `notes` and `amendments` are ordinarily empty, and
+ * `spec` and `evaluation` are `unknown` on the wire. W13's fix round found an
+ * absent `spec_validation` throwing INSIDE render and unmounting the whole
+ * page (R140); a missing optional field must cost a region, never the page.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import Skeleton from "@mui/material/Skeleton";
 import { Link as RouterLink, useParams } from "react-router";
 import Link from "@mui/material/Link";
 import Severity from "../components/trust/Severity.js";
+import AmendmentList from "../components/AmendmentList.js";
+import ChallengedCase from "../components/ChallengedCase.js";
 import ChatRail from "../components/ChatRail.js";
+import ConditionTable from "../components/ConditionTable.js";
 import GoLiveButton from "../components/GoLiveButton.js";
+import MetricCharts from "../components/MetricCharts.js";
+import ReportFrameHost from "../components/ReportFrameHost.js";
+import Scoreboard from "../components/Scoreboard.js";
 import StatusChip from "../components/StatusChip.js";
 import TamperWarning from "../components/TamperWarning.js";
+import Timeline from "../components/Timeline.js";
+import VerdictActions from "../components/VerdictActions.js";
 import { ApiError, fetchHypothesis } from "../api/client.js";
-import type { HypothesisDetail as Detail } from "../api/types.js";
+import type { HypothesisDetail as Detail, SpecCondition } from "../api/types.js";
+
+/**
+ * 🔴 R141 — the `degraded` sentence for a truncated title lives HERE.
+ *
+ * The board carries only an ellipsis affordance, because a mandatory cause
+ * sentence on twenty rows would destroy § 2b principle 4's density. On one
+ * hypothesis it costs a line, and the UI must never quietly claim a title is
+ * complete when the 500-byte snippet cut it.
+ */
+export const TITLE_TRUNCATED_CAUSE =
+  "this title is cut — the memory list returns a 500-byte snippet and line 1 ran past it";
+
+/** The placeholder W23's `ReportPanel` replaces. There is no `report` block on the payload yet (W22). */
+export const REPORT_PLACEHOLDER =
+  "no report panel yet — the report layer lands with W22 and W23";
+
+/** A section heading. Density over air: a label, not a card. */
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <Box component="section" data-testid={`section-${title.toLowerCase()}`}>
+      <Typography sx={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", mb: 0.5 }}>
+        {title}
+      </Typography>
+      {children}
+    </Box>
+  );
+}
 
 export default function HypothesisDetail() {
   const params = useParams();
@@ -45,10 +111,21 @@ export default function HypothesisDetail() {
     void load();
   }, [load]);
 
+  // The condition's STATISTIC lives on the spec, not on the evaluation. Built
+  // here because this is where the spec is; `undefined` for anything the spec
+  // does not name, which the table renders as a dash rather than as a guess.
+  const statFor = useMemo(() => {
+    const conditions = Array.isArray(detail?.spec?.invalidation)
+      ? (detail?.spec?.invalidation as SpecCondition[])
+      : [];
+    const byId = new Map(conditions.map((c) => [c.id, typeof c.stat === "string" ? c.stat : undefined]));
+    return (conditionId: string): string | undefined => byId.get(conditionId);
+  }, [detail]);
+
   return (
     <Box sx={{ display: "flex", alignItems: "flex-start", gap: 2, flexWrap: { xs: "wrap", md: "nowrap" } }}>
-      {/* Left column: scrolls normally, ~1fr. W14 owns everything inside it. */}
-      <Box sx={{ flex: "1 1 0", minWidth: 0 }}>
+      {/* Left column: scrolls normally, ~1fr. */}
+      <Box data-testid="detail-column" sx={{ flex: "1 1 0", minWidth: 0 }}>
         <Link component={RouterLink} to="/" underline="hover" sx={{ fontSize: 13 }}>
           ← Board
         </Link>
@@ -71,6 +148,11 @@ export default function HypothesisDetail() {
               </Typography>
             </Box>
 
+            {/* R141: the board shows an ellipsis, the detail page says why. */}
+            {detail.hypothesis.title_truncated === true ? (
+              <Severity level="degraded" cause={TITLE_TRUNCATED_CAUSE} />
+            ) : null}
+
             {(detail.hypothesis.tamper ?? []).map((tamper) => (
               <TamperWarning key={`${tamper.reason}:${tamper.memory_id}`} tamper={tamper} />
             ))}
@@ -82,14 +164,69 @@ export default function HypothesisDetail() {
               onDone={() => void load()}
             />
 
-            <Typography data-testid="detail-placeholder" sx={{ fontSize: 13, color: "text.secondary" }}>
-              The case, scoreboard, conditions, charts and timeline land with W14.
-            </Typography>
+            {/* ── W23 composes `VerdictBand` immediately above this ────── */}
+            <VerdictActions
+              hypothesisId={id}
+              status={detail.hypothesis.status}
+              onDone={() => void load()}
+            />
+
+            <ChallengedCase
+              status={detail.hypothesis.status}
+              challengeReason={detail.challenge_reason ?? null}
+              evaluation={detail.evaluation ?? null}
+              notes={detail.notes ?? []}
+              statFor={statFor}
+            />
+
+            {/* ── W23's `ReportPanel` becomes this host's child ─────────── */}
+            <ReportFrameHost>
+              <Typography
+                data-testid="report-placeholder"
+                sx={{ fontSize: 13, color: "text.secondary", p: 2 }}
+              >
+                {REPORT_PLACEHOLDER}
+              </Typography>
+            </ReportFrameHost>
+
+            <Section title="SCOREBOARD">
+              <Scoreboard evaluation={detail.evaluation ?? null} />
+            </Section>
+
+            <Section title="CONDITIONS">
+              <ConditionTable
+                conditions={
+                  Array.isArray(detail.evaluation?.conditions) ? detail.evaluation.conditions : []
+                }
+                statFor={statFor}
+              />
+            </Section>
+
+            <Section title="CHARTS">
+              <MetricCharts
+                hypothesisId={id}
+                spec={detail.spec ?? null}
+                specSource={detail.spec_source}
+              />
+            </Section>
+
+            <Section title="PROPOSALS">
+              <AmendmentList
+                hypothesisId={id}
+                amendments={detail.amendments ?? []}
+                onDone={() => void load()}
+              />
+            </Section>
+
+            <Section title="TIMELINE">
+              <Timeline detail={detail} />
+            </Section>
           </Box>
         )}
       </Box>
 
-      {/* Right column: the rail. Sticky, 100vh, collapsible — never measured. */}
+      {/* Right column: the rail. A SIBLING of the column above, never a child
+          of it — sticky, 100vh, collapsible, and never measured. */}
       <ChatRail hypothesisId={id} />
     </Box>
   );

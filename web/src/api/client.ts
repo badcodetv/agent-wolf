@@ -16,9 +16,12 @@
  */
 
 import type {
+  AmendmentDecision,
   BoardRow,
   EmbedTokenResponse,
+  HumanVerdict,
   HypothesisDetail,
+  SeriesResponse,
   SignedInUser,
 } from "./types.js";
 
@@ -199,4 +202,65 @@ export function goLive(id: string): Promise<unknown> {
  */
 export function fetchEmbedToken(id: string): Promise<EmbedTokenResponse> {
   return getJson<EmbedTokenResponse>(`/api/hypotheses/${encodeURIComponent(id)}/embed-token`);
+}
+
+/**
+ * `GET /api/hypotheses/:id/series/:metric` —
+ * `{ points, unit, version, fetched_at_ms, state }`.
+ *
+ * 🔴 `state` is computed SERVER-SIDE from the locked spec's `staleness_days`
+ * (`api/src/routes/series.ts`'s `seriesState`) and it is the authority for
+ * how the chart draws. The browser does not recompute it: two definitions in
+ * two places disagree the first time the series route returns points newer
+ * than the last evaluation.
+ *
+ * A metric absent from the locked spec — and every metric of a hypothesis
+ * that has not gone live — is a `404 not_found` here, not an empty series.
+ */
+export function fetchSeries(id: string, metric: string): Promise<SeriesResponse> {
+  return getJson<SeriesResponse>(
+    `/api/hypotheses/${encodeURIComponent(id)}/series/${encodeURIComponent(metric)}`,
+  );
+}
+
+/**
+ * `POST /api/hypotheses/:id/verdict` — `{ verdict, rationale }`.
+ *
+ * The wire values are `confirmed` and `invalidated` (`verdictBody`), the same
+ * two lifecycle states, and the rationale is required: the server rejects a
+ * blank one with a 400 and the UI must not let it get that far.
+ */
+export function submitVerdict(
+  id: string,
+  verdict: HumanVerdict,
+  rationale: string,
+): Promise<unknown> {
+  return postJson<unknown>(`/api/hypotheses/${encodeURIComponent(id)}/verdict`, {
+    verdict,
+    rationale,
+  });
+}
+
+/**
+ * `POST /api/hypotheses/:id/amend` — `{ amendment_id, decision, rationale }`.
+ *
+ * 🔴 The decision is **`accept`** / **`reject`**, present tense, matching
+ * `amendBody`'s `z.enum(["accept", "reject"])`. `accepted`/`rejected` 400s,
+ * and it 400s only in front of a human who has already typed a rationale —
+ * which is why `AmendmentList.test.tsx` asserts this body byte for byte.
+ *
+ * `amendmentId` is the ORANGE MEMORY ID of the `kind=spec-amendment` row,
+ * i.e. `EvidenceRow.id` from the detail payload.
+ */
+export function amendSpec(
+  id: string,
+  amendmentId: string,
+  decision: AmendmentDecision,
+  rationale: string,
+): Promise<unknown> {
+  return postJson<unknown>(`/api/hypotheses/${encodeURIComponent(id)}/amend`, {
+    amendment_id: amendmentId,
+    decision,
+    rationale,
+  });
 }
