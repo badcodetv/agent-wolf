@@ -93,6 +93,49 @@ describe("createApp", () => {
       expect(res.status).toBe(403);
     });
 
+    // W11's mount, added 2026-08-24 after its verifier found the hole (R133).
+    // Removing BOTH `app.use` lines left the whole suite green — 32 files,
+    // 1018 tests — because every test in embed.test.ts and series.test.ts
+    // builds its own bare express() app and never exercises createApp. In
+    // production both routes would 404 and nothing would say so; the failure
+    // would first surface in W13, in a browser.
+    //
+    // ⚠️ "401 when signed out" does NOT discriminate here, and asserting it
+    // would be a test that only looks like a guard: W8 mounts a PATH-PREFIXED
+    // `router.use("/api/hypotheses", requireSignedIn)` (routes/hypotheses.ts:396),
+    // so every path under that prefix 401s whether or not W11's routers are
+    // mounted. Verified: with both mounts deleted, a signed-out probe still
+    // returned 401.
+    //
+    // So: sign in, then send a MALFORMED id. W11's `requireHypothesisId`
+    // rejects it as 400 `invalid` BEFORE any upstream call, so this needs no
+    // MockAgent and touches no network. Unmounted, Express falls through to
+    // 404. 400-vs-404 is the discriminator.
+    async function signedInBase(): Promise<{ base: string; cookie: string }> {
+      const base = await listen(
+        createApp(createLogger({ logLevel: "silent" }), testConfig({ WOLF_TEST_LOGIN: "kai@badcode.dev:test-password" })),
+      );
+      const res = await fetch(`${base}/api/auth/dev-login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: "kai@badcode.dev", password: "test-password" }),
+      });
+      expect(res.status).toBeLessThan(400);
+      return { base, cookie: (res.headers.get("set-cookie") ?? "").split(";")[0] ?? "" };
+    }
+
+    it("mounts the embed-token route — a malformed id is 400, not 404", async () => {
+      const { base, cookie } = await signedInBase();
+      const res = await fetch(`${base}/api/hypotheses/NOTANID/embed-token`, { headers: { cookie } });
+      expect(res.status).toBe(400);
+    });
+
+    it("mounts the series route — a malformed id is 400, not 404", async () => {
+      const { base, cookie } = await signedInBase();
+      const res = await fetch(`${base}/api/hypotheses/NOTANID/series/brent_crude`, { headers: { cookie } });
+      expect(res.status).toBe(400);
+    });
+
     it("refuses to build at all when WOLF_MCP_TOKEN is unset, naming the variable", () => {
       // W7's check runs BEFORE W8's session checks in createApp, deliberately:
       // this assertion is what would otherwise start naming WOLF_SESSION_SECRET.
