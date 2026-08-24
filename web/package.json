@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@agentkit/chat-ui": "file:./vendor/agentkit-chat-ui-0.1.0.tgz",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.0",
     "@mui/material": "^6.1.7",
@@ -19,7 +20,11 @@
     "react-is": "18.3.1",
     "recharts": "^3.10.1"
   },
+  "comment": "@agentkit/chat-ui — 🔴 BUMP THE VERSION ON EVERY REPUBLISH. The dependency above points at a tarball committed under web/vendor/, built in the OTHER repo (agent-orange: `cd web && npm run build && npm pack`). Under yarn 1, REPLACING that file at the SAME version updates NOTHING, and this was executed rather than read (2026-08-24, yarn 1.22.22): a dirty `yarn install` reports \"Already up-to-date\"; `yarn cache clean @agentkit/chat-ui` followed by `yarn install --force` still installs the old files; and even `rm -rf node_modules && yarn install --frozen-lockfile` — CI's situation — serves the STALE CACHED COPY without error, because yarn's cache key is name-version-lockfilehash and none of those three changed. Wolf then builds against components that are not the ones in the file, with NOTHING failing and nothing to see. (R134 predicted `error Integrity check failed` here; the observed behaviour is quieter and therefore worse.) So a republish is: bump `version` in agent-orange/web/package.json, re-pack, copy the NEW filename into web/vendor/, delete the old one, and update BOTH the range above and the filename it names — they must always agree, which web/src/theme.test.ts asserts against the INSTALLED package's version. Do NOT switch to the directory form \"file:../../web\": yarn 1 raw-copies web/node_modules with it, giving the consumer a second React, and both `files` and `.npmignore` are ignored. Owner decision 2026-08-24: no registry, both repos in lockstep, revisit when a third application appears. See design/2026-08-20-agent-wolf.md, R134 and R125.",
   "devDependencies": {
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@types/node": "^20.14.10",
     "@types/react": "^18.2.66",
     "@types/react-dom": "^18.2.22",
