@@ -140,6 +140,12 @@ describe('level="attacked" — full-width error Alert', () => {
     );
     const alert = screen.getByTestId("severity");
     expect(alert.dataset.severity).toBe("attacked");
+    // The MUI severity PROP, not just our data-attribute: flipping it to
+    // "warning" changes the rendered colour and the a11y role and, before
+    // this line existed, nothing went red. § 2 pins `Alert severity="error"`
+    // and four tickets (W13, W14, W23, W24) consume this component.
+    expect(alert).toHaveClass("MuiAlert-colorError");
+    expect(alert).toHaveAttribute("role", "alert");
     expect(screen.getByRole("alert")).toBeInTheDocument();
     expect(alert).toHaveTextContent("forged row — researcher-9c1b wrote memory mem_7f3a");
     expect(alert.textContent).toContain(SEVERITY_GLYPHS.attacked);
