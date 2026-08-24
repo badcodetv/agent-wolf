@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Agent Wolf UI — hypothesis list/detail, scoreboard, Orange chat iframe. Own components; imports nothing from agent-orange. See design/2026-08-20-agent-wolf.md (agent-orange repo).",
+  "description": "Agent Wolf UI — hypothesis list/detail, scoreboard, Orange chat iframe. Wolf's own components and theme, plus Orange's types and presentational components via @agentkit/chat-ui (revision 5, tiers 1-2); Orange conversations come through an iframe only. See design/2026-08-20-agent-wolf.md (agent-orange repo).",
   "scripts": {
     "dev": "vite",
     "build": "tsc -p tsconfig.json && vite build",
@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@agentkit/chat-ui": "file:./vendor/agentkit-chat-ui-0.1.0.tgz",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.0",
     "@mui/material": "^6.1.7",
@@ -19,7 +20,11 @@
     "react-is": "18.3.1",
     "recharts": "^3.10.1"
   },
+  "comment": "@agentkit/chat-ui \u2014 \ud83d\udd34 BUMP THE VERSION ON EVERY REPUBLISH. The dependency above points at a tarball committed under web/vendor/, built in the OTHER repo (agent-orange: `cd web && npm run build && npm pack`). Under yarn 1, REPLACING that file at the SAME version does not reliably update anything, and the failure mode is a two-step trap. Step one is LOUD: while the committed yarn.lock still holds the old `resolved \"file:...#<sha1>\"`, any change to the tarball fails with `error Integrity check failed`. Step two is SILENT and is the one that bites: the obvious fix for that error is to delete the lockfile entry and reinstall, after which yarn matches by name-version, serves the STALE cached copy, exits 0, and writes the stale hash into the fresh lockfile. Wolf then builds against components that are not the ones in the file, with nothing failing. (Two earlier drafts of R134 described this wrongly in opposite directions \u2014 see the log entry; the mitigation was the same in all of them.) So a republish is: bump `version` in agent-orange/web/package.json, re-pack, copy the NEW filename into web/vendor/, delete the old one, and update BOTH the range above and the filename it names \u2014 they must always agree, which web/src/theme.test.ts asserts against the INSTALLED package version. Do NOT switch to the directory form \"file:../../web\": yarn 1 raw-copies web/node_modules with it, giving the consumer a second React, and both `files` and `.npmignore` are ignored. Owner decision 2026-08-24: no registry, both repos in lockstep, revisit when a third application appears. See design/2026-08-20-agent-wolf.md, R134 and R125.",
   "devDependencies": {
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@types/node": "^20.14.10",
     "@types/react": "^18.2.66",
     "@types/react-dom": "^18.2.22",
