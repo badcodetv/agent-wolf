@@ -98,6 +98,22 @@ services:
     build:
       context: .
       dockerfile: web/Dockerfile
+      # Browser-side build variables (W13). wolf-web is a BUILT static bundle:
+      # an `environment:` entry cannot reach it, because vite inlined every
+      # VITE_* value at build time. A variable documented in .env.example and
+      # read by web/src/env.ts still never reaches the bundle without a line
+      # HERE — the same class of omission as R81, one layer further out.
+      #
+      # ⚠️ VITE_ORANGE_PUBLIC_URL must equal wolf-api's ORANGE_PUBLIC_URL and
+      # must be listed in the `wolf` project's `allowed_origins` in Orange's
+      # project map. Two variables, one origin, and nothing checks that they
+      # agree — see .env.example.
+      #
+      # ⚠️ Changing either value requires a REBUILD (`docker compose up -d
+      # --build wolf-web`); restarting the container changes nothing.
+      args:
+        VITE_ORANGE_PUBLIC_URL: ${VITE_ORANGE_PUBLIC_URL:-http://localhost:8080}
+        VITE_GOOGLE_CLIENT_ID: ${VITE_GOOGLE_CLIENT_ID:-}
     # External: agent-orange's own `docker compose up` must have created
     # this network already (compose project name "agent-orange" + its
     # default network name "default" -> "agent-orange_default").

@@ -20,11 +20,35 @@
  *     fails while `yarn test` passes. The augmentation below is that file's,
  *     re-stated where the resolution works.
  */
-import { expect } from "vitest";
+import { afterEach, expect } from "vitest";
+import { cleanup } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { TestingLibraryMatchers } from "@testing-library/jest-dom/matchers";
 
 expect.extend(matchers);
+
+/**
+ * ⚠️ ADDED BY W13, in a file W28 owns — the one edit this ticket makes here,
+ * and it is load-bearing rather than tidiness.
+ *
+ * `@testing-library/react` auto-registers its own `afterEach(cleanup)` ONLY
+ * when it can see a global `afterEach`, i.e. when the runner has
+ * `globals: true`. `web/vite.config.ts` deliberately does not set that, so
+ * without this line NOTHING unmounts between tests: every render stacks into
+ * the same `document.body`, and the second test in any file that renders the
+ * same component fails with "Found multiple elements by: [data-testid=…]" —
+ * an error that reads as a bug in the component under test rather than as a
+ * missing teardown.
+ *
+ * The alternative (a `cleanup()` in every component test file) is the same
+ * line written eight times, and the failure mode of forgetting one is that
+ * confusing error in an unrelated file. W28's two trust suites already pass
+ * either way, because each renders into its own `render()` result and asserts
+ * through it; W13's first table test over six states is what surfaced this.
+ */
+afterEach(() => {
+  cleanup();
+});
 
 declare module "vitest" {
   // `T = any` matches vitest's own declaration exactly; anything else is
