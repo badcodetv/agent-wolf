@@ -22,7 +22,16 @@ import { describe, expect, it, afterEach } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { ThemeProvider } from "@mui/material";
 import { decomposeColor } from "@mui/material/styles";
-import { ArtifactPanel } from "@agentkit/chat-ui/components";
+// R136: the DEEP subpath, not the `./components` barrel. The barrel is 46
+// re-exports and importing any one of them pulled all of them — ~36s of
+// module resolution per suite, which a consumer could not opt out of until
+// agent-orange 0.1.1 added a `./components/*` wildcard export. The deep path
+// pulls ONE module. Prefer it in every Wolf ticket.
+// NOTE the DEFAULT import: a deep subpath gives you the module's own export
+// shape, and each component module default-exports itself — the `./components`
+// barrel is what renames them into named exports. Getting this wrong is a
+// typecheck error, not a runtime surprise.
+import ArtifactPanel from "@agentkit/chat-ui/components/ArtifactPanel";
 import type { ArtifactInfo } from "@agentkit/chat-ui/pure";
 import { darkTheme, lightTheme } from "./theme.js";
 import Provenance from "./components/trust/Provenance.js";

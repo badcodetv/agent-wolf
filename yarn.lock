@@ -7,9 +7,9 @@
   resolved "https://registry.yarnpkg.com/@adobe/css-tools/-/css-tools-4.5.0.tgz#b5b71a25a4d16afa2482592ddfa62fccc60bc7d1"
   integrity sha512-6OzddxPio9UiWTCemp4N8cYLV2ZN1ncRnV1cVGtve7dhPOtRkleRyx32GQCYSwDYgaHU3USMm84tNsvKzRCa1Q==
 
-"@agentkit/chat-ui@file:./web/vendor/agentkit-chat-ui-0.1.0.tgz":
-  version "0.1.0"
-  resolved "file:./web/vendor/agentkit-chat-ui-0.1.0.tgz#fbe3767b0d42c5be0f3909102c1c930e82963ae3"
+"@agentkit/chat-ui@file:./web/vendor/agentkit-chat-ui-0.1.2.tgz":
+  version "0.1.2"
+  resolved "file:./web/vendor/agentkit-chat-ui-0.1.2.tgz#1de00c85587ce2ce2eb4ce4a7dac1df793bffd9d"
   dependencies:
     "@mui/icons-material" "^6.1.7"
     "@untitledui/file-icons" "^0.0.9"
