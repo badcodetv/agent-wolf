@@ -48,7 +48,9 @@ describe("the route table", () => {
     expect(screen.getByTestId("archive-empty")).toBeInTheDocument();
   });
 
-  it("renders the detail placeholder at /hypotheses/:id", async () => {
+  // W14 replaced W13's `detail-placeholder` with the real left column, so
+  // this route test now asserts a region the page actually ships.
+  it("renders the detail page at /hypotheses/:id", async () => {
     renderAt("/hypotheses/1a2b3c4d", {
       "GET /api/hypotheses/1a2b3c4d": {
         json: {
@@ -73,7 +75,8 @@ describe("the route table", () => {
       },
     });
     await settle();
-    expect(screen.getByTestId("detail-placeholder")).toBeInTheDocument();
+    expect(screen.getByTestId("detail-column")).toBeInTheDocument();
+    expect(screen.getByTestId("section-timeline")).toBeInTheDocument();
     expect(screen.getByTestId("chat-rail")).toBeInTheDocument();
   });
 
