@@ -49,6 +49,15 @@ services:
       # are all REQUIRED — wolf-api refuses to boot without them, naming the
       # one that is missing.
       ORANGE_BASE_URL: ${ORANGE_BASE_URL:-}
+      # W11's embed URLs: the BROWSER-reachable Orange origin, which is not
+      # ORANGE_BASE_URL (that one is agentd inside DinD's netns). Optional —
+      # it carries its http://localhost:8080 default from api/src/config.ts
+      # when left empty — which is exactly why it needs a line here
+      # (R81/R110): without one, the origin an operator sets in .env never
+      # reaches this container and every embed_url points at localhost:8080
+      # regardless. api/src/config.test.ts's "R81/R110" block fails if this
+      # line is missing.
+      ORANGE_PUBLIC_URL: ${ORANGE_PUBLIC_URL:-}
       WOLF_API_KEY: ${WOLF_API_KEY:-}
       WOLF_ALLOWED_EMAILS: ${WOLF_ALLOWED_EMAILS:-}
       WOLF_SESSION_SECRET: ${WOLF_SESSION_SECRET:-}

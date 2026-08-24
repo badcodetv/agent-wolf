@@ -172,6 +172,24 @@ export interface WolfConfig {
    * A later ticket moves that reader onto this field; W12's bootstrap is
    * deliberately NOT edited here. */
   orangeBaseUrl: string;
+  /** `ORANGE_PUBLIC_URL` (default `http://localhost:8080`): the
+   * BROWSER-reachable Orange origin, and the base of the `embed_url` W11's
+   * embed-token route hands the UI.
+   *
+   * Deliberately a SECOND variable rather than a reuse of `orangeBaseUrl`:
+   * that one is agentd as *this process* sees it (`http://localhost:8099`,
+   * inside DinD's network namespace), which no browser can reach, and the
+   * embed page is not served by agentd at all — nginx serves
+   * `/embed/session/{name}` from the `web` service
+   * (agent-orange `deploy/web.nginx.conf:19`), which is the only container
+   * publishing a host port. Trailing slashes are trimmed at parse time so
+   * `${orangePublicUrl}/embed/session/hyp-<id>` never doubles a slash.
+   *
+   * ⚠️ Its ORIGIN must also appear in the `wolf` project's
+   * `allowed_origins` on the Orange side (`AGENTKIT_PROJECT_MAP`, O8), or
+   * the embed page's `frame-ancestors` CSP blocks the iframe outright
+   * (`go/cmd/agentd/embedcsp.go`). */
+  orangePublicUrl: string;
   /** `WOLF_API_KEY`: the `wolf` project's Orange API key, sent as
    * `X-API-Key` on every call wolf-api makes to Orange. Empty when unset —
    * `createApp` refuses to build without it, so an unset key is a loud boot
@@ -263,6 +281,14 @@ export const DEFAULT_WOLF_SERIES_MAX_POINTS = 5000;
 
 /** Default `ORANGE_BASE_URL` (R92): agentd, seen from inside DinD's netns. */
 export const DEFAULT_ORANGE_BASE_URL = "http://localhost:8099";
+
+/**
+ * Default `ORANGE_PUBLIC_URL` (W11): the agent-orange stack's `web` service as
+ * a BROWSER sees it. 8080 is the port that stack publishes and the origin its
+ * own README tells an operator to open — it is emphatically not 8099, which is
+ * agentd inside DinD's netns and unreachable from a browser.
+ */
+export const DEFAULT_ORANGE_PUBLIC_URL = "http://localhost:8080";
 
 /** Minimum length of `WOLF_SESSION_SECRET`. */
 export const MIN_SESSION_SECRET_LENGTH = 32;
@@ -593,6 +619,22 @@ export function loadConfig(
     );
   }
 
+  // W11's embed URLs. `present()` (R80): compose forwards an unset optional
+  // variable as the EMPTY STRING, and `"" ?? default` is `""` — which would
+  // build `embed_url` as a bare `/embed/session/hyp-…`, a same-origin path
+  // that resolves against WOLF's own origin and 404s in the iframe.
+  // Trailing slashes are trimmed HERE, once, so no caller has to.
+  const orangePublicUrl = (present(env.ORANGE_PUBLIC_URL)?.trim() ?? DEFAULT_ORANGE_PUBLIC_URL)
+    .replace(/\/+$/, "");
+  if (!/^https?:\/\/[^\s]+$/.test(orangePublicUrl)) {
+    throw WolfError.misconfigured(
+      "ORANGE_PUBLIC_URL",
+      "ORANGE_PUBLIC_URL must be an absolute http(s) URL the BROWSER can reach " +
+        "(e.g. http://localhost:8080), got " +
+        JSON.stringify(env.ORANGE_PUBLIC_URL),
+    );
+  }
+
   // Shape-checked here; PRESENCE is enforced by `createApp` (see WOLF_MCP_TOKEN
   // above for the same split, and W7's precedent for why): `loadConfig` is also
   // what `scripts/bootstrap-project.ts` runs through, and that tool signs
@@ -657,6 +699,7 @@ export function loadConfig(
     reportMaxBytes: reportMaxBytesResult.data,
     seriesMaxPoints: seriesMaxPointsResult.data,
     orangeBaseUrl,
+    orangePublicUrl,
     orangeApiKey: env.WOLF_API_KEY ?? "",
     allowedEmails: parseAllowedEmails(env.WOLF_ALLOWED_EMAILS),
     sessionSecret,

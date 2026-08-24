@@ -10,6 +10,8 @@ import { createOrangeClient } from "./orange/client.js";
 import { createHypothesisStore } from "./hypothesis/store.js";
 import { createAuthRouter } from "./routes/auth.js";
 import { createHypothesesRouter } from "./routes/hypotheses.js";
+import { createEmbedRouter } from "./routes/embed.js";
+import { createSeriesRouter } from "./routes/series.js";
 
 /**
  * The one shared error-handling middleware: any route that throws (or
@@ -121,6 +123,16 @@ export function createApp(logger: Logger, config: WolfConfig): Express {
   app.use(cookieParser(config.sessionSecret));
   app.use(createAuthRouter({ client, config, logger }));
   app.use(createHypothesesRouter({ store, client, logger }));
+
+  // ── W11: the two read-only routes the BROWSER needs ───────────────────
+  //
+  // Mounted AFTER the hypotheses router, which is safe because Express
+  // matches whole paths: `/api/hypotheses/:id` does not match
+  // `/api/hypotheses/<id>/embed-token`. Both routers guard their own single
+  // route with `requireSignedIn` (R79) rather than a path-prefixed
+  // `router.use`, so neither can 401 anything it does not serve.
+  app.use(createEmbedRouter({ client, config, logger }));
+  app.use(createSeriesRouter({ client, logger }));
 
   app.use(createErrorHandler(logger));
 
