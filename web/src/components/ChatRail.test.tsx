@@ -65,3 +65,84 @@ describe("ChatRail", () => {
     expect(screen.getByTestId("orange-chat-frame")).toBeInTheDocument();
   });
 });
+
+/**
+ * The below-`md` branch — W13's rail criterion and UI design § 5: "Below the
+ * `md` breakpoint the rail becomes a tab above the left column's content. It
+ * **never becomes a fixed-height box in the middle of a scrolling document**."
+ *
+ * 🔴 This block exists because that branch was, until it was written, entirely
+ * unexecuted: jsdom defines no `window.matchMedia`, so MUI's `useMediaQuery`
+ * falls back to `false` and the desktop branch is the only one any test ever
+ * rendered. A verification pass gave the tab's frame box `height: 800px` and
+ * the whole 190-test suite stayed green — a stated acceptance criterion held
+ * up by nothing but the code happening to be right.
+ *
+ * The stub is local to this block, and `afterEach`'s `unstubAllGlobals`
+ * removes it, so the other suites keep the desktop default they were written
+ * against.
+ */
+describe("ChatRail below the md breakpoint", () => {
+  /**
+   * MUI reads `window.matchMedia`. `theme.breakpoints.down("md")` compiles to
+   * `@media (max-width:899.95px)`, so answering `true` to any `max-width`
+   * query — and `false` to everything else — puts exactly this component into
+   * its narrow branch without pretending anything else about the viewport.
+   */
+  function stubNarrowViewport(): void {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: /max-width/.test(query),
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    }));
+  }
+
+  it("renders as a TAB, and that tab carries no fixed pixel height either", async () => {
+    stubNarrowViewport();
+    renderWithProviders(<ChatRail hypothesisId={ID} />);
+    await flush();
+
+    const rail = screen.getByTestId("chat-rail");
+    // Proof the branch actually ran: without the stub this is "rail".
+    expect(rail).toHaveAttribute("data-rail-mode", "tab");
+    expect(window.getComputedStyle(rail).position).not.toBe("sticky");
+
+    const frame = screen.getByTestId("orange-chat-frame");
+    // The frame still fills its container and still measures nothing.
+    expect(frame.style.height).toBe("100%");
+    expect(frame.style.height).not.toMatch(/px/);
+
+    // …and the container the tab gives it is a viewport fraction, not a pixel
+    // count. A `height: 800px` here is the exact mutation this test exists to
+    // catch: correct on the machine it was written on, wrong everywhere else.
+    const box = frame.parentElement;
+    expect(box).not.toBeNull();
+    const boxHeight = window.getComputedStyle(box as HTMLElement).height;
+    expect(boxHeight).not.toMatch(/px/);
+    expect(boxHeight).toBe("70vh");
+  });
+
+  it("still collapses and restores as a tab", async () => {
+    stubNarrowViewport();
+    renderWithProviders(<ChatRail hypothesisId={ID} />);
+    await flush();
+    expect(screen.getByTestId("orange-chat-frame")).toBeInTheDocument();
+
+    await act(async () => {
+      screen.getByTestId("chat-rail-toggle").click();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.queryByTestId("orange-chat-frame")).toBeNull();
+
+    await act(async () => {
+      screen.getByTestId("chat-rail-toggle").click();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByTestId("orange-chat-frame")).toBeInTheDocument();
+  });
+});

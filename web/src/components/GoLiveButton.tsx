@@ -47,7 +47,15 @@ export default function GoLiveButton({
   // `=== false`, not `!valid`: the gate is the server's boolean, and an
   // absent/undefined field must not read as "invalid" by accident here — it
   // would be a client-side gate wearing a server-side gate's clothes.
-  const blocked = specValidation.valid === false;
+  //
+  // The `?.` is defensive, not a widening of the contract: `spec_validation`
+  // is declared non-optional and the server always sends it. But the shape
+  // arrives over the wire, and reading `.valid` off an absent object throws
+  // during render — which does not "fail closed", it takes the whole detail
+  // page down. Silence from the server is not a refusal, and W9's 422 on the
+  // POST is the real backstop.
+  const blocked = specValidation?.valid === false;
+  const errors = specValidation?.errors ?? [];
 
   async function submit(): Promise<void> {
     setBusy(true);
@@ -81,12 +89,12 @@ export default function GoLiveButton({
           <Typography sx={{ fontSize: 13, color: "text.secondary" }}>
             The spec candidate does not validate, so this hypothesis cannot go live yet:
           </Typography>
-          {specValidation.errors.length === 0 ? (
+          {errors.length === 0 ? (
             <Typography sx={{ fontSize: 13, color: "text.secondary" }}>
               (the server reported no detail — the spec is still refused)
             </Typography>
           ) : (
-            specValidation.errors.map((error) => (
+            errors.map((error) => (
               <Typography
                 data-testid="spec-error"
                 key={`${error.path}:${error.message}`}

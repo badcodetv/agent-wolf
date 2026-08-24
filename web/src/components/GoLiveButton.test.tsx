@@ -89,3 +89,38 @@ describe("GoLiveButton", () => {
     );
   });
 });
+
+/**
+ * The gate is `spec_validation.valid === false` and NOT `!valid` — an absent
+ * or unset field must not read as "invalid" on the client. That distinction is
+ * deliberate: the go-live gate has exactly one source, and a browser that
+ * disabled the button on a payload the server had said nothing about would be
+ * a SECOND gate, decided here, wearing the server's clothes.
+ *
+ * 🔴 These two fixtures exist because nothing guarded the choice: a
+ * verification pass changed the condition to `specValidation?.valid !== true`
+ * — which disables the button whenever the field is missing — and the whole
+ * suite stayed green.
+ */
+describe("the gate is `valid === false`, never `!valid`", () => {
+  it("stays ENABLED when spec_validation is present but `valid` is undefined", () => {
+    stubFetchRoutes({});
+    renderWithProviders(
+      <GoLiveButton hypothesisId={ID} specValidation={{} as unknown as SpecValidation} />,
+    );
+    expect(button()).toBeEnabled();
+    expect(screen.queryByTestId("spec-errors")).toBeNull();
+  });
+
+  it("stays ENABLED when spec_validation is absent from the payload entirely", () => {
+    // What `GET /api/hypotheses/:id` would look like if the field were ever
+    // dropped or renamed. Silence from the server is not a refusal, and the
+    // real backstop for a race is W9's 422 on the POST.
+    stubFetchRoutes({});
+    renderWithProviders(
+      <GoLiveButton hypothesisId={ID} specValidation={undefined as unknown as SpecValidation} />,
+    );
+    expect(button()).toBeEnabled();
+    expect(screen.queryByTestId("spec-errors")).toBeNull();
+  });
+});
