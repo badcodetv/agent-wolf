@@ -6,6 +6,7 @@ import { WolfError } from "./errors.js";
 import { parseTemplate } from "./report/template.js";
 import {
   DEFAULT_GATEWAY_FALLBACK,
+  DEFAULT_ORANGE_PUBLIC_URL,
   DEFAULT_WOLF_POLL_INTERVAL_SECONDS,
   loadConfig,
   parseDefaultGatewayFromProcRoute,
@@ -650,6 +651,73 @@ describe("WOLF_POLL_INTERVAL_SECONDS (W10)", () => {
     );
     expect(example).toContain("WOLF_POLL_INTERVAL_SECONDS=300");
     expect(example).toContain("SECONDS");
+  });
+});
+
+// design/2026-08-20-agent-wolf.md, W11: `ORANGE_PUBLIC_URL` is the
+// BROWSER-reachable Orange origin and the base of every `embed_url`. It is a
+// SECOND variable on purpose — ORANGE_BASE_URL is agentd inside DinD's netns,
+// which no browser can reach — so the cases below gate that the two never
+// collapse into one. The "reaches the container" half is enforced by the
+// R81/R110 block below.
+describe("ORANGE_PUBLIC_URL (W11)", () => {
+  const noRoutes = routeSourceReturning(undefined);
+
+  it("defaults to the agent-orange stack's published web origin, NOT agentd", () => {
+    const config = loadConfig({}, noRoutes);
+    expect(config.orangePublicUrl).toBe(DEFAULT_ORANGE_PUBLIC_URL);
+    expect(config.orangePublicUrl).toBe("http://localhost:8080");
+    // 8099 is agentd in DinD's netns; a browser cannot reach it.
+    expect(config.orangePublicUrl).not.toBe(config.orangeBaseUrl);
+  });
+
+  it("reads ORANGE_PUBLIC_URL when set, independently of ORANGE_BASE_URL", () => {
+    const config = loadConfig(
+      { ORANGE_PUBLIC_URL: "https://orange.badcode.dev", ORANGE_BASE_URL: "http://localhost:9000" },
+      noRoutes,
+    );
+    expect(config.orangePublicUrl).toBe("https://orange.badcode.dev");
+    expect(config.orangeBaseUrl).toBe("http://localhost:9000");
+  });
+
+  it("treats an EMPTY value as absent (R80) rather than as a bare-path origin", () => {
+    // Compose forwards an unset optional variable as "", and `"" ?? default`
+    // is `""` — which would build embed_url as a same-origin path that
+    // resolves against WOLF's own origin and 404s inside the iframe.
+    expect(loadConfig({ ORANGE_PUBLIC_URL: "" }, noRoutes).orangePublicUrl).toBe(
+      DEFAULT_ORANGE_PUBLIC_URL,
+    );
+  });
+
+  it("trims trailing slashes, so an embed_url never doubles one", () => {
+    expect(
+      loadConfig({ ORANGE_PUBLIC_URL: "http://localhost:8080///" }, noRoutes).orangePublicUrl,
+    ).toBe("http://localhost:8080");
+  });
+
+  it("fails fast naming ORANGE_PUBLIC_URL when it is not an absolute http(s) URL", () => {
+    for (const bad of ["localhost:8080", "/embed", "ftp://orange.test"]) {
+      try {
+        loadConfig({ ORANGE_PUBLIC_URL: bad }, noRoutes);
+        expect.unreachable(`ORANGE_PUBLIC_URL=${bad} should have been refused`);
+      } catch (err) {
+        expect(err).toBeInstanceOf(WolfError);
+        expect((err as WolfError).kind).toBe("misconfigured");
+        expect((err as WolfError).message).toContain("ORANGE_PUBLIC_URL");
+      }
+    }
+  });
+
+  it("is documented in .env.example, with the frame-ancestors trap spelled out", () => {
+    const example = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".env.example"),
+      "utf8",
+    );
+    expect(example).toContain("ORANGE_PUBLIC_URL=http://localhost:8080");
+    // O8's allowed_origins is the other half: an origin missing there means
+    // the browser blocks the chat iframe with no error on the Wolf side.
+    expect(example).toContain("allowed_origins");
+    expect(example).toContain("frame-ancestors");
   });
 });
 
