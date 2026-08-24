@@ -18,6 +18,16 @@
  *    full-viewport dialog rendering **the same child** — same component, same
  *    CSP, same sandbox, because it IS the same element.
  *
+ *    🔴 **Exactly ONE copy of the child is mounted at a time.** The first cut
+ *    of this file left the boxed copy mounted while the dialog was open, so an
+ *    expanded report was two live frames: two `srcdoc` loads of the same
+ *    report, two lots of work for anything that runs script, and two
+ *    independent scroll positions for one document — a reader who scrolled the
+ *    box and then expanded would land back at the top. Both copies carried the
+ *    identical sandbox, so it was never a security problem; it was a
+ *    correctness one, and W23 would have inherited it. `ReportFrameHost.test
+ *    .tsx` counts the instances in both states.
+ *
  * 2. 🔴 **No `postMessage`-driven resize.** An iframe with
  *    `sandbox="allow-scripts"` and no `allow-same-origin` can still
  *    `postMessage` its parent. Honouring a height from it would let
@@ -80,7 +90,9 @@ export default function ReportFrameHost({ children, heading = "Report" }: Report
           border: (theme) => `1px solid ${theme.palette.divider}`,
         }}
       >
-        {children}
+        {/* One copy at a time — see the file header. The box keeps its height
+            while the dialog is open so nothing below it jumps. */}
+        {expanded ? null : children}
       </Box>
 
       <Dialog
@@ -98,9 +110,10 @@ export default function ReportFrameHost({ children, heading = "Report" }: Report
             close
           </Button>
         </Box>
-        {/* The SAME child element — same component, same CSP, same sandbox. */}
+        {/* The SAME child element — same component, same CSP, same sandbox —
+            and the only mounted copy while this dialog is open. */}
         <DialogContent data-testid="report-frame-host-expanded" sx={{ p: 0, height: "100%" }}>
-          {children}
+          {expanded ? children : null}
         </DialogContent>
       </Dialog>
     </Box>

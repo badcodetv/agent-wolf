@@ -133,3 +133,38 @@ describe("the pure helpers", () => {
     expect(stalenessDaysOf({ staleness_days: 0 } as unknown as HypothesisSpec)).toBe(5);
   });
 });
+
+describe("🔴 one clock, read once", () => {
+  it("hands every chart the SAME nowMs", async () => {
+    // `Date.now` is replaced with a counter that moves on every call. Under
+    // the shipped code there is exactly one call — in this section, after all
+    // the series settle — so both charts carry the same value. A chart (or a
+    // per-chart prop) that read the clock itself would give them different
+    // ones, which is the mutation this exists to catch: the component header
+    // claims "captured ONCE", and a header claiming a property nothing checks
+    // is how the property stops being true.
+    let tick = 1_780_000_000_000;
+    const spy = vi.spyOn(Date, "now").mockImplementation(() => {
+      tick += 1_000;
+      return tick;
+    });
+    try {
+      stubFetchRoutes({
+        [seriesKey("brent_crude")]: { json: series({ state: "stale" }) },
+        [seriesKey("dxy")]: { json: series({ state: "stale", unit: "index" }) },
+      });
+      renderCharts(SPEC, "hypothesis-spec");
+      await waitFor(() => expect(screen.getAllByTestId("metric-chart").length).toBe(2));
+
+      const stamps = screen
+        .getAllByTestId("metric-chart")
+        .map((node) => node.getAttribute("data-now-ms"));
+      expect(stamps[0]).toBe(stamps[1]);
+      // …and the counter really is moving, so the equality above is a result
+      // rather than an accident of a frozen clock.
+      expect(Date.now()).not.toBe(Date.now());
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});

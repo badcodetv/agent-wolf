@@ -236,7 +236,7 @@ export type EvaluationReason = (typeof EVALUATION_REASONS)[number];
 /** The EXPECTED direction from the spec. `flat` is legal (R65). */
 export type MetricDirection = "up" | "down" | "flat";
 
-/** The five statistics of § "Condition semantics" (the API's `spec.ts`). */
+/** The five statistics of § "Condition semantics" (`api/src/hypothesis/spec.ts`). */
 export type ConditionStat = "level" | "change_abs" | "change_pct" | "drawdown_pct" | "ratio_to";
 
 export type ConditionOp = "gt" | "gte" | "lt" | "lte";
@@ -307,7 +307,7 @@ export interface SpecMetric {
   unit: string;
 }
 
-/** The API's `Spec` (its `spec.ts`). Served as `unknown` — read defensively. */
+/** `api/src/hypothesis/spec.ts`'s `Spec`. Served as `unknown` on the wire — read defensively. */
 export interface HypothesisSpec {
   thesis: string;
   horizon_days: number;
@@ -317,7 +317,7 @@ export interface HypothesisSpec {
   invalidation: SpecCondition[];
 }
 
-/** The API's `DEFAULT_STALENESS_DAYS`. */
+/** `api/src/hypothesis/spec.ts`'s `DEFAULT_STALENESS_DAYS`. */
 export const DEFAULT_STALENESS_DAYS = 5;
 
 /**

@@ -160,7 +160,12 @@ describe("🔴 the hatching and the caption come from SeriesResponse.state", () 
 
   it("captions a `never_fetched` series with exactly `never fetched`, and plots nothing", () => {
     renderChart({ points: [], state: "never_fetched" });
-    expect(screen.getByTestId("metric-chart-caption")).toHaveTextContent(NEVER_FETCHED_CAPTION);
+    // 🔴 The LITERAL, not the imported constant. Asserting the constant makes
+    // the test move with the bug: renaming the caption to "no data" would stay
+    // green, and § 5 pins these two strings word for word. The sibling
+    // "no update since <date>" is already literal-pinned below.
+    expect(NEVER_FETCHED_CAPTION).toBe("never fetched");
+    expect(screen.getByTestId("metric-chart-caption")).toHaveTextContent("never fetched");
     // Never a flat line to today: with no observations there is nothing to
     // draw, and an empty axis pair would read as "we looked and found zero".
     expect(screen.getByTestId("metric-chart-no-points")).toBeInTheDocument();
@@ -168,16 +173,23 @@ describe("🔴 the hatching and the caption come from SeriesResponse.state", () 
 
   it("captions a `stale` series that carries no observations without inventing a date", () => {
     renderChart({ points: [], state: "stale" });
-    expect(screen.getByTestId("metric-chart-caption")).toHaveTextContent(STALE_WITH_NO_OBSERVATIONS);
+    expect(STALE_WITH_NO_OBSERVATIONS).toBe(
+      "no update since it was written — the dataset carries no observations",
+    );
+    expect(screen.getByTestId("metric-chart-caption")).toHaveTextContent(
+      "no update since it was written",
+    );
   });
 
   it("returns the three captions and nothing else", () => {
     expect(captionFor("ok", daily(2))).toBeNull();
-    expect(captionFor("never_fetched", [])).toBe(NEVER_FETCHED_CAPTION);
+    expect(captionFor("never_fetched", [])).toBe("never fetched");
     expect(captionFor("stale", [{ tMs: Date.UTC(2026, 7, 12), v: 1 }])).toBe(
       "no update since 12 Aug 2026",
     );
-    expect(captionFor("stale", [])).toBe(STALE_WITH_NO_OBSERVATIONS);
+    expect(captionFor("stale", [])).toBe(
+      "no update since it was written — the dataset carries no observations",
+    );
   });
 });
 

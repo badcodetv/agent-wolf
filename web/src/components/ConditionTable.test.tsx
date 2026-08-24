@@ -74,11 +74,16 @@ describe("every pinned field renders", () => {
     expect(within(row).getByText("58")).toBeInTheDocument();
   });
 
-  it("renders a statistic placeholder rather than dropping the column when there is no spec", () => {
+  it("renders an em dash for the statistic when there is no spec — never a guessed one", () => {
     renderTable([condition()]);
     const row = screen.getByTestId("condition-table-row");
     expect(within(row).getByText("brent_crude")).toBeInTheDocument();
     expect(row.querySelectorAll("td").length).toBe(8);
+    // 🔴 The CONTENT, not just the column. A statistic Wolf invented — say a
+    // default of "level" — would read as one the spec recorded, and this page
+    // must never print a value nobody wrote.
+    const statistic = row.querySelectorAll("td")[2];
+    expect(statistic?.textContent).toBe("—");
   });
 
   it("renders an explicit empty state rather than an empty table", () => {

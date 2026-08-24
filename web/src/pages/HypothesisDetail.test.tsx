@@ -112,6 +112,11 @@ const SPEC = {
   flat_band_pct: 2,
   staleness_days: 5,
   metrics: [{ slug: "brent_crude", source: "stooq", direction: "down", weight: 1, unit: "USD" }],
+  // 🔴 DELIBERATELY in the opposite order to `EVALUATION.conditions` below,
+  // with two different statistics. The page joins the spec's `stat` to the
+  // evaluation's rows BY CONDITION ID; a join by index would swap these two
+  // and print `drawdown_pct` against the wrong condition. One condition, or
+  // two in matching order, proves nothing about which join was written.
   invalidation: [
     {
       id: "c2",
@@ -122,13 +127,35 @@ const SPEC = {
       sustained_days: 3,
       meaning: "brent breaks the floor",
     },
+    {
+      id: "c1",
+      metric: "dxy",
+      stat: "drawdown_pct",
+      op: "gt",
+      threshold: 5,
+      sustained_days: 3,
+      meaning: "the dollar rolls over",
+    },
   ],
 };
 
 const EVALUATION = {
   evaluated_at_ms: Date.UTC(2026, 7, 21),
   support_score: -0.4,
+  // `c1` first, `c2` second — the reverse of the spec's order above.
   conditions: [
+    {
+      id: "c1",
+      metric: "dxy",
+      state: "holding",
+      reason: null,
+      value: 1.2,
+      threshold: 5,
+      op: "gt",
+      window_start_ms: Date.UTC(2026, 5, 1),
+      window_end_ms: Date.UTC(2026, 7, 21),
+      observations_in_window: 58,
+    },
     {
       id: "c2",
       metric: "brent_crude",
@@ -236,16 +263,40 @@ describe("W14's left column", () => {
     expect(screen.getByTestId("report-frame-host")).toBeInTheDocument();
   });
 
-  it("hands the condition table the STATISTIC from the spec", async () => {
+  it("🔴 joins the spec's STATISTIC to each row BY CONDITION ID, not by index", async () => {
     await renderDetail({
       [DETAIL]: { json: fullBody() },
       [TOKEN]: tokenRoute,
       [ID_SERIES("brent_crude")]: seriesBody,
     });
-    // `stat` lives on the spec's condition, not on the evaluation's — the
-    // page is the only place that holds both.
-    const table = screen.getByTestId("condition-table");
-    expect(within(table).getByText("change_pct")).toBeInTheDocument();
+    // `stat` lives on the spec's condition, not on the evaluation's — the page
+    // is the only place that holds both. The fixture's two orders disagree, so
+    // an index join lands `drawdown_pct` on `c2` and this goes red.
+    const rows = screen.getAllByTestId("condition-table-row");
+    const statOf = (row: Element): string | null | undefined =>
+      row.querySelectorAll("td")[2]?.textContent;
+    const byId = new Map(rows.map((row) => [row.getAttribute("data-condition-id"), row]));
+    expect([...byId.keys()]).toEqual(["c1", "c2"]);
+    expect(statOf(byId.get("c1") as Element)).toBe("drawdown_pct");
+    expect(statOf(byId.get("c2") as Element)).toBe("change_pct");
+  });
+
+  it("renders an em dash for a condition the spec does not name", async () => {
+    const body = fullBody();
+    // `detailBody`'s return type does not reflect the spread, so the widening
+    // goes through `unknown` — `as` alone is TS2352, which `vitest run` would
+    // never have told us (esbuild strips types without checking them) and
+    // `yarn build` does.
+    const spec = (body as unknown as { spec: { invalidation: unknown[] } }).spec;
+    spec.invalidation = [];
+    await renderDetail({
+      [DETAIL]: { json: body },
+      [TOKEN]: tokenRoute,
+      [ID_SERIES("brent_crude")]: seriesBody,
+    });
+    for (const row of screen.getAllByTestId("condition-table-row")) {
+      expect(row.querySelectorAll("td")[2]?.textContent).toBe("—");
+    }
   });
 
   it("fetches one series per metric of a LOCKED spec", async () => {

@@ -71,7 +71,7 @@ export interface ConditionTableProps {
   conditions: readonly ConditionResult[];
   /**
    * The condition's STATISTIC, which lives on the spec and not on the
-   * evaluation (`Condition.stat`, in the API's `spec.ts`). Supplied by
+   * evaluation (`api/src/hypothesis/spec.ts`'s `Condition.stat`). Supplied by
    * the page, which holds the spec; absent when there is no readable spec.
    */
   statFor?: (conditionId: string) => string | undefined;

@@ -133,7 +133,14 @@ export interface MetricChartProps {
   points: readonly Point[];
   /** 🔴 The server's verdict. This component owns no clock. */
   state: SeriesState;
-  /** The right edge of the hatched trailing region. Supplied so the chart is deterministic under test. */
+  /**
+   * The right edge of the hatched trailing region.
+   *
+   * Supplied by the caller — this component reads no clock, and `MetricCharts`
+   * captures ONE value for every chart on the page. It is echoed onto the root
+   * element as `data-now-ms` so that "one clock, read once" is a property a
+   * test can observe rather than a claim in a comment.
+   */
   nowMs: number;
   /** The spec's `staleness_days`; also the width of jump that counts as a gap. */
   stalenessDays?: number;
@@ -228,7 +235,12 @@ export default function MetricChart({
   );
 
   return (
-    <Box data-testid="metric-chart" data-metric={slug} data-series-state={state}>
+    <Box
+      data-testid="metric-chart"
+      data-metric={slug}
+      data-series-state={state}
+      data-now-ms={nowMs}
+    >
       <Box sx={{ display: "flex", alignItems: "baseline", gap: 1 }}>
         <Typography variant="mono" sx={{ fontSize: 13 }}>
           {slug}

@@ -54,11 +54,54 @@ describe("the expand control", () => {
     expect(within(expanded).getByTestId("panel-child")).toBeInTheDocument();
   });
 
-  it("closes again without unmounting the boxed copy", () => {
+  it("restores the boxed copy when the dialog closes", () => {
     renderHost();
     fireEvent.click(screen.getByTestId("report-expand"));
     fireEvent.click(screen.getByTestId("report-collapse"));
     expect(within(screen.getByTestId("report-frame-host")).getByTestId("panel-child")).toBeInTheDocument();
+  });
+});
+
+describe("🔴 exactly ONE copy of the child is mounted at a time", () => {
+  it("counts one instance boxed, one expanded, and one again after closing", () => {
+    renderHost();
+    // Boxed: one, and it is inside the fixed-height box.
+    expect(screen.getAllByTestId("panel-child").length).toBe(1);
+    expect(
+      within(screen.getByTestId("report-frame-host")).getAllByTestId("panel-child").length,
+    ).toBe(1);
+
+    fireEvent.click(screen.getByTestId("report-expand"));
+    // Expanded: still ONE. Two would mean two `srcdoc` loads of the same
+    // report, two lots of script, and two independent scroll positions for
+    // one document — W23 must not inherit that.
+    expect(screen.getAllByTestId("panel-child").length).toBe(1);
+    expect(
+      within(screen.getByTestId("report-frame-host-expanded")).getAllByTestId("panel-child").length,
+    ).toBe(1);
+    expect(within(screen.getByTestId("report-frame-host")).queryByTestId("panel-child")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("report-collapse"));
+    expect(screen.getAllByTestId("panel-child").length).toBe(1);
+  });
+
+  it("counts one real sandboxed iframe, expanded or not", () => {
+    // The shape W23 actually mounts. An iframe is the thing that costs a load,
+    // so it is the thing worth counting.
+    const { container } = renderHost(
+      <iframe data-testid="panel-child" title="report" sandbox="allow-scripts" srcDoc="<p>hi</p>" />,
+    );
+    expect(container.ownerDocument.querySelectorAll("iframe").length).toBe(1);
+    fireEvent.click(screen.getByTestId("report-expand"));
+    expect(container.ownerDocument.querySelectorAll("iframe").length).toBe(1);
+  });
+
+  it("keeps the box at its clamp height while the dialog is open, so nothing below it jumps", () => {
+    renderHost();
+    fireEvent.click(screen.getByTestId("report-expand"));
+    expect(getComputedStyle(screen.getByTestId("report-frame-host")).height).toBe(
+      REPORT_PANEL_HEIGHT,
+    );
   });
 });
 

@@ -192,7 +192,13 @@ describe("the challenge reason", () => {
     // challenged at its horizon whose conditions tripped afterwards.
     renderCase({ challengeReason: undefined });
     const line = screen.getByTestId("challenge-reason");
-    expect(line).toHaveTextContent(REASON_NOT_SERVED);
+    // 🔴 The LITERAL sentence, not the imported constant: asserting the
+    // constant lets it be emptied to "" and stay green, and "states its
+    // absence plainly" is half of what this criterion is worth.
+    expect(REASON_NOT_SERVED).toBe(
+      "the challenge reason is not carried by this payload — it is recorded on the hypothesis memory",
+    );
+    expect(line).toHaveTextContent("the challenge reason is not carried by this payload");
     expect(line.textContent).not.toContain("condition_tripped");
     expect(challengeReasonText(null)).toBe(REASON_NOT_SERVED);
     expect(challengeReasonText("  ")).toBe(REASON_NOT_SERVED);
