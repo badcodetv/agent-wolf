@@ -253,9 +253,19 @@ export function sanitiseSlot(html: string): SanitisedSlot {
  * On success it returns W16's `ParsedTemplate` — whose `html` is the bytes
  * handed in, verbatim, and whose `structureHash` is sha256 of exactly those
  * bytes. On failure it throws the shared taxonomy's `invalid` kind carrying
- * every error at once (W16's `templateValidationError`), so W21's route
- * renders one 422 with a per-path list rather than one round trip per
- * mistake.
+ * every error at once (W16's `templateValidationError`), so a caller renders
+ * one response with a per-path list rather than one round trip per mistake.
+ *
+ * ⚠️ **That error is a 400, not the 422 the route contract pins.**
+ * `templateValidationError` builds `kind: "invalid"`, and `invalid`'s default
+ * status is 400 (`errors.ts`), while § "HTTP routes added" pins template
+ * validation failure at **422**. The status is supplied by the caller:
+ * `routes/report.ts`'s `validateSubmittedTemplate` re-wraps this error with
+ * `status: 422`, carrying `details` across untouched, exactly as W9's
+ * `specRejection` does for a spec. *(This comment previously asserted that
+ * this function was itself what made "W21's route render one 422". It never
+ * was, and a false statement in a merged file is worse than a missing one —
+ * the next reader has no reason to measure it. Corrected 2026-08-26, W21.)*
  *
  * There is no sanitising counterpart, on purpose — see this module's header.
  * A template's script tags survive here **by design**; the same bytes handed

@@ -30,6 +30,8 @@
 import { WolfError } from "../errors.js";
 import {
   HYPOTHESIS_ID_PATTERN,
+  LABEL_VALUE_PATTERN,
+  MAX_LABEL_VALUE_LENGTH,
   TRUSTED_KINDS,
   TRUSTED_KIND_LIST,
   forgedRowTamper,
@@ -49,6 +51,8 @@ import type {
 
 export {
   HYPOTHESIS_ID_PATTERN,
+  LABEL_VALUE_PATTERN,
+  MAX_LABEL_VALUE_LENGTH,
   TRUSTED_KINDS,
   TRUSTED_KIND_LIST,
   forgedRowTamper,
@@ -137,6 +141,68 @@ export function reportAmendmentLabels(id: string): ReportLabels {
     status: "proposed",
   };
 }
+
+/**
+ * `kind=report-amendment, name=<id>, status=accepted|rejected` — a HUMAN'S
+ * DECISION on a proposal (W21, owner ruling 2026-08-26).
+ *
+ * Memories are append-only, so deciding is appending: the proposal keeps its
+ * own row and its own provenance, and the decision is a second row of the same
+ * kind carrying the deciding human's rationale as line 1 and an empty body.
+ * Without it the accept path kept the MODEL's rationale (the proposal) and
+ * discarded the HUMAN's, which inverts "agent proposes, human decides,
+ * enforced by provenance".
+ *
+ * A sibling builder rather than a `status` parameter on
+ * `reportAmendmentLabels`: that function's `status: "proposed"` is what the
+ * § "Memory kinds" table pins for a PROPOSAL, and a caller able to pass any
+ * status through it could mint a proposal-shaped row that never was one.
+ *
+ * ⚠️ The written row's provenance is EMPTY — Wolf's own credential writes it —
+ * which is what distinguishes a decision a human made from anything a
+ * container could append. `report-amendment` is not a trusted kind, so nothing
+ * reads that automatically; a reader that cares must check it.
+ */
+export function reportDecisionLabels(
+  id: string,
+  decision: "accept" | "reject",
+  amendmentId: string,
+): ReportLabels {
+  if (!LABEL_VALUE_PATTERN.test(amendmentId) || amendmentId.length > MAX_LABEL_VALUE_LENGTH) {
+    throw new WolfError(
+      "invalid",
+      `reportDecisionLabels: ${JSON.stringify(amendmentId)} cannot be a label value, so a decision on it cannot be recorded or found again`,
+      { details: { amendment_id: amendmentId } },
+    );
+  }
+  return {
+    kind: KIND_REPORT_AMENDMENT,
+    name: requireBareId(id, "reportDecisionLabels"),
+    status: decision === "accept" ? "accepted" : "rejected",
+    [AMENDMENT_LABEL]: amendmentId,
+  };
+}
+
+/**
+ * The label naming WHICH proposal a decision decided.
+ *
+ * 🔴 **A label, not a line in the content, and that is the whole point.** The
+ * question a route has to answer is "does a decision already exist for this
+ * proposal", which is a QUERY — `kind=report-amendment,name=<id>,amendment=<memory-id>`
+ * — and a selector can only see labels. Line 2 of a body is not selectable, so
+ * a decision recorded there would be unfindable and a decided proposal could
+ * be decided again for ever: accept B, accept C, re-accept B, and the frame
+ * silently reverts to B's template with a fresh `status: accepted` row
+ * asserting the human chose it (owner ruling 2026-08-26, fix round 2).
+ *
+ * The value is an Orange memory id. It must satisfy the K8s label charset —
+ * `reportDecisionLabels` refuses one that does not, rather than writing a row
+ * nothing can find.
+ */
+export const AMENDMENT_LABEL = "amendment";
+
+/** The `status` label a row must carry to be DECIDABLE: it is a proposal and nothing else. */
+export const AMENDMENT_STATUS_PROPOSED = "proposed";
 
 /**
  * The selector for one hypothesis's rows of one kind.

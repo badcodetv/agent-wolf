@@ -12,6 +12,40 @@ import { createAuthRouter } from "./routes/auth.js";
 import { createHypothesesRouter } from "./routes/hypotheses.js";
 import { createEmbedRouter } from "./routes/embed.js";
 import { createSeriesRouter } from "./routes/series.js";
+import { createReportRouter } from "./routes/report.js";
+
+/**
+ * The body-parser failures that are the CALLER'S, each carrying a `type` and
+ * its own HTTP status (`raw-body/index.js`, `body-parser/lib/read.js`).
+ *
+ * All three are the same family: the request never became a body. Left
+ * unclassified they fall through to `internal` and tell the caller the SERVER
+ * has a bug — which is the R39 rule inverted. `entity.parse.failed` is
+ * malformed JSON (400) and `charset.unsupported` an unusable charset (415);
+ * `entity.too.large` (413) is the one W21 met, on a report template between
+ * `express.json()`'s old 100kb default and `WOLF_REPORT_MAX_BYTES`.
+ *
+ * Duck-typed rather than imported: `body-parser` is a transitive dependency of
+ * Express here, not a declared one, and `api/`'s import boundary is checked.
+ */
+const BODY_PARSER_ERROR_TYPES: ReadonlySet<string> = new Set([
+  "entity.too.large",
+  "entity.parse.failed",
+  "charset.unsupported",
+]);
+
+function bodyParserStatus(err: unknown): number | undefined {
+  if (typeof err !== "object" || err === null) return undefined;
+  const type = (err as { type?: unknown }).type;
+  if (typeof type !== "string" || !BODY_PARSER_ERROR_TYPES.has(type)) return undefined;
+  // Its own status when it is a plausible client status, 400 otherwise. The
+  // object is not ours, so its `status` is read defensively rather than
+  // trusted into a response code.
+  const status = (err as { status?: unknown }).status;
+  return typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 499
+    ? status
+    : 400;
+}
 
 /**
  * The one shared error-handling middleware: any route that throws (or
@@ -32,7 +66,39 @@ export function createErrorHandler(logger: Logger) {
   return (err: unknown, req: Request, res: Response, _next: NextFunction): void => {
     if (err instanceof WolfError) {
       logger.warn({ kind: err.kind, path: req.path, msg: err.message }, "request failed");
+      if (err.kind === "internal") {
+        // 🔴 `internal` means WE have a bug, and § "Shared error taxonomy"
+        // says its message "is **not** passed through to the client — a stack
+        // trace or a credential in a thrown error must not reach a response
+        // body". That held only for an UNRECOGNISED throw (below); a
+        // `new WolfError("internal", …)` — which `report/frame.ts` and
+        // `report/template.ts` both construct, with details — had its message
+        // and its `details` echoed verbatim. The rule belongs here, at the one
+        // place every error leaves the process, not in each thrower (W21).
+        res.status(err.status).json({ kind: err.kind, message: "internal error" });
+        return;
+      }
       res.status(err.status).json({ kind: err.kind, message: err.message, details: err.details });
+      return;
+    }
+    // ⚠️ AFTER the WolfError branch, deliberately. A duck-typed check placed
+    // first classifies by a property any object may carry: a
+    // `WolfError("forbidden")` that happened to have `type = "entity.too.large"`
+    // on it was answered 413 `invalid` instead of 403 `forbidden`. Our own
+    // taxonomy decides first; duck-typing only ever sees what it is for.
+    const bodyStatus = bodyParserStatus(err);
+    if (bodyStatus !== undefined) {
+      // NOT a WolfError and NOT our bug: the caller's bytes never became a
+      // body. Left unclassified this fell through to `internal`, telling the
+      // caller the server had a bug (W21).
+      const rejected = new WolfError("invalid", "request body could not be read", {
+        status: bodyStatus,
+      });
+      logger.warn(
+        { kind: rejected.kind, path: req.path, type: (err as { type?: string }).type },
+        "request body rejected",
+      );
+      res.status(rejected.status).json({ kind: rejected.kind, message: rejected.message });
       return;
     }
     const wrapped = WolfError.internal(err);
@@ -55,7 +121,15 @@ export function createErrorHandler(logger: Logger) {
  */
 export function createApp(logger: Logger, config: WolfConfig): Express {
   const app = express();
-  app.use(express.json());
+  // 🔴 The limit is DERIVED from the report-template budget, and the default
+  // is not good enough: `express.json()`'s own default is **100kb**, while
+  // `WOLF_REPORT_MAX_BYTES` defaults to 512000 — so before W21 every template
+  // between those two numbers was refused by the body parser, as an opaque
+  // 500, and the configured budget was unreachable. The doubling is JSON
+  // string escaping: a template is quote-dense HTML and every `"` costs two
+  // bytes inside a JSON string; the constant is headroom for the rest of the
+  // envelope.
+  app.use(express.json({ limit: config.reportMaxBytes * 2 + 65_536 }));
 
   // Mounted at /api/healthz, not /healthz: nginx's /api/ location (prod)
   // and vite's /api proxy (dev) both forward the full path unrewritten
@@ -106,9 +180,17 @@ export function createApp(logger: Logger, config: WolfConfig): Express {
   // need a session secret and an allowlist to provision a project.
   assertSessionConfigured(config);
 
-  // ONE Orange client and ONE hypothesis store for the process. The store's
-  // transition mutex is per INSTANCE, not per process (W5's Notes), so a
-  // second store built elsewhere would silently stop serialising transitions.
+  // ONE Orange client and ONE hypothesis store for the app. The store's
+  // transition mutex is PROCESS-WIDE, not per instance: `store.ts` holds a
+  // module-scoped `SHARED_TRANSITION_MUTEX` and every store built in this
+  // process uses it, which is what lets `index.ts` deliberately build a second
+  // client and store for W10's poller without the poller's `live -> challenged`
+  // racing a human's `/verdict` through this one.
+  //
+  // *(This comment previously asserted the opposite — "per INSTANCE, not per
+  // process, so a second store built elsewhere would silently stop serialising
+  // transitions". That was true when W8 wrote it and W10 falsified it; the
+  // stale text was still here two waves later. R164.)*
   const client = createOrangeClient({
     baseUrl: config.orangeBaseUrl,
     apiKey: config.orangeApiKey,
@@ -133,6 +215,29 @@ export function createApp(logger: Logger, config: WolfConfig): Express {
   // `router.use`, so neither can 401 anything it does not serve.
   app.use(createEmbedRouter({ client, config, logger }));
   app.use(createSeriesRouter({ client, logger }));
+
+  // ── W21: the report frame and the two template-writing routes ─────────
+  //
+  // Mounted last among the /api routers, and safe there for the same reason
+  // the two above are: Express matches whole paths, so
+  // `/api/hypotheses/:id/report/frame` never collides with
+  // `/api/hypotheses/:id`. This router guards each of its three routes with
+  // `requireSignedIn` itself (R79) and holds the frame cache, so there is one
+  // instance of it for the app — a second would be a second cache.
+  //
+  // 🔴 **`report.composeReportStats` is the ONE producer of
+  // `stripped_count`** and it is bound to this instance's cache.
+  // `GET /api/hypotheses/:id` must carry that field (§ "The detail route's
+  // report block, pinned"), and the only alternatives are a second sanitiser
+  // pass — which § "HTTP routes added" note 2 forbids, and whose number can
+  // disagree with the document actually served — or omitting a mandatory
+  // field. **W22 wires it: add `composeReportStats` to
+  // `CreateHypothesesRouterOptions` and pass `report.composeReportStats`
+  // below.** That is one line here and one in `routes/hypotheses.ts`; it needs
+  // W22 added to this file's row in § "Parallelism and file ownership", which
+  // lists W1, W7, W8, W11, W21 and W29 and not W22 (W21's hand-off).
+  const report = createReportRouter({ store, client, config, logger });
+  app.use(report.router);
 
   app.use(createErrorHandler(logger));
 
