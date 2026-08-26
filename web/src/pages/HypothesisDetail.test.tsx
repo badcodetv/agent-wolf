@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, screen, within } from "@testing-library/react";
+import { act, fireEvent, screen, within } from "@testing-library/react";
 import { Route, Routes } from "react-router";
 import HypothesisDetail from "./HypothesisDetail.js";
 import { renderWithProviders, stubFetchRoutes, type FetchRoutes } from "../testUtils.js";
@@ -430,5 +430,184 @@ describe("the detail page below the md breakpoint", () => {
     expect(column.contains(screen.getByTestId("chat-rail"))).toBe(false);
     expect(screen.getByTestId("section-conditions")).toBeInTheDocument();
     expect(screen.getByTestId("section-timeline")).toBeInTheDocument();
+  });
+});
+
+// ── W23: the band and the report panel ──────────────────────────────────
+
+const REPORT = {
+  has_template: true,
+  structure_hash: "9f2c",
+  stripped_count: 0,
+  updated_at_ms: Date.UTC(2026, 7, 24, 6),
+  drift: { orphan_slots: [], unfilled_slots: [] },
+  unreadable: false,
+  tamper: null,
+};
+
+describe("W23's verdict band", () => {
+  it("composes ABOVE the verdict actions, without absorbing them", async () => {
+    await renderDetail({
+      [DETAIL]: { json: fullBody() },
+      [TOKEN]: tokenRoute,
+      [ID_SERIES("brent_crude")]: seriesBody,
+    });
+    const band = screen.getByTestId("verdict-band");
+    const actions = screen.getByTestId("verdict-actions");
+    // Two components, not one: the "buttons only in `challenged`" rule lives
+    // in `VerdictActions`, and folding them together would put it in two
+    // places.
+    expect(band.contains(actions)).toBe(false);
+    expect(band.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("renders the band in a state that has no buttons at all", async () => {
+    // `draft`: `VerdictActions` renders nothing, and the band still has to
+    // say where the hypothesis stands.
+    await renderDetail({ [DETAIL]: { json: detailBody() }, [TOKEN]: tokenRoute });
+    expect(screen.queryByTestId("verdict-actions")).toBeNull();
+    expect(screen.getByTestId("verdict-band-status")).toHaveTextContent("draft");
+  });
+
+  it("takes its counts from the evaluation the page already fetched", async () => {
+    await renderDetail({
+      [DETAIL]: { json: fullBody() },
+      [TOKEN]: tokenRoute,
+      [ID_SERIES("brent_crude")]: seriesBody,
+    });
+    // One fetch, handed down. The fixture is one tripped and one holding.
+    expect(screen.getByTestId("verdict-band-count-tripped")).toHaveTextContent("1");
+    expect(screen.getByTestId("verdict-band-count-holding")).toHaveTextContent("1");
+    expect(screen.getByTestId("verdict-band-count-indeterminate")).toHaveTextContent("0");
+  });
+});
+
+describe("W23's report panel, in its host", () => {
+  it("replaces W14's placeholder with the real panel", async () => {
+    await renderDetail({
+      [DETAIL]: { json: fullBody({ report: REPORT }) },
+      [TOKEN]: tokenRoute,
+      [ID_SERIES("brent_crude")]: seriesBody,
+    });
+    expect(screen.queryByTestId("report-placeholder")).toBeNull();
+    const host = screen.getByTestId("report-frame-host");
+    expect(within(host).getByTestId("report-frame")).toBeInTheDocument();
+  });
+
+  it("🔴 keeps the sandbox in the EXPANDED copy too", async () => {
+    await renderDetail({
+      [DETAIL]: { json: fullBody({ report: REPORT }) },
+      [TOKEN]: tokenRoute,
+      [ID_SERIES("brent_crude")]: seriesBody,
+    });
+    fireEvent.click(screen.getByTestId("report-expand"));
+    const expanded = screen.getByTestId("report-frame-host-expanded");
+    const frame = within(expanded).getByTestId("report-frame");
+    // The expand dialog renders the SAME component, so it carries the same
+    // sandbox — a preview that differs from production defeats the purpose,
+    // and a full-viewport frame that regained this origin would be the worst
+    // possible place to lose it.
+    expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame.getAttribute("sandbox") ?? "").not.toContain("allow-same-origin");
+    // Still exactly one live frame.
+    expect(screen.getAllByTestId("report-frame").length).toBe(1);
+  });
+
+  it("sits on the model provenance ground with a stamp when a template is locked", async () => {
+    await renderDetail({
+      [DETAIL]: { json: fullBody({ report: REPORT }) },
+      [TOKEN]: tokenRoute,
+      [ID_SERIES("brent_crude")]: seriesBody,
+    });
+    const section = screen.getByTestId("report-section");
+    const ground = within(section).getByTestId("provenance");
+    expect(ground).toHaveAttribute("data-provenance", "model");
+    expect(within(ground).getByTestId("report-frame-host")).toBeInTheDocument();
+    // The stamp is above the frame, not inside it.
+    const stamp = within(ground).getByTestId("provenance-stamp");
+    expect(stamp.contains(screen.getByTestId("report-frame"))).toBe(false);
+  });
+
+  it("uses NO provenance ground when there is no template — nothing model-authored is on screen", async () => {
+    await renderDetail({
+      [DETAIL]: {
+        json: fullBody({
+          report: { ...REPORT, has_template: false, structure_hash: null, drift: null },
+        }),
+      },
+      [TOKEN]: tokenRoute,
+      [ID_SERIES("brent_crude")]: seriesBody,
+    });
+    const section = screen.getByTestId("report-section");
+    // `Provenance kind="machine"` renders no wrapper at all: a tinted ground
+    // and a writer's stamp over an empty state would be claiming an author
+    // for content nobody has written.
+    expect(within(section).queryByTestId("provenance")).toBeNull();
+    expect(within(section).getByTestId("report-empty")).toBeInTheDocument();
+  });
+
+  it("🔴 shows the notices ABOVE the frame's box, not inside it", async () => {
+    await renderDetail({
+      [DETAIL]: {
+        json: fullBody({
+          report: {
+            ...REPORT,
+            stripped_count: 2,
+            drift: { orphan_slots: ["stale-slot"], unfilled_slots: [] },
+          },
+        }),
+      },
+      [TOKEN]: tokenRoute,
+      [ID_SERIES("brent_crude")]: seriesBody,
+    });
+    const notices = screen.getByTestId("report-notices");
+    const host = screen.getByTestId("report-frame-host");
+    // The host scrolls internally at a fixed height. A notice inside it would
+    // scroll away from the report it is about.
+    expect(host.contains(notices)).toBe(false);
+    expect(notices.compareDocumentPosition(host) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByTestId("report-notice-stripped")).toBeInTheDocument();
+    expect(screen.getByTestId("report-notice-drift")).toHaveTextContent("stale-slot");
+  });
+
+  it("🔴 an unreadable report degrades the panel and never the page", async () => {
+    await renderDetail({
+      [DETAIL]: {
+        json: fullBody({
+          report: {
+            ...REPORT,
+            drift: null,
+            unreadable: true,
+            tamper: [
+              {
+                reason: "cross_hypothesis_write",
+                written_by_worker: "",
+                written_by_session: "sess_18ab",
+                memory_id: "mem_99",
+              },
+            ],
+          },
+        }),
+      },
+      [TOKEN]: tokenRoute,
+      [ID_SERIES("brent_crude")]: seriesBody,
+    });
+    // Model-authored content must never be able to take the human's controls
+    // away: the verdict buttons and every other region are still here.
+    expect(screen.getByTestId("verdict-actions")).toBeInTheDocument();
+    expect(screen.getByTestId("section-conditions")).toBeInTheDocument();
+    expect(screen.getByTestId("report-withheld")).toBeInTheDocument();
+    expect(screen.queryByTestId("report-frame")).toBeNull();
+    // …and the tamper the board would have named is named here too.
+    expect(screen.getByTestId("report-notice-tamper")).toHaveTextContent(/cross-hypothesis write/i);
+  });
+
+  it("renders the panel's empty state for a payload with no report block at all", async () => {
+    // Every existing fixture on this page omits it; a missing block costs the
+    // panel, never the page (R140).
+    await renderDetail({ [DETAIL]: { json: detailBody() }, [TOKEN]: tokenRoute });
+    expect(screen.getByTestId("report-frame-host")).toBeInTheDocument();
+    expect(screen.getByTestId("report-empty")).toBeInTheDocument();
+    expect(screen.queryByTestId("report-frame")).toBeNull();
   });
 });
