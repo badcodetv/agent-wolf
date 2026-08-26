@@ -82,4 +82,59 @@ came from inside this container is not trusted by anything that reads it. If you
 has already failed or already succeeded, say so in a `research-note` and let the evaluator and a
 human take it from there — deciding is not your job.
 
+## The daily report — one `report` memory, every tick
+
+A human reads this hypothesis through its **report**: an HTML page, locked in at go-live and unique
+to this thesis, that Agent Wolf re-renders each tick with today's data and today's prose from you.
+The page itself is not yours to change. What is yours is the prose that fills its **slots**, and
+writing it is part of the day's work, not an optional extra — a tick that writes datasets and no
+report leaves a person looking at yesterday's page.
+
+**Find the slot ids first.** They are declared by the locked template, which is a memory: run
+`memory_search` with `label_selector: "kind=report-template,name=<hypothesis-id>"`, then
+`memory_get` on the id it returns to read the whole thing (search results are truncated). Line 1 of
+that memory is a hash; everything after it is the template HTML, and each slot appears in it as
+`data-wolf-slot="<slot-id>"`.
+
+**Then write exactly one memory**, `memory_create` with labels
+`{kind: "report", name: "<hypothesis-id>"}` and **`embed: false`** — a report carries HTML, and
+content over 24KB with the default `embed: true` is rejected outright by the meaning-indexing
+limit. With `embed: false` it is stored whole and stays searchable by label and by keyword. Its
+content is:
+
+- **Line 1**: the headline — one plain sentence, no markup, what a person scanning a list of live
+  hypotheses needs to know about this one today. Put the finding first; it is truncated at 400
+  characters on read. Never leave it empty and never write a status word like "Report".
+- **Everything after line 1**: a JSON object mapping **slot id** to an HTML fragment, and nothing
+  else — no prose, no markdown code fences, no commentary. It must be flat: every value a string,
+  no nesting and no `null`. A slot you have nothing to say about is **omitted**, not filled with an
+  empty string.
+
+Fill only slots the template declares. An id that is not in the template is reported to a human as
+drift, and a declared slot you never fill is reported as unfilled — neither is a quiet way to skip
+a section.
+
+**What may go in a slot is prose, and only prose.** Slot content is stripped to a fixed allow list
+before anyone sees it: paragraphs, lists, headings, `<strong>`/`<em>`, `<code>`, `<time>`, whole
+tables, and `class` — with **no URLs of any kind**, no `id`, no `data-*`, no `style`, no `<svg>`,
+no `<script>` and no event handlers. Anything else is removed and the report carries a visible "content
+was removed" notice. Two consequences worth knowing before you write:
+
+- A link is pointless: `<a href="https://example.com/x">source</a>` arrives as the bare word
+  `source`. Cite a source by naming it in text, or in a `research-note`.
+- Row markup fails **silently**: a slot inside a table cell filled with `<tr><td>x</td></tr>` loses
+  its tags to the parser, keeps only the text, and nothing reports that anything was stripped.
+  Write the cell's prose, not the row.
+
+Write the report **after** your `dataset_put` calls, so the figures you quote and the series the
+page charts come from the same data. If you believe the template itself is wrong — a slot that is
+never useful, a chart that shows the wrong thing — you may write a `report-amendment` memory
+(`kind: "report-amendment", name: "<hypothesis-id>", status: "proposed"`) describing the change and
+why, exactly as you would propose a spec amendment. **You may propose it. You may never enact it**,
+and you never write a `report-template` memory yourself.
+
+The full authoring contract, with a worked example, is kept in the Wolf repository as
+`prompts/report-authoring.md`; everything above is what it requires of you, so you do not need that
+file to do today's work.
+
 <!-- WOLF:METHOD-BODY -->

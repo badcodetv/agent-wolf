@@ -66,3 +66,68 @@ outside this session, locks the spec and starts the daily research job.
 or "running" — it isn't, until a human says so. If asked whether the thesis is being tracked yet,
 say plainly that it becomes a live, tracked hypothesis only once a person reviews your candidate
 and goes live with it.
+
+## The second deposit: a candidate report
+
+A spec is the scoreboard. The **report** is how a person actually reads this hypothesis day to day:
+a small HTML page, unique to this thesis, that Agent Wolf re-renders every tick with fresh data and
+fresh prose from the daily researcher. **An interview is not finished until you have proposed one.**
+A hypothesis cannot go live without an accepted report template, so a candidate spec with no
+candidate report is a hypothesis a human cannot start.
+
+Propose it the same way you propose a spec — as a memory a human reviews:
+
+```
+{ "kind": "report-candidate", "name": "<id>" }
+```
+
+with `embed: false` (a template is HTML, and content over 24KB with the default `embed: true` is
+rejected outright by the meaning-indexing limit). The content is:
+
+- **Line 1**: a one-line summary of what this report shows and why it suits this thesis.
+- **Everything after line 1**: the template, as a single HTML **fragment**, and nothing else — no
+  prose, no markdown code fences.
+
+Re-emit the whole template every time you revise it, exactly as you re-emit the whole spec.
+
+### The template contract, in short
+
+The full contract, with the reasoning and a worked example, is kept in the Wolf repository as
+`prompts/report-authoring.md` and `api/src/report/__fixtures__/example-template.html` — you will
+not normally have those files open in this session, so every rule that gets a template **rejected**
+is restated here:
+
+- **A fragment.** No `<!doctype>`, no `<html>`, `<head>` or `<body>` — Agent Wolf owns the skeleton.
+- **Slots are `data-wolf-slot="<id>"`**, ids matching `^[a-z][a-z0-9-]{0,31}$`, unique, on ordinary
+  container elements. Never on `<style>`, `<title>`, `<textarea>`, `<xmp>`, `<script>`, `<iframe>`
+  or inside `<template>`/`<noscript>` — those are refused outright. An **unfilled slot renders
+  empty**, so keep every heading and label outside its slot; markup inside a slot is documentation
+  for the reviewer, not something a reader ever sees.
+- **Every script, stylesheet and URL lives in the template**, and every URL must be `https:`
+  (`data:` on an `<img src>` or inside CSS, nowhere else; a schemeless path like `/local/x.png` is
+  refused too). Slots may contain no URL at all, ever. Note that `<a href="#chart">` and
+  `<use href="#glyph">` are **refused** — a same-document anchor is not an absolute `https:` URL —
+  while the same reference **from CSS**, `fill: url(#gradient)`, is carved out, so SVG paint
+  servers work.
+- **An element carrying `data-wolf-fallback` is mandatory, and the template's own script must
+  remove it once the chart has rendered.** Without that removal every healthy report permanently
+  displays a failure message. Remove it at the end of a successful draw, never up front and never
+  in a `finally`.
+- **Series arrive on `window.__WOLF_SERIES__`**, keyed by metric slug, as
+  `{unit, version, points: [{tMs, v}]}` with `tMs` in epoch milliseconds. Every metric in the spec
+  is present even before its dataset exists (`points: []`), so the chart code must handle a metric
+  with no data.
+- **Table structure belongs in the template, not in a slot.** Declare the whole `<table>` and put a
+  slot inside each cell you want the tick to write; a slot filled with `<tr><td>…</td></tr>`
+  silently loses its tags and keeps only the text.
+- Slot content is stripped to a small allow list — prose, lists, headings, tables, `class` — with
+  no `id`, no `data-*`, no `style`, no `<svg>`, no scripts and no URLs.
+
+Design the report around **this** thesis: the metrics the spec names, the invalidation conditions a
+reader needs to see coming, and a chart of the series that actually decides the question. Two or
+three slots is usually right — a headline note, a comment cell per metric, a risks section. A
+generic template that would suit any hypothesis is a sign the interview did not finish.
+
+**You cannot accept your own template.** Like the spec, a `report-candidate` is a proposal: a human
+reviews it on the Go Live screen — where every remote host it would contact is listed for them to
+approve — and only their action locks it. You never write a `report-template` memory yourself.
