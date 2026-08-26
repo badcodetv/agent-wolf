@@ -904,8 +904,16 @@ describe("hypotheses_board", () => {
     const res = await get(h, "/api/hypotheses");
 
     const byId = new Map<string, any>(res.json.map((r: any) => [r.id, r]));
+    // Each tier asserted BESIDE the signal that produced it — the sibling
+    // shape the headline case below carries. Without this a row could be
+    // WATCH for the wrong reason and the assertion would not notice (R198).
+    expect(byId.get(ids[0]!)!.attention_count).toBe(2);
     expect(byId.get(ids[0]!)!.attention_tier).toBe("watch");
+    expect(byId.get(ids[1]!)!.stale_count).toBe(1);
+    expect("attention_count" in byId.get(ids[1]!)!).toBe(false);
     expect(byId.get(ids[1]!)!.attention_tier).toBe("watch");
+    expect("attention_count" in byId.get(ids[2]!)!).toBe(false);
+    expect("stale_count" in byId.get(ids[2]!)!).toBe(false);
     expect(byId.get(ids[2]!)!.attention_tier).toBe("holding");
     // The open request, by SESSION — the interviewer clause.
     // (see below for the `headline === null` proxy, on its own case)
@@ -986,6 +994,16 @@ describe("hypotheses_board", () => {
     stub.reportsLatest = page(
       ids.map((id) => reportRow(id, `${id} headline`, `researcher-${id}`, "sess-tick")),
     );
+    // 🔴 An OPEN request that WOULD have moved ids[1] to needs_human. Without
+    // it this test proved only "the board still answers 200" — the half of
+    // its own title after "and nothing else" — and the clause it claims to
+    // cost was never exercised (R198, found by re-running the assertion diff
+    // over this ticket's own output).
+    stub.attention = JSON.stringify({
+      attention_requests: [
+        { id: "ar-1", session_id: `sess-hyp-${ids[1]}`, worker: "interviewer", message: "which basket?", created_at: 1787334311, expires_at: 1787334911, answered_at: 0, timed_out_at: 0 },
+      ],
+    });
     stub.failAttention = 503;
     const h = await harness(stub);
     const res = await get(h, "/api/hypotheses");
@@ -993,8 +1011,40 @@ describe("hypotheses_board", () => {
     expect(res.status).toBe(200);
     expect(res.json).toHaveLength(12);
     const byId = new Map<string, any>(res.json.map((r: any) => [r.id, r]));
-    expect(byId.get(ids[0]!)!.attention_tier).toBe("needs_human");
+    // The cost: the row whose ONLY signal was that question drops out of
+    // NEEDS A HUMAN.
     expect(byId.get(ids[1]!)!.attention_tier).toBe("holding");
+    // And nothing else: `challenged` comes from memory and is unaffected.
+    expect(byId.get(ids[0]!)!.attention_tier).toBe("needs_human");
+    expect(byId.get(ids[2]!)!.attention_tier).toBe("holding");
+  });
+
+  it("hypotheses_board: the SAME board with the attention read WORKING puts that row in needs_human", async () => {
+    // The control for the case above, assertion for assertion. Without it,
+    // "the failure costs the third clause" is unfalsifiable — a board that
+    // never tiered by attention request at all would satisfy it too.
+    const stub = twelve();
+    stub.board = page([
+      stateRow(ids[0]!, "challenged", "Challenged"),
+      ...ids.slice(1).map((id, i) => stateRow(id, "live", `Hypothesis ${i + 1}`)),
+    ]);
+    stub.reportsLatest = page(
+      ids.map((id) => reportRow(id, `${id} headline`, `researcher-${id}`, "sess-tick")),
+    );
+    stub.attention = JSON.stringify({
+      attention_requests: [
+        { id: "ar-1", session_id: `sess-hyp-${ids[1]}`, worker: "interviewer", message: "which basket?", created_at: 1787334311, expires_at: 1787334911, answered_at: 0, timed_out_at: 0 },
+      ],
+    });
+    const h = await harness(stub);
+    const res = await get(h, "/api/hypotheses");
+
+    expect(res.status).toBe(200);
+    expect(res.json).toHaveLength(12);
+    const byId = new Map<string, any>(res.json.map((r: any) => [r.id, r]));
+    expect(byId.get(ids[1]!)!.attention_tier).toBe("needs_human");
+    expect(byId.get(ids[0]!)!.attention_tier).toBe("needs_human");
+    expect(byId.get(ids[2]!)!.attention_tier).toBe("holding");
   });
 
   it("hypotheses_board: headline is line 1 of the kind=report snippet, and null when there is no report", async () => {

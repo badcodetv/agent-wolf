@@ -862,6 +862,11 @@ describe("store_state_history", () => {
     expect(tamperOf(record, "forged_row").map((t) => t.memory_id)).toEqual([
       "754cf456-20f9-45a0-876e-8a8fa6f7cfe7",
     ]);
+    // ...and NOT on the other channel: the two anomaly kinds are reported
+    // apart, and this is the sibling assertion the hostile-retraction case
+    // below carries (R198 — levelled after the sweep, over the sweep's own
+    // output).
+    expect(tamperOf(record, "hostile_retraction")).toEqual([]);
   });
 
   it("store_state_history: a row WOLF retracted is absent from the history; the hypothesis falls back to what is under it", async () => {
@@ -878,6 +883,8 @@ describe("store_state_history", () => {
     expect(tamperOf(record, "hostile_retraction").map((t) => t.memory_id)).toEqual([
       "b56e4328-6923-417c-8345-305166fd8e46",
     ]);
+    // Wolf's OWN retraction is not an attack and is reported on no channel.
+    expect(tamperOf(record, "forged_row")).toEqual([]);
   });
 
   it("store_state_history: a HOSTILE retraction cannot erase a state change from the history", async () => {
@@ -926,6 +933,10 @@ describe("store_state_history", () => {
     // And the record agrees, because both read the same guard.
     expect(record.status).toBeNull();
     expect(record.statusMemoryId).toBe("9d253a61-79f6-46b1-ad25-a552761b0a6d");
+    // 🔴 And NOT reported as tamper. A status Wolf cannot read is an anomaly
+    // on the rendering channel, not on the attack channel — the row's
+    // provenance is empty, so nobody forged anything.
+    expect(record.tamper).toBeUndefined();
   });
 
   it("store_state_history: `readHypothesis` still answers with the record alone, unchanged", async () => {
