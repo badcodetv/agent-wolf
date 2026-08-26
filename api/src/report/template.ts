@@ -28,6 +28,10 @@
  *     walk re-uses rather than duplicating. W19 turns that list into the
  *     frame's CSP and W24 shows it to the human approving the template, so a
  *     host this file fails to see is a host nobody sees.
+ *     ⚠️ It is a FIRST-ORDER inventory: an external stylesheet may itself
+ *     import a third host, and no static reader can know that. The CSP W19
+ *     derives is what actually stops the second-order fetch; this list is
+ *     what a human approves.
  *
  * ⚠️ This module does not SANITISE anything and must not start. It never
  * mutates the HTML it is given: it measures, locates and refuses. Slot
@@ -743,7 +747,55 @@ function cssUrls(css: string): Array<{ value: string; isImport: boolean }> {
       match[6] ?? match[7] ?? match[8] ?? "";
     found.push({ value, isImport: /^@import/i.test(match[0]) });
   }
+  for (const value of imageSetUrls(css)) found.push({ value, isImport: false });
   return found;
+}
+
+/**
+ * The **bare string** candidates inside an `image-set()`, which is the one
+ * CSS fetch that is not spelled `url(…)` — R118(1).
+ *
+ * `.a{background:image-set("https://is.example/x.png" 1x)}` fetches exactly
+ * what the `url()` spelling fetches, and until this existed the `url()` form
+ * was refused while this one validated clean with an EMPTY inventory. Folded
+ * in here for the same reason R118(2) was folded into this ticket: a review
+ * screen can only show what the inventory holds, and there must be no second
+ * walker to fix it in.
+ *
+ * A `url(…)` written INSIDE an image-set is already matched by the main
+ * pattern, so it is removed before the strings are read — otherwise one URL
+ * would be reported, and refused, twice.
+ *
+ * The opener is matched as a SUBSTRING, which is what covers the vendor
+ * prefixes for free: `-webkit-image-set(` contains `image-set(`. An explicit
+ * `(?:-webkit-)?` group was written here first and a mutation proved it
+ * changed nothing — dead alternation reads like coverage while covering
+ * nothing, so it is gone. The `i` flag is NOT dead: CSS function names are
+ * case-insensitive, and `IMAGE-SET(` is a legal spelling.
+ */
+function imageSetUrls(css: string): string[] {
+  const values: string[] = [];
+  for (const opener of css.matchAll(/image-set\(/gi)) {
+    const start = (opener.index ?? 0) + opener[0].length;
+    let depth = 1;
+    let i = start;
+    while (i < css.length && depth > 0) {
+      const ch = css[i];
+      if (ch === "(") depth += 1;
+      else if (ch === ")") depth -= 1;
+      else if (ch === '"' || ch === "'") {
+        // Skip the string wholesale: a URL may contain a bracket.
+        const close = css.indexOf(ch, i + 1);
+        i = close < 0 ? css.length : close;
+      }
+      i += 1;
+    }
+    const inner = css.slice(start, depth === 0 ? i - 1 : css.length).replace(/url\([^)]*\)/gi, "");
+    for (const candidate of inner.matchAll(/"([^"]*)"|'([^']*)'/g)) {
+      values.push(candidate[1] ?? candidate[2] ?? "");
+    }
+  }
+  return values;
 }
 
 /** Classifies ONE CSS URL. See `cssUrls` for why `#fragment` is allowed. */
@@ -936,21 +988,54 @@ function decodeCharacterReferences(value: string): string {
  *
  * Follows the shared declarative refresh steps closely enough for the one
  * question asked here — *does this navigate somewhere, and where* — which
- * means two things a "split on `url=`" reading would get wrong. The time is
- * MANDATORY (`content="https://evil.example"` navigates nowhere, and reading
- * it as a URL would put a host in the inventory that is never contacted), and
- * the `url=` is OPTIONAL (`content="0; https://evil.example"` navigates, and
- * requiring the literal `url=` would miss it — the direction that fails open).
- * A separator is required after the time, and the URL may be quoted.
+ * means three things a "split on `url=`" reading would get wrong:
+ *
+ *  - the time is MANDATORY, so `content="https://evil.example"` navigates
+ *    nowhere and reading it as a URL would put a host in the inventory that
+ *    is never contacted (an overstatement, which widens W19's CSP) — but a
+ *    lone `.` IS a time, of zero;
+ *  - the `url=` keyword is OPTIONAL: `content="0; https://evil.example"`
+ *    navigates, and requiring the literal keyword misses it;
+ *  - the separator is `;`, `,` **or ASCII whitespace**: `content="0
+ *    https://evil.example"` navigates too.
+ *
+ * The last two are the fail-OPEN direction — a host a browser contacts and
+ * this function does not report is a host the go-live screen never shows.
+ * The URL may be quoted with either quote character.
  */
 function metaRefreshUrl(content: string): string | undefined {
-  let rest = content.replace(/^\s+/, "");
-  const time = /^[0-9]*\.?[0-9]*/.exec(rest)?.[0] ?? "";
-  if (time === "" || time === ".") return undefined;
-  rest = rest.slice(time.length).replace(/^\s+/, "");
-  if (rest === "" || (rest[0] !== ";" && rest[0] !== ",")) return undefined;
-  rest = rest.slice(1).replace(/^\s+/, "");
-  const withoutKeyword = /^url\s*=\s*/i.exec(rest);
+  const stripLeading = (text: string): string => text.replace(/^[ \t\n\f\r]+/, "");
+  let rest = stripLeading(content);
+
+  // Steps 3–6: ASCII digits, then digits AND full stops. A lone `.` is a
+  // legal time of ZERO — parsing it as a non-negative integer fails and the
+  // spec then says "let time be 0", so `<meta content=".;url=…">` really does
+  // navigate. Refusing it (as an earlier cut of this function did) loses the
+  // host from the inventory.
+  const digits = /^[0-9]*/.exec(rest)?.[0] ?? "";
+  rest = rest.slice(digits.length);
+  if (digits === "" && rest[0] !== ".") return undefined;
+  const timeTail = /^[0-9.]*/.exec(rest)?.[0] ?? "";
+  rest = rest.slice(timeTail.length);
+  if (rest === "") return undefined; // a time and nothing else: it reloads in place
+
+  // Step 8: the separator is `;`, `,` **or ASCII WHITESPACE**, and the
+  // punctuation is optional once past the whitespace.
+  //
+  // ⚠️ Requiring the punctuation is a real hole and it was one here: a
+  // browser navigates on `content="0 https://evil.example/x"`, this function
+  // returned `undefined`, so W24 showed the approving human ZERO hosts. The
+  // frame's own sandbox does not save you either — it may navigate ITSELF,
+  // and W19 substitutes origins into `script-src`/`style-src`/`img-src`/
+  // `font-src`, none of which governs a navigation. That is exactly the
+  // R118(2) failure this channel exists to close, so the grammar is followed
+  // rather than approximated.
+  const separator = rest[0];
+  if (separator !== ";" && separator !== "," && !isWhitespace(separator)) return undefined;
+  rest = stripLeading(rest);
+  if (rest[0] === ";" || rest[0] === ",") rest = stripLeading(rest.slice(1));
+
+  const withoutKeyword = /^url[ \t\n\f\r]*=[ \t\n\f\r]*/i.exec(rest);
   if (withoutKeyword) rest = rest.slice(withoutKeyword[0].length);
   const quote = rest[0];
   if (quote === '"' || quote === "'") {
@@ -1132,12 +1217,26 @@ function visitUrlChannels(token: StartTag, ctx: UrlContext, doc: DocState): void
   // the embedder's policy: a nested host missing from the parent's CSP is a
   // nested fetch the browser blocks.
   //
-  // What the nested pass deliberately does NOT do is apply this module's
-  // STRUCTURAL rules. A nested document may legitimately carry a `<!doctype>`
-  // and a `<body>` — it is a document, not a fragment — and a `[data-wolf-slot]`
-  // in there is not a slot: its content range would land inside an attribute
-  // value, so W19's filler could not write it without corrupting the tag. The
-  // nested walk is URL channels only.
+  // THREE rule categories, and they recurse differently. Naming all three,
+  // because the third was found by a verifier rather than written down:
+  //
+  //  1. STRUCTURAL rules do NOT recurse. A nested document may legitimately
+  //     carry a `<!doctype>` and a `<body>` — it is a document, not a
+  //     fragment — and a `[data-wolf-slot]` in there is not a slot: its
+  //     content range would land inside an attribute value, so W19's filler
+  //     could not write it without corrupting the tag it lives in. The
+  //     mandatory fallback is the fragment's own, not a nested one's.
+  //  2. URL rules DO recurse. R118(2) called these channels ones the module
+  //     "chose to police but does not reach", so reaching them means policing
+  //     them: an `http:` URL inside a srcdoc is an error like any other.
+  //  3. The TOKENIZER's own strictness recurses too, as a consequence of (2)
+  //     rather than as a decision: `scan()` refuses markup it cannot
+  //     tokenise, so an unclosed `<svg>` or an unterminated tag inside a
+  //     srcdoc invalidates the PARENT template. That is fail-closed and
+  //     deliberate — an unparseable region is a region whose hosts are
+  //     unknown — but it is a new class of rejection, so it is pinned by
+  //     test rather than left to be discovered by an author. Benign text is
+  //     unaffected: `srcdoc="a &lt; b"` and an unclosed `<div>` both parse.
   if (token.name === "iframe") {
     const srcdoc = attributeValue(token, "srcdoc");
     if (srcdoc !== undefined && srcdoc !== "") {
