@@ -986,6 +986,11 @@ describe("artifacts", () => {
   });
 
   it("GET …/artifacts/file — the path stays in the QUERY; its slashes never become path segments", async () => {
+    // ⚠️ **Proved by URL inspection rather than by behaviour** (R180(4)): this
+    // fake answers the same bytes whatever `?path=` says, so this is a test of
+    // the request we MADE, not of the answer we got. The case above is the
+    // behavioural half — its fake derives the bytes from the query — and the
+    // two are deliberately different instruments on the same parameter.
     const c = intercept("GET", 200, "x", { "content-type": "text/plain" });
     await client().getSessionArtifactFile("hyp-1a2b3c4d", "a/b/c.txt");
     // Two segments after `by-name`, then `artifacts/file`, and nothing else:

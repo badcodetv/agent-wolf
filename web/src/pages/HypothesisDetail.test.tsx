@@ -246,10 +246,16 @@ describe("W29 — the artifacts section", () => {
   });
 
   it("renders the explicit empty state for a session that has written nothing", async () => {
-    await renderDetail({ [DETAIL]: { json: detailBody() }, [TOKEN]: tokenRoute });
-    expect(
-      within(screen.getByTestId("section-artifacts")).getByTestId("artifacts-empty"),
-    ).toBeInTheDocument();
+    // R198: the same assertion list as its sibling above — the section, what
+    // is in it, the request count and the absence of a provenance stamp.
+    // Trimming the second half of a pair to "what looks relevant" is how a
+    // case ends up passing for a reason it does not state.
+    const stub = await renderDetail({ [DETAIL]: { json: detailBody() }, [TOKEN]: tokenRoute });
+    const section = screen.getByTestId("section-artifacts");
+    expect(within(section).getByTestId("artifacts-empty")).toBeInTheDocument();
+    expect(within(section).queryByTestId("artifacts-panel")).toBeNull();
+    expect(stub.countFor(ARTIFACTS)).toBe(1);
+    expect(within(section).queryByTestId("provenance-stamp")).toBeNull();
   });
 });
 
