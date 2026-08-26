@@ -241,10 +241,14 @@ describe("createApp", () => {
       }
     }
 
-    async function detail(): Promise<{ status: number; json: any }> {
+    async function fetchSignedIn(path: string): Promise<{ status: number; json: any }> {
       const { base, cookie } = await signedInBase({ ORANGE_BASE_URL: ORANGE });
-      const res = await fetch(`${base}/api/hypotheses/${ID}`, { headers: { cookie } });
+      const res = await fetch(`${base}${path}`, { headers: { cookie } });
       return { status: res.status, json: await res.json() };
+    }
+
+    async function detail(): Promise<{ status: number; json: any }> {
+      return fetchSignedIn(`/api/hypotheses/${ID}`);
     }
 
     const lockedTemplate = {
@@ -338,6 +342,51 @@ describe("createApp", () => {
           memory_id: "rep-forged",
         },
       ]);
+    });
+
+    it("an unreadable report with NO anomaly carries no `tamper` key on the frame route's 400", async () => {
+      // 🔴 `withReportTamper`'s empty short-circuit, graded on the wire.
+      //
+      // `readLatestReport` attaches what it witnessed to the error it throws,
+      // and `createErrorHandler` echoes an `invalid`'s `details` verbatim. With
+      // no short-circuit an error that witnessed NOTHING is still rebuilt
+      // carrying `"tamper": []`, and an empty array is not the same claim as
+      // an absent one — it renders as a warning banner with no warnings in it.
+      // That is the exact `[]`-vs-absent distinction `mergeTamper` is careful
+      // about on the other two payloads; this is the third.
+      //
+      // One own report, no forgery, a body that is not a flat {slotId: html}
+      // map. `composeFor` reads the template first, so the 404 branch is not
+      // reached and the parse failure is what answers.
+      const own = memoryRow("rep-own", { kind: "report", name: ID }, "the basket held\n{", {
+        worker: `researcher-${ID}`,
+        session: "sess-tick",
+      });
+      const res = await withOrange(
+        {
+          byKind: { ...lockedTemplate.byKind, report: [own] },
+          byId: {
+            ...lockedTemplate.byId,
+            "rep-own": {
+              id: "rep-own",
+              labels: { kind: "report", name: ID },
+              content: 'the basket held\n{"headline":{"html":"<p>x</p>"}}',
+              created_by_worker: `researcher-${ID}`,
+              created_by_session: "sess-tick",
+              created_at: 1787334090000,
+            },
+          },
+        },
+        () => fetchSignedIn(`/api/hypotheses/${ID}/report/frame`),
+      );
+
+      expect(res.status).toBe(400);
+      expect(res.json.kind).toBe("invalid");
+      // The parser's own detail is still there, so this is the right failure
+      // and not merely a differently-shaped one.
+      expect(res.json.details.key).toBe("headline");
+      // And nothing was witnessed, so the key is ABSENT — not present-and-empty.
+      expect(Object.keys(res.json.details)).not.toContain("tamper");
     });
 
     it("refuses to build at all when WOLF_MCP_TOKEN is unset, naming the variable", () => {

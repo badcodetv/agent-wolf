@@ -707,6 +707,15 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
     // which is where an attack on what it says belongs, and the detail page
     // reports the identical anomaly in `report.tamper`. (Unlike the evaluation
     // read, which only logs — its anomalies have no detail-page counterpart.)
+    //
+    // ⚠️ The pair joined here is **`kind=hypothesis` × `kind=report`**, and
+    // `mergeTamper`'s de-duplication is DORMANT because of that pairing: a
+    // retraction memory carries one scalar `retracts=<id>` label, so it lands
+    // in exactly one row's `retracted_by`, and two disjoint kinds cannot
+    // witness the same anomaly. **A future call joining two reads of the SAME
+    // kind makes duplicates reachable immediately**, and nothing will fail —
+    // the dedup simply starts doing work. Restate the pair here if you change
+    // it.
     const tamper = mergeTamper(record.tamper, report?.tamper);
     if (tamper !== null) row.tamper = tamper;
     return row;
@@ -956,6 +965,11 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
           ? null
           : { orphan_slots: drift.orphanSlotIds, unfilled_slots: drift.unfilledSlotIds },
       unreadable,
+      // ⚠️ The pair joined here is **`kind=report-template` × `kind=report`**
+      // — disjoint kinds again, so `mergeTamper`'s de-duplication is dormant
+      // for the same reason it is on the board row. See the note at that call
+      // site; joining two reads of ONE kind would make duplicates reachable
+      // and silently change the assumption.
       tamper: mergeTamper(templateRead.tamper, degraded.read.tamper),
     };
   }

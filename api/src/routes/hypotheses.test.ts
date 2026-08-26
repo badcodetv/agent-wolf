@@ -1132,12 +1132,16 @@ describe("hypotheses_detail", () => {
 
 describe("hypotheses_merge_tamper", () => {
   // Graded directly, because no fixture can reach the overlap through a
-  // route: a retraction memory carries a single `retracts=<id>` label, so one
-  // retraction appears in exactly one row's `retracted_by`, and the two reads
-  // this function joins cover disjoint kinds. The guard is about the arrays
-  // being assembled from INDEPENDENT reads, which is a property of Orange's
-  // data model rather than of this function — so a change on either side
-  // could make it reachable without touching this file.
+  // route: a retraction memory carries a single SCALAR `retracts=<id>` label
+  // (`go/agentdb/memories.go:302,315`; the lookup groups on a scalar jsonb
+  // extraction at `:655-672`), so one retraction appears in exactly one row's
+  // `retracted_by` — and BOTH production call sites join reads of disjoint
+  // kinds: `kind=hypothesis` × `kind=report` on the board row, and
+  // `kind=report-template` × `kind=report` on the detail block. Each site
+  // names its own pair, because that is where the assumption can change; this
+  // file cannot see either one. The guard is about the arrays being assembled
+  // from INDEPENDENT reads, which is a property of Orange's data model rather
+  // than of this function.
   const forged: Tamper = {
     reason: "forged_row",
     written_by_worker: "researcher-1a1a1a1a",
