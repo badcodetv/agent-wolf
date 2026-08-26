@@ -55,6 +55,7 @@ import {
   type HypothesisStore,
   type ReportRead,
   type ReportSummary,
+  reportTamperFrom,
   type SessionLookup,
   type Tamper,
 } from "../hypothesis/store.js";
@@ -205,7 +206,26 @@ export interface ReportBlock {
    * template exactly.
    */
   drift: { orphan_slots: string[]; unfilled_slots: string[] } | null;
-  /** Anomalies on the template row or the report row. `null` when there are none. */
+  /**
+   * Wolf could not read something it stored: the newest own `kind=report`
+   * body is not a flat `{slotId: html}` map, or the locked template no longer
+   * validates. Added to the pinned block by the orchestrator on 2026-08-26.
+   *
+   * 🔴 It exists so `drift: null` carries ONE meaning. Without it, "no tick
+   * has run yet" and "a tick ran and its body is garbage" are the same answer
+   * on the wire, and the second is the one a model inside a container can
+   * cause at will — on the page carrying the verdict buttons.
+   */
+  unreadable: boolean;
+  /**
+   * Anomalies on the template row or the report row. `null` when there are
+   * none.
+   *
+   * 🔴 It survives `unreadable`. The rows are inspected before any body is
+   * read, so a forged or hostilely-retracted row found on the way to an
+   * unreadable one is still reported here — otherwise the board would warn
+   * about an attack this page stayed silent about.
+   */
   tamper: Tamper[] | null;
 }
 
@@ -464,12 +484,22 @@ function evidenceRow(row: MemorySearchResultRow): EvidenceRow {
 
 /**
  * One tamper array out of several, de-duplicated on `reason` + `memory_id` —
- * the same identity `hypothesis/store.ts` uses, because the board's state read
- * and its report read can both witness the same hostile retraction. `null`
+ * the same identity `hypothesis/store.ts` uses inside a single read. `null`
  * when there is nothing to report, so an absent array never renders as an
  * empty warning.
+ *
+ * ⚠️ **No Orange shape produces the overlap today, and an earlier version of
+ * this comment claimed one did.** It said the board's state read and its
+ * report read "can both witness the same hostile retraction"; they cannot — a
+ * retraction memory carries a single `retracts=<id>` label, so one retraction
+ * appears in exactly one row's `retracted_by`, and the two reads cover
+ * disjoint kinds. The guard stays because the arrays are assembled from
+ * INDEPENDENT reads whose overlap is a property of Orange's data model rather
+ * than of this function, and a duplicate would render as two identical
+ * warnings about one event. Exported so it can be graded directly, since no
+ * fixture can reach it through a route.
  */
-function mergeTamper(...groups: (readonly Tamper[] | undefined)[]): Tamper[] | null {
+export function mergeTamper(...groups: (readonly Tamper[] | undefined)[]): Tamper[] | null {
   const out: Tamper[] = [];
   for (const group of groups) {
     for (const t of group ?? []) {
@@ -875,12 +905,13 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
    * which report is this hypothesis's own.
    */
   async function reportBlockFor(id: string, sessions: SessionLookup): Promise<ReportBlock> {
-    const [templateRead, reportRead] = await Promise.all([
+    const [templateRead, degraded] = await Promise.all([
       store.readTemplate(id, { sessions }),
       readLatestReportOrDegrade(id, sessions),
     ]);
     const template = templateRead.template;
-    const report = reportRead.report;
+    const report = degraded.read.report;
+    let unreadable = degraded.unreadable;
 
     // Slot drift needs the template's DECLARED slot ids, which only the
     // parser knows. `parseTemplate` never throws for bad template input — it
@@ -897,6 +928,7 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
         // is the only way here. Declaring NO slots makes every filled slot an
         // orphan, which surfaces loudly on the page instead of hiding — and
         // the frame route answers `internal` for the same state.
+        unreadable = true;
         logger.error(
           { id, memory_id: template.memoryId, errors: parsed.errors },
           "detail report block: the stored template no longer validates",
@@ -923,7 +955,8 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
         drift === null
           ? null
           : { orphan_slots: drift.orphanSlotIds, unfilled_slots: drift.unfilledSlotIds },
-      tamper: mergeTamper(templateRead.tamper, reportRead.tamper),
+      unreadable,
+      tamper: mergeTamper(templateRead.tamper, degraded.read.tamper),
     };
   }
 
@@ -938,14 +971,21 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
   async function readLatestReportOrDegrade(
     id: string,
     sessions: SessionLookup,
-  ): Promise<ReportRead> {
+  ): Promise<{ read: ReportRead; unreadable: boolean }> {
     try {
-      return await store.readLatestReport(id, { sessions });
+      return { read: await store.readLatestReport(id, { sessions }), unreadable: false };
     } catch (err) {
       if (err instanceof WolfError && err.kind === "invalid") {
         logger.error({ id, err }, "detail report block: the newest report body does not parse");
-        return { report: null, tamper: [] };
+        // 🔴 `reportTamperFrom`, not `[]`. The store witnessed its anomalies
+        // while picking the row, BEFORE it read the body that failed, and
+        // discarding them here is what let a cross-hypothesis forgery show on
+        // the board and vanish from this page.
+        return { read: { report: null, tamper: reportTamperFrom(err) }, unreadable: true };
       }
+      // Everything else propagates. An Orange outage or a bug is NOT an
+      // unreadable report: answering 200 with an empty block would tell the
+      // operator the report layer is idle while the upstream is down.
       throw err;
     }
   }

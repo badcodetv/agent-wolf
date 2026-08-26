@@ -22,8 +22,9 @@ import {
   createHypothesisStore,
   slugifyOwner,
   type SessionLookup,
+  type Tamper,
 } from "../hypothesis/store.js";
-import { createHypothesesRouter } from "./hypotheses.js";
+import { createHypothesesRouter, mergeTamper } from "./hypotheses.js";
 import type { ReportComposeStats } from "./report.js";
 
 // design/2026-08-20-agent-wolf.md, W8's acceptance criteria. Test names are
@@ -160,6 +161,8 @@ interface StubConfig {
   details?: Record<string, string>;
   /** `GET /agent/memories/{id}`. */
   memoriesById?: Record<string, string>;
+  /** Status codes `GET /agent/memories/{id}` answers with instead of a body — an UPSTREAM failure, not a parse failure. */
+  failMemoryById?: Record<string, number>;
   /** `POST /agent/session`. Default: Orange's real asynchronous answer. */
   createSession?: Answer;
   /** Successive answers to `GET /agent/sessions/by-name/…`; the last repeats. */
@@ -274,6 +277,8 @@ class Stub {
     }
     if (path.startsWith("/agent/memories/")) {
       const id = decodeURIComponent(path.slice("/agent/memories/".length));
+      const failure = this.config.failMemoryById?.[id];
+      if (failure !== undefined) return { status: failure, body: "orange is having a bad day" };
       const found = this.config.memoriesById?.[id];
       return found === undefined
         ? { status: 404, body: "memory not found" }
@@ -1125,6 +1130,43 @@ describe("hypotheses_detail", () => {
   });
 });
 
+describe("hypotheses_merge_tamper", () => {
+  // Graded directly, because no fixture can reach the overlap through a
+  // route: a retraction memory carries a single `retracts=<id>` label, so one
+  // retraction appears in exactly one row's `retracted_by`, and the two reads
+  // this function joins cover disjoint kinds. The guard is about the arrays
+  // being assembled from INDEPENDENT reads, which is a property of Orange's
+  // data model rather than of this function — so a change on either side
+  // could make it reachable without touching this file.
+  const forged: Tamper = {
+    reason: "forged_row",
+    written_by_worker: "researcher-1a1a1a1a",
+    written_by_session: "sess-tick",
+    memory_id: "mem-7f3a",
+  };
+
+  it("hypotheses_merge_tamper: the same anomaly witnessed by two reads renders ONCE", () => {
+    // Same reason, same offending row, different object identity — which is
+    // what two independent reads produce.
+    expect(mergeTamper([forged], [{ ...forged }])).toEqual([forged]);
+  });
+
+  it("hypotheses_merge_tamper: same memory, DIFFERENT reason is two distinct facts", () => {
+    const retraction: Tamper = { ...forged, reason: "hostile_retraction" };
+    expect(mergeTamper([forged], [retraction])).toEqual([forged, retraction]);
+  });
+
+  it("hypotheses_merge_tamper: same reason, DIFFERENT memory is two distinct facts", () => {
+    const other: Tamper = { ...forged, memory_id: "mem-9c1b" };
+    expect(mergeTamper([forged], [other])).toEqual([forged, other]);
+  });
+
+  it("hypotheses_merge_tamper: nothing to report is null, never an empty array", () => {
+    // An empty array would render as a warning banner with no warnings in it.
+    expect(mergeTamper(undefined, [], undefined)).toBeNull();
+  });
+});
+
 // ── W22: the detail payload's `report` block ────────────────────────────
 //
 // Pinned by design/2026-08-20-agent-wolf.md § "The detail route's report
@@ -1205,6 +1247,7 @@ describe("hypotheses_report_block", () => {
       stripped_count: null,
       updated_at_ms: null,
       drift: null,
+      unreadable: false,
       tamper: null,
     });
   });
@@ -1232,6 +1275,7 @@ describe("hypotheses_report_block", () => {
       // A tick that matched the template exactly: both arrays empty, and that
       // is NOT the same answer as `drift: null`.
       drift: { orphan_slots: [], unfilled_slots: [] },
+      unreadable: false,
       tamper: null,
     });
   });
@@ -1430,9 +1474,66 @@ describe("hypotheses_report_block", () => {
     expect(res.status).toBe(200);
     expect(res.json.hypothesis.id).toBe(ID);
     expect(res.json.report.has_template).toBe(true);
-    // Degraded to "no readable report", which is what the page can honestly
-    // say. The frame route still reports the real failure.
     expect(res.json.report.drift).toBeNull();
+    // 🔴 `drift: null` alone would be indistinguishable from "no tick has run
+    // yet". `unreadable` is what separates them, and the difference is the
+    // one a model inside a container can cause at will.
+    expect(res.json.report.unreadable).toBe(true);
+  });
+
+  it("hypotheses_report_block: a stored template that no longer validates is `unreadable` too", async () => {
+    const stub = baseStub();
+    stub.details![`report-template:${ID}`] = page([
+      memoryRow({
+        id: "tmpl-1",
+        labels: { kind: "report-template", name: ID, status: "locked" },
+        snippet: "9f2c1d0e",
+        createdAtMs: 1787334040000,
+      }),
+    ]);
+    // No `data-wolf-fallback`, which W16's parser requires — the state Wolf
+    // reaches when a validator changes under a template it already accepted.
+    stub.memoriesById!["tmpl-1"] = JSON.stringify({
+      id: "tmpl-1",
+      labels: { kind: "report-template", name: ID, status: "locked" },
+      content: '9f2c1d0e\n<section><div data-wolf-slot="headline"></div></section>',
+      created_by_worker: "",
+      created_by_session: "",
+      created_at: 1787334040000,
+    });
+    const h = await harness(stub);
+    const res = await get(h, `/api/hypotheses/${ID}`);
+
+    expect(res.status).toBe(200);
+    expect(res.json.report.has_template).toBe(true);
+    expect(res.json.report.unreadable).toBe(true);
+  });
+
+  it("hypotheses_report_block: an UPSTREAM failure on the report read is NOT an unreadable report", async () => {
+    // 🔴 The narrowing at the catch. An Orange outage or a bug must
+    // propagate: answering 200 with an empty block would tell the operator
+    // the report layer is idle while the upstream is down, and W10's poller
+    // reads `unavailable` as "retry" and `internal` as "we have a bug" — both
+    // of which this would erase.
+    const stub = withTemplate(baseStub());
+    stub.details![`report:${ID}`] = page([
+      memoryRow({
+        id: "rep-1",
+        labels: { kind: "report", name: ID },
+        snippet: "the basket held\n{",
+        createdByWorker: `researcher-${ID}`,
+        createdBySession: "sess-tick",
+        createdAtMs: 1787334090000,
+      }),
+    ]);
+    // `memoriesById` has no `rep-1`, so the full read is a 500 from Orange,
+    // not a parse failure.
+    stub.failMemoryById = { "rep-1": 500 };
+    const h = await harness(stub);
+    const res = await get(h, `/api/hypotheses/${ID}`);
+
+    expect(res.status).toBeGreaterThanOrEqual(500);
+    expect(res.json.kind).not.toBe("invalid");
   });
 
   it("hypotheses_report_block: both report reads carry include_retracted=1", async () => {

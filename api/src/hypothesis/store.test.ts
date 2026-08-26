@@ -34,6 +34,7 @@ import {
   isTrusted,
   isOwnReport,
   crossHypothesisTamper,
+  reportTamperFrom,
   reportOwnerFor,
   sessionIdFrom,
   newHypothesisId,
@@ -2324,6 +2325,55 @@ describe("store_cross_hypothesis_report", () => {
     ]);
   });
 
+  it("store_cross_hypothesis_report: an UNPARSEABLE own body still carries the forgery it already witnessed", async () => {
+    // 🔴 The anomaly is witnessed while PICKING the row, before the winning
+    // row's body is fetched or parsed. A parse failure afterwards does not
+    // make the forgery untrue, and a caller that degrades on the throw must
+    // not lose it — that is the seam where B's board row warns and B's detail
+    // page says nothing, which is the wrong direction to disagree in.
+    const { store } = harness({
+      sessions: SESSIONS,
+      reports: { [B]: JSON.stringify({ memories: [forgedRow(), ownRow()] }) },
+      memoriesById: {
+        "rep-b-own": JSON.stringify({
+          id: "rep-b-own",
+          labels: { kind: "report", name: B },
+          // Not a flat {slotId: html} map — a model wrote it.
+          content: 'B held through July\n{"headline":{"html":"<p>x</p>"}}',
+          created_by_worker: "researcher-2b3c4d5e",
+          created_by_session: B_SESSION,
+          created_at: 1787334048000,
+        }),
+      },
+    });
+
+    const err = await store
+      .readLatestReport(B, { sessions: new Map([[B, B_SESSION]]) })
+      .then(() => null, (e: unknown) => e);
+
+    expect(err).toBeInstanceOf(WolfError);
+    expect((err as WolfError).kind).toBe("invalid");
+    // The parser's own detail survives...
+    expect((err as WolfError).details).toMatchObject({ key: "headline" });
+    // ...and so does the anomaly, in the shape a caller can hand straight to
+    // the wire.
+    expect(reportTamperFrom(err)).toEqual([
+      {
+        reason: "cross_hypothesis_write",
+        written_by_worker: "researcher-1a2b3c4d",
+        written_by_session: "53f93cd909691c94e52da75bfb4ca9e2",
+        memory_id: "rep-b-forged",
+      },
+    ]);
+  });
+
+  it("store_cross_hypothesis_report: reportTamperFrom invents nothing for an error that carries none", () => {
+    expect(reportTamperFrom(new WolfError("invalid", "no tamper here"))).toEqual([]);
+    expect(reportTamperFrom(new WolfError("invalid", "junk", { details: { tamper: "nope" } }))).toEqual([]);
+    expect(reportTamperFrom(new Error("not ours"))).toEqual([]);
+    expect(reportTamperFrom(undefined)).toEqual([]);
+  });
+
   it("store_cross_hypothesis_report: a forgery with no genuine report beneath it leaves NO report at all", async () => {
     const { store } = harness({
       sessions: SESSIONS,
@@ -2492,6 +2542,86 @@ describe("store_read_report_summaries", () => {
     expect(summary?.headline).toBeNull();
     expect(summary?.memoryId).toBeNull();
     expect(summary?.tamper.map((t) => t.reason)).toEqual(["cross_hypothesis_write"]);
+  });
+
+  it("store_read_report_summaries: the FOLLOW-UP read carries include_retracted=1 — the two attacks combined", async () => {
+    // 🔴 The combination is the point, and neither half alone reaches it: a
+    // forged newest row forces the per-name audit read, and the victim's own
+    // report underneath has been HOSTILELY RETRACTED. Orange applies its
+    // not-retracted filter BEFORE the reduction, so without the flag on that
+    // second request B's real headline disappears and the attacker has
+    // erased it after all — having only had to make the erasure look like a
+    // rejection.
+    const hostile = {
+      retracted_by: [
+        {
+          memory_id: "ret-hostile",
+          created_by_worker: "researcher-1a2b3c4d",
+          created_by_session: A_SESSION,
+          created_at: 1787334049100,
+        },
+      ],
+    };
+    const forged = reportRow("rep-b-forged", B, "B has collapsed\n{}", {
+      worker: "researcher-1a2b3c4d",
+      session: A_SESSION,
+    });
+    const { store, stub } = harness({
+      sessions: SESSIONS,
+      reportsLatest: JSON.stringify({ memories: [forged] }),
+      reports: {
+        [B]: JSON.stringify({
+          memories: [forged, reportRow("rep-b-own", B, "copper is squeezed\n{}", ownB, hostile)],
+        }),
+      },
+    });
+    const summary = (await store.readReportSummaries(INDEX)).get(B);
+
+    expect(summary?.headline).toBe("copper is squeezed");
+    expect(summary?.memoryId).toBe("rep-b-own");
+    expect(summary?.tamper.map((t) => t.reason).sort()).toEqual([
+      "cross_hypothesis_write",
+      "hostile_retraction",
+    ]);
+    // The request shape too, because the answer alone cannot say WHICH read
+    // carried the flag.
+    const followUp = stub.memoryRequests.find((r) => r.path.includes("name%3D2b3c4d5e"));
+    expect(followUp?.path).toContain("include_retracted=1");
+  });
+
+  it("store_read_report_summaries: line 1 is TRIMMED, so a whitespace-only headline is \"\" and not blank text", async () => {
+    // Four shapes, because reverting a `.trim()` tears many inputs while a
+    // one-input test covers one of them (R184). The whitespace-only case is
+    // the discriminating one: untrimmed it is `"   "`, which is truthy, so
+    // the UI renders a headline made of spaces instead of "said nothing".
+    const { store } = harness({
+      sessions: SESSIONS,
+      reportsLatest: JSON.stringify({
+        memories: [
+          reportRow("rep-a", A, "   \n{}", ownA),
+          reportRow("rep-b", B, "  copper is squeezed  \n{}", ownB),
+        ],
+      }),
+    });
+    const summaries = await store.readReportSummaries(INDEX);
+    expect(summaries.get(A)?.headline).toBe("");
+    expect(summaries.get(B)?.headline).toBe("copper is squeezed");
+
+  });
+
+  it("store_read_report_summaries: tabs count as whitespace too", async () => {
+    const { store } = harness({
+      sessions: SESSIONS,
+      reportsLatest: JSON.stringify({
+        memories: [
+          reportRow("rep-a", A, "\t\t\n{}", ownA),
+          reportRow("rep-b", B, "\tcopper\t\n{}", ownB),
+        ],
+      }),
+    });
+    const summaries = await store.readReportSummaries(INDEX);
+    expect(summaries.get(A)?.headline).toBe("");
+    expect(summaries.get(B)?.headline).toBe("copper");
   });
 
   it("store_read_report_summaries: a hostile retraction hides nothing and is reported", async () => {

@@ -915,6 +915,55 @@ export function isOwnReport(memory: ProvenancedMemory, owner: ReportOwner): bool
 }
 
 /**
+ * The key under which a failed report-body parse carries the anomalies that
+ * were witnessed BEFORE the body was read. See `reportTamperFrom`.
+ */
+const TAMPER_DETAIL_KEY = "tamper";
+
+/**
+ * The anomalies a `readLatestReport` failure witnessed on its way to failing.
+ *
+ * 🔴 This exists because of a real defect, and the defect was invisible from
+ * either side alone. `readLatestReport` picks the surviving row FIRST —
+ * reporting every forged, foreign or hostilely-retracted row it stepped over
+ * — and only then fetches and parses the winner's body. A body a model wrote
+ * badly throws `invalid`. A caller that degrades on that throw (the detail
+ * route must, or untrusted content takes the verdict buttons away) would
+ * otherwise discard a `cross_hypothesis_write` it had ALREADY found: the
+ * board would warn and the detail page would show a benign empty state, and
+ * the two surfaces would disagree in the direction that hides an attack.
+ *
+ * Defensive on every step because it reads a `details` bag: `[]` for an error
+ * that carries none, for a non-`WolfError`, and for anything whose `tamper`
+ * is not an array.
+ */
+export function reportTamperFrom(err: unknown): Tamper[] {
+  if (!(err instanceof WolfError)) return [];
+  const details = err.details;
+  if (typeof details !== "object" || details === null) return [];
+  const carried = (details as Record<string, unknown>)[TAMPER_DETAIL_KEY];
+  return Array.isArray(carried) ? (carried as Tamper[]) : [];
+}
+
+/**
+ * Re-throws `err` with `tamper` attached, preserving its kind, status,
+ * message and existing details.
+ *
+ * A new error rather than a mutation: `WolfError`'s fields are `readonly`,
+ * and an error object that grew a property between two catch sites is exactly
+ * the kind of action at a distance this file exists to avoid.
+ */
+function withReportTamper(err: unknown, tamper: readonly Tamper[]): unknown {
+  if (!(err instanceof WolfError) || tamper.length === 0) return err;
+  const existing = typeof err.details === "object" && err.details !== null ? err.details : {};
+  return new WolfError(err.kind, err.message, {
+    status: err.status,
+    details: { ...existing, [TAMPER_DETAIL_KEY]: [...tamper] },
+    cause: err,
+  });
+}
+
+/**
  * The `Tamper` for a report row belonging to some other hypothesis — or to
  * nothing at all, which is the same answer: its provenance does not name this
  * hypothesis's researcher or its session, so it is not evidence about this
@@ -1663,7 +1712,15 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
     // cannot be rendered, and the writer is a model, so the failure has to be
     // legible to whoever reads the log rather than silently becoming "no
     // report yet".
-    const parsed = parseReportContent(full.content);
+    let parsed: ParsedReport;
+    try {
+      parsed = parseReportContent(full.content);
+    } catch (err) {
+      // The anomalies above were witnessed on OTHER rows and are still true.
+      // Losing them here is what made a forged report vanish from the detail
+      // page whenever the victim's own body happened not to parse.
+      throw withReportTamper(err, picked.tamper);
+    }
     return {
       report: {
         ...parsed,
