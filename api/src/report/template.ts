@@ -23,6 +23,11 @@
  *  2. **A duplicate slot id is an ERROR**, never last-wins.
  *  3. **The template is a FRAGMENT** — `composeFrame` (W19) owns the skeleton.
  *  4. **Every `src`/`href` is `https:`**, with a DISTINCT message per vector.
+ *  5. **`remoteOrigins` lists every host the document will contact** (W30) —
+ *     collected by the ONE URL visitor, which the nested `<iframe srcdoc>`
+ *     walk re-uses rather than duplicating. W19 turns that list into the
+ *     frame's CSP and W24 shows it to the human approving the template, so a
+ *     host this file fails to see is a host nobody sees.
  *
  * ⚠️ This module does not SANITISE anything and must not start. It never
  * mutates the HTML it is given: it measures, locates and refuses. Slot
@@ -94,6 +99,33 @@ export interface ParsedTemplate {
   slots: TemplateSlot[];
   /** Every external script and stylesheet URL, in document order (W24 shows these to a human). */
   scriptSrcs: string[];
+  /**
+   * **Every host this document will cause a browser to contact** — the
+   * deduplicated, sorted set of `new URL(u).origin` over every URL channel
+   * this module walks (W30).
+   *
+   * `scriptSrcs` and `remoteOrigins` answer two DIFFERENT questions and W24
+   * shows them as two lists. `scriptSrcs` is remote **code**: scripts and
+   * stylesheets, which a human approves as code. `remoteOrigins` is the
+   * superset: everything the document fetches at all, including the
+   * `<img src="https://evil.example/px.gif">` beacon that carries no code and
+   * would otherwise be approved by a human who was shown zero remote hosts.
+   *
+   * W19 derives the frame's CSP from this list, W21 serves it and W24 renders
+   * it, so the two directions a mistake travels in are worth stating:
+   *
+   *  - a host **missing** here reaches W19 as a CSP that is too NARROW, the
+   *    browser blocks the fetch and the report silently does not render —
+   *    **fails closed**: safe, and invisible;
+   *  - the same miss reaches W24 as an UNDERSTATEMENT — a human approves a
+   *    template that contacts a host they were never shown — **fails open**,
+   *    and that is why R118 called it out.
+   *
+   * Sorted lexicographically rather than kept in document order: this is a
+   * SET, two orderings of the same set would hash and diff differently, and
+   * W19's CSP must be byte-stable for the same template.
+   */
+  remoteOrigins: string[];
 }
 
 export type ParseTemplateResult =
@@ -724,27 +756,459 @@ function classifyCssUrl(raw: string): UrlVerdict {
 }
 
 /**
+ * One classified URL: the verdict, and the URL it was reached through.
+ *
+ * The URL is carried alongside the verdict because W30's `remoteOrigins`
+ * needs the same value the verdict was reached from — one classification,
+ * two consumers. Re-deriving the candidate list a second time to collect
+ * origins would be the "second walker" W30 forbids, in miniature.
+ */
+interface ClassifiedUrl {
+  url: string;
+  verdict: UrlVerdict;
+}
+
+/**
  * `srcset` is a comma-separated candidate list, and a `data:` URL may itself
  * contain commas — so splitting one is meaningless. A `data:` srcset is
  * therefore classified whole (and so is still `img`-only); everything else is
  * split, and each candidate's URL half is classified.
  */
-function classifySrcset(raw: string, tag: string): UrlVerdict[] {
+function classifySrcset(raw: string, tag: string): ClassifiedUrl[] {
   const value = urlForClassification(raw);
-  if (value === "") return [classifyUrl(raw, tag)];
-  if (value.toLowerCase().startsWith("data:")) return [classifyUrl(raw, tag)];
-  const verdicts: UrlVerdict[] = [];
+  if (value === "") return [{ url: raw, verdict: classifyUrl(raw, tag) }];
+  if (value.toLowerCase().startsWith("data:")) return [{ url: raw, verdict: classifyUrl(raw, tag) }];
+  const classified: ClassifiedUrl[] = [];
   for (const candidate of value.split(",")) {
     const url = candidate.trim().split(/\s+/)[0] ?? "";
     if (url === "") continue;
-    verdicts.push(classifyUrl(url, tag));
+    classified.push({ url, verdict: classifyUrl(url, tag) });
   }
-  return verdicts.length > 0 ? verdicts : [classifyUrl(raw, tag)];
+  return classified.length > 0 ? classified : [{ url: raw, verdict: classifyUrl(raw, tag) }];
+}
+
+/**
+ * `ping` is a **space-separated** list of URLs, every one of which the browser
+ * POSTs to when the link is followed. Classified per URL for the same reason
+ * `srcset` is: `ping="https://a.example/p https://b.example/p"` is two hosts,
+ * and holding it as one string means `new URL` refuses it and BOTH hosts go
+ * unlisted — an understatement, which is the direction that fails open.
+ *
+ * ⚠️ Split on the RAW value, before `urlForClassification` runs: that helper
+ * deletes tabs and newlines outright (correct for one URL, since a browser
+ * does the same), which would weld `https://a\nhttps://b` into one nonsense
+ * host. Whitespace separates candidates here, so it has to be read first.
+ */
+function classifyUrlList(raw: string, tag: string): ClassifiedUrl[] {
+  const parts = raw.split(/[\s]+/).filter((part) => part !== "");
+  if (parts.length < 2) return [{ url: raw, verdict: classifyUrl(raw, tag) }];
+  return parts.map((url) => ({ url, verdict: classifyUrl(url, tag) }));
+}
+
+/** Classifies one URL-bearing attribute's value, per that attribute's grammar. */
+function classifyAttribute(tag: string, name: string, raw: string): ClassifiedUrl[] {
+  if (name === "srcset") return classifySrcset(raw, tag);
+  if (name === "ping") return classifyUrlList(raw, tag);
+  return [{ url: raw, verdict: classifyUrl(raw, tag) }];
 }
 
 function isUrlAttribute(tag: string, name: string): boolean {
   if (URL_ATTRIBUTES.has(name)) return true;
   return tag === "object" && name === "data";
+}
+
+/* ------------------------------------------------------------------ */
+/* the remote-host inventory (W30)                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The origin one accepted URL contributes, or `undefined` for the ones that
+ * contact nobody.
+ *
+ * Only an **absolute `https:`** URL can name a remote host here, because
+ * every other spelling has already been refused by `classifyUrl` — with two
+ * exceptions that must contribute NOTHING, and that scheme test is the ONE
+ * thing standing between them and W19's CSP:
+ *
+ *  - a `data:` URL (permitted on `img`, and in CSS) has the opaque origin
+ *    `"null"`, which is not a host and must never reach a CSP. There is
+ *    deliberately no second `origin === "null"` guard below: it would be
+ *    unreachable behind the scheme test, and an unreachable guard reads like
+ *    protection while protecting nothing — it would also mask the scheme test
+ *    from any mutation, which is how this was found;
+ *  - a bare `#fragment` (CSS's `fill:url(#gradient)` carve-out) resolves
+ *    inside the document and fetches nothing — `new URL` refuses it outright.
+ *
+ * `new URL` is what collapses the equivalences the ticket names: `https://a`
+ * and `https://a:443` are one origin because 443 is https's default port,
+ * two paths on one host are one origin, and the host is lowercased. A value
+ * `new URL` cannot parse at all (`<img src="https:">` passes `classifyUrl`,
+ * which only reads the scheme) contributes nothing — it names no host.
+ */
+function remoteOrigin(raw: string): string | undefined {
+  const value = urlForClassification(raw);
+  if (!/^https:/i.test(value)) return undefined;
+  try {
+    return new URL(value).origin;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * How deep a chain of `<iframe srcdoc>` documents is inspected. Two levels of
+ * nesting is the guard the ticket pins, and a document nested deeper than
+ * this is REFUSED rather than skipped — see `visitUrlChannels`.
+ */
+const MAX_SRCDOC_DEPTH = 2;
+
+/**
+ * The `<param name>` values a browser resolves as a URL. A `<param>` is a
+ * plugin parameter, so most of them are not URLs at all — `<param
+ * name="quality" value="high">` must not be read as a relative URL and
+ * refused — and the two ways one CAN reach a host are: a conventional URL
+ * name, or a value that carries a scheme (or is protocol-relative) whatever
+ * it is named. Both are checked; a bare `high` matches neither and is left
+ * alone.
+ */
+const URL_PARAM_NAMES = new Set([
+  "movie", "src", "url", "href", "data", "source", "filename",
+  "code", "codebase", "archive",
+]);
+
+function paramValueIsUrl(name: string | undefined, value: string): boolean {
+  if (name !== undefined && URL_PARAM_NAMES.has(name.trim().toLowerCase())) return true;
+  const candidate = urlForClassification(value);
+  return /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(candidate) || /^[/\\]{2}/.test(candidate);
+}
+
+/**
+ * The named character references a `srcdoc` value realistically carries.
+ * Deliberately short: an unknown reference is left ALONE, which can only lose
+ * markup the nested walk would have inspected, never invent any.
+ */
+const NAMED_REFERENCES: Record<string, string> = {
+  lt: "<", gt: ">", amp: "&", quot: '"', apos: "'", nbsp: " ",
+};
+
+/**
+ * Decodes character references — for `srcdoc`, and for `srcdoc` ONLY.
+ *
+ * ⚠️ Read `urlForClassification`'s warning first: this module does **not**
+ * decode character references anywhere else, on purpose, because a URL that
+ * has to be decoded to look dangerous is refused anyway by the fail-closed
+ * default. `srcdoc` is the one place where that argument does not hold and
+ * inverts: the attribute value is not a URL, it is a whole HTML DOCUMENT, and
+ * a browser decodes the attribute before parsing it. `srcdoc="&lt;img
+ * src=&quot;https://evil.example/px.gif&quot;&gt;"` and its literal-angle
+ * spelling produce the identical document — verified against parse5, which
+ * hands back byte-identical attribute values for the two. Not decoding here
+ * would therefore lose the whole nested document, which is the direction that
+ * fails OPEN on W24's review screen.
+ *
+ * Decoding is the fail-CLOSED direction throughout: it can only make more
+ * markup visible to the walk, and the walk only ever adds errors and origins.
+ */
+function decodeCharacterReferences(value: string): string {
+  return value.replace(
+    /&(#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);?/g,
+    (match, body: string) => {
+      if (body.startsWith("#")) {
+        const code =
+          body[1] === "x" || body[1] === "X"
+            ? Number.parseInt(body.slice(2), 16)
+            : Number.parseInt(body.slice(1), 10);
+        if (!Number.isFinite(code) || code < 0 || code > 0x10ffff) return match;
+        try {
+          return String.fromCodePoint(code);
+        } catch {
+          return match;
+        }
+      }
+      return NAMED_REFERENCES[body.toLowerCase()] ?? match;
+    },
+  );
+}
+
+/**
+ * The URL in a `<meta http-equiv="refresh" content="…">`, or `undefined` when
+ * the content refreshes the page in place (or is not a refresh at all).
+ *
+ * Follows the shared declarative refresh steps closely enough for the one
+ * question asked here — *does this navigate somewhere, and where* — which
+ * means two things a "split on `url=`" reading would get wrong. The time is
+ * MANDATORY (`content="https://evil.example"` navigates nowhere, and reading
+ * it as a URL would put a host in the inventory that is never contacted), and
+ * the `url=` is OPTIONAL (`content="0; https://evil.example"` navigates, and
+ * requiring the literal `url=` would miss it — the direction that fails open).
+ * A separator is required after the time, and the URL may be quoted.
+ */
+function metaRefreshUrl(content: string): string | undefined {
+  let rest = content.replace(/^\s+/, "");
+  const time = /^[0-9]*\.?[0-9]*/.exec(rest)?.[0] ?? "";
+  if (time === "" || time === ".") return undefined;
+  rest = rest.slice(time.length).replace(/^\s+/, "");
+  if (rest === "" || (rest[0] !== ";" && rest[0] !== ",")) return undefined;
+  rest = rest.slice(1).replace(/^\s+/, "");
+  const withoutKeyword = /^url\s*=\s*/i.exec(rest);
+  if (withoutKeyword) rest = rest.slice(withoutKeyword[0].length);
+  const quote = rest[0];
+  if (quote === '"' || quote === "'") {
+    const close = rest.indexOf(quote, 1);
+    rest = close < 0 ? rest.slice(1) : rest.slice(1, close);
+  }
+  rest = rest.trim();
+  return rest === "" ? undefined : rest;
+}
+
+/* ------------------------------------------------------------------ */
+/* the URL walk — ONE visitor, used by the document and by its srcdocs */
+/* ------------------------------------------------------------------ */
+
+/**
+ * What the walk accumulates. Shared by reference with every nested `srcdoc`
+ * document, so a nested origin folds into the parent's set rather than into a
+ * second inventory nobody reads.
+ */
+interface UrlContext {
+  /**
+   * The list errors are pushed to. MUTABLE on purpose: `visitUrlChannels`
+   * swaps in a private array while it walks a nested `srcdoc`, so that those
+   * errors can be re-pathed and re-offset before they join the parent's —
+   * an offset into a nested document is meaningless against the parent's
+   * stored bytes, and reporting one as if it were not would point a human at
+   * the wrong character.
+   */
+  errors: TemplateError[];
+  scriptSrcs: string[];
+  origins: Set<string>;
+  /** Bytes handed to `scan()` so far: the template, plus every nested document. */
+  bytesScanned: number;
+  /** The same budget `parseTemplate` was given. A srcdoc cannot be used to blow it. */
+  maxBytes: number;
+}
+
+/** Per-DOCUMENT walk state; a nested `srcdoc` document gets its own. */
+interface DocState {
+  /** 0 for the template itself; 1 inside its `srcdoc`, and so on. */
+  depth: number;
+  /** Open `<object>` elements — a `<param>` is a URL channel only inside one. */
+  objectDepth: number;
+}
+
+function openedElement(doc: DocState, token: StartTag): void {
+  // `<object/>` is NOT self-closing in HTML content — the tokenizer's solidus
+  // is ignored on an ordinary element — so the object opens either way, and
+  // the `<param>`s that follow are its children to a browser. Opening it
+  // unconditionally is also the fail-closed direction: it can only cause MORE
+  // params to be read as the URL channel they are.
+  if (token.name === "object") doc.objectDepth += 1;
+}
+
+function closedElement(doc: DocState, name: string): void {
+  if (name === "object" && doc.objectDepth > 0) doc.objectDepth -= 1;
+}
+
+/**
+ * Every URL channel of ONE start tag: the URL-bearing attributes, the CSS in
+ * a `<style>` element or a `style` attribute, the go-live `scriptSrcs` list,
+ * and the three channels R118(2) found missing — `iframe[srcdoc]`,
+ * `meta[http-equiv=refresh]` and `object > param[value]`.
+ *
+ * ⚠️ **This is the only place a URL is read, and it must stay that way.** W30
+ * forbids a second walker for a reason that has already cost this file two
+ * fix rounds: two readers of the same bytes disagree the first time one of
+ * them is edited, and every disagreement so far has been a host a browser
+ * fetched and this module did not report. The nested `srcdoc` pass below is
+ * the SAME visitor over a second token stream, not a second implementation.
+ */
+function visitUrlChannels(token: StartTag, ctx: UrlContext, doc: DocState): void {
+  // (4) EVERY src AND href MUST BE https:.
+  for (const attribute of token.attributes) {
+    if (!isUrlAttribute(token.name, attribute.name)) continue;
+    for (const { url, verdict } of classifyAttribute(token.name, attribute.name, attribute.value)) {
+      if (!verdict.ok) {
+        ctx.errors.push({
+          path: `${token.name}[${attribute.name}]`,
+          message: verdict.message,
+          offset: attribute.offset,
+        });
+        continue;
+      }
+      const origin = remoteOrigin(url);
+      if (origin !== undefined) ctx.origins.add(origin);
+    }
+  }
+
+  // (4b) CSS IS A URL CHANNEL TOO — see `cssUrls`.
+  const styleAttribute = attributeValue(token, "style");
+  const cssSources: Array<{ path: string; css: string }> = [];
+  if (styleAttribute !== undefined && styleAttribute !== "") {
+    cssSources.push({ path: `${token.name}[style]`, css: styleAttribute });
+  }
+  if (token.name === "style" && token.cssText !== undefined) {
+    cssSources.push({ path: "style", css: token.cssText });
+  }
+  for (const source of cssSources) {
+    for (const { value, isImport } of cssUrls(source.css)) {
+      const verdict = classifyCssUrl(value);
+      if (!verdict.ok) {
+        ctx.errors.push({ path: source.path, message: verdict.message, offset: token.start });
+        continue;
+      }
+      const url = urlForClassification(value);
+      // An at-rule import fetches an external STYLESHEET, which is exactly
+      // what the go-live review screen exists to show a human.
+      if (isImport && url !== "" && !url.startsWith("#")) ctx.scriptSrcs.push(url);
+      const origin = remoteOrigin(url);
+      if (origin !== undefined) ctx.origins.add(origin);
+    }
+  }
+
+  // The URLs a human approves at go-live: remote script, remote stylesheet.
+  if (token.name === "script") {
+    const src = attributeValue(token, "src");
+    if (src !== undefined && src !== "") ctx.scriptSrcs.push(src);
+  } else if (token.name === "link") {
+    const rel = (attributeValue(token, "rel") ?? "").toLowerCase().split(/\s+/);
+    const href = attributeValue(token, "href");
+    if (rel.includes("stylesheet") && href !== undefined && href !== "") {
+      ctx.scriptSrcs.push(href);
+    }
+  }
+
+  // R118(2), channel 2: `<meta http-equiv="refresh" content="0;URL=…">`
+  // navigates the frame, which is a fetch like any other and was invisible to
+  // every rule in this module. It contributes an ORIGIN but never a
+  // `scriptSrcs` entry: a navigation is not remote code, and W24's two lists
+  // mean two different things.
+  if (token.name === "meta") {
+    const equiv = (attributeValue(token, "http-equiv") ?? "").trim().toLowerCase();
+    const content = attributeValue(token, "content");
+    if (equiv === "refresh" && content !== undefined) {
+      const url = metaRefreshUrl(content);
+      if (url !== undefined) {
+        const verdict = classifyUrl(url, token.name, "the URL a meta refresh navigates to");
+        if (!verdict.ok) {
+          ctx.errors.push({
+            path: "meta[http-equiv=refresh]",
+            message: verdict.message,
+            offset: token.start,
+          });
+        } else {
+          const origin = remoteOrigin(url);
+          if (origin !== undefined) ctx.origins.add(origin);
+        }
+      }
+    }
+  }
+
+  // R118(2), channel 3: `<object><param value="https://…"></object>`. A param
+  // is only a plugin parameter inside an `<object>` — a loose one is inert —
+  // and only the URL-shaped ones are URLs at all (`URL_PARAM_NAMES`). Like
+  // meta refresh, it is an origin and not remote code.
+  if (token.name === "param" && doc.objectDepth > 0) {
+    const value = attributeValue(token, "value");
+    if (value !== undefined && value !== "" && paramValueIsUrl(attributeValue(token, "name"), value)) {
+      const verdict = classifyUrl(value, token.name, "an object's param value, when it is a URL");
+      if (!verdict.ok) {
+        ctx.errors.push({
+          path: "object > param[value]",
+          message: verdict.message,
+          offset: token.start,
+        });
+      } else {
+        const origin = remoteOrigin(value);
+        if (origin !== undefined) ctx.origins.add(origin);
+      }
+    }
+  }
+
+  // R118(2), channel 1: `<iframe srcdoc="…">` holds a WHOLE nested HTML
+  // document, whose own `<img>`, `<script src>` and `<style>` a browser
+  // fetches exactly as it fetches the parent's. So the walk recurses into it
+  // and the nested document's origins fold into the parent's set — which is
+  // also what the CSP requires, because an `about:srcdoc` document INHERITS
+  // the embedder's policy: a nested host missing from the parent's CSP is a
+  // nested fetch the browser blocks.
+  //
+  // What the nested pass deliberately does NOT do is apply this module's
+  // STRUCTURAL rules. A nested document may legitimately carry a `<!doctype>`
+  // and a `<body>` — it is a document, not a fragment — and a `[data-wolf-slot]`
+  // in there is not a slot: its content range would land inside an attribute
+  // value, so W19's filler could not write it without corrupting the tag. The
+  // nested walk is URL channels only.
+  if (token.name === "iframe") {
+    const srcdoc = attributeValue(token, "srcdoc");
+    if (srcdoc !== undefined && srcdoc !== "") {
+      visitSrcdoc(srcdoc, token, ctx, doc);
+    }
+  }
+}
+
+/**
+ * Walks one `srcdoc` document. Guarded twice, and both guards REFUSE rather
+ * than skip: a template this module cannot fully inspect is a template whose
+ * inventory would understate, and an understated inventory is the fail-open
+ * direction (see `ParsedTemplate.remoteOrigins`).
+ */
+function visitSrcdoc(srcdoc: string, token: StartTag, ctx: UrlContext, doc: DocState): void {
+  const depth = doc.depth + 1;
+  if (depth > MAX_SRCDOC_DEPTH) {
+    ctx.errors.push({
+      path: "iframe[srcdoc]",
+      message:
+        `\`<iframe srcdoc>\` documents are inspected ${MAX_SRCDOC_DEPTH} levels deep; this one ` +
+        `is nested ${depth} deep, so its remote hosts would go unlisted — a template whose ` +
+        "inventory cannot be completed is refused rather than under-reported",
+      offset: token.start,
+    });
+    return;
+  }
+
+  const html = decodeCharacterReferences(srcdoc);
+  const nestedBytes = Buffer.byteLength(html, "utf8");
+  if (ctx.bytesScanned + nestedBytes > ctx.maxBytes) {
+    ctx.errors.push({
+      path: "iframe[srcdoc]",
+      message:
+        "the template's nested `<iframe srcdoc>` documents bring the total parsed size to " +
+        `${ctx.bytesScanned + nestedBytes} bytes, which exceeds the limit of ${ctx.maxBytes} ` +
+        "bytes: a nested document is parsed like any other and counts against the same budget",
+      offset: token.start,
+    });
+    return;
+  }
+  ctx.bytesScanned += nestedBytes;
+
+  const nested = scan(html);
+  const outerErrors = ctx.errors;
+  const nestedErrors: TemplateError[] = nested.errors;
+  ctx.errors = nestedErrors;
+  const nestedDoc: DocState = { depth, objectDepth: 0 };
+  try {
+    for (const nestedToken of nested.tokens) {
+      if (nestedToken.type === "end") {
+        closedElement(nestedDoc, nestedToken.name);
+        continue;
+      }
+      if (nestedToken.type !== "start") continue;
+      visitUrlChannels(nestedToken, ctx, nestedDoc);
+      openedElement(nestedDoc, nestedToken);
+    }
+  } finally {
+    ctx.errors = outerErrors;
+  }
+
+  for (const error of nestedErrors) {
+    outerErrors.push({
+      path: error.path === "template" ? "iframe[srcdoc]" : `iframe[srcdoc] > ${error.path}`,
+      message: `inside an \`<iframe srcdoc>\` document: ${error.message}`,
+      // The nested offset is an index into the srcdoc VALUE, which is not a
+      // position in the stored template. The iframe's own offset is.
+      offset: token.start,
+    });
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -831,6 +1295,14 @@ export function parseTemplate(html: string, maxBytes: number): ParseTemplateResu
   const { tokens, errors } = scan(html);
   const slots: TemplateSlot[] = [];
   const scriptSrcs: string[] = [];
+  const ctx: UrlContext = {
+    errors,
+    scriptSrcs,
+    origins: new Set<string>(),
+    bytesScanned: byteLength,
+    maxBytes,
+  };
+  const doc: DocState = { depth: 0, objectDepth: 0 };
   const seenSlotIds = new Set<string>();
   const openSkeletons = new Map<string, number>();
   let sawFallback = false;
@@ -875,6 +1347,7 @@ export function parseTemplate(html: string, maxBytes: number): ParseTemplateResu
 
     if (token.type === "end") {
       if (INERT_ELEMENTS.has(token.name) && inertDepth > 0) inertDepth -= 1;
+      closedElement(doc, token.name);
       continue;
     }
 
@@ -892,57 +1365,11 @@ export function parseTemplate(html: string, maxBytes: number): ParseTemplateResu
       inertDepth += 1;
     }
 
-    // (4) EVERY src AND href MUST BE https:.
-    for (const attribute of token.attributes) {
-      if (!isUrlAttribute(token.name, attribute.name)) continue;
-      const verdicts =
-        attribute.name === "srcset"
-          ? classifySrcset(attribute.value, token.name)
-          : [classifyUrl(attribute.value, token.name)];
-      for (const verdict of verdicts) {
-        if (verdict.ok) continue;
-        errors.push({
-          path: `${token.name}[${attribute.name}]`,
-          message: verdict.message,
-          offset: attribute.offset,
-        });
-      }
-    }
-
-    // (4b) CSS IS A URL CHANNEL TOO — see `cssUrls`.
-    const styleAttribute = attributeValue(token, "style");
-    const cssSources: Array<{ path: string; css: string }> = [];
-    if (styleAttribute !== undefined && styleAttribute !== "") {
-      cssSources.push({ path: `${token.name}[style]`, css: styleAttribute });
-    }
-    if (token.name === "style" && token.cssText !== undefined) {
-      cssSources.push({ path: "style", css: token.cssText });
-    }
-    for (const source of cssSources) {
-      for (const { value, isImport } of cssUrls(source.css)) {
-        const verdict = classifyCssUrl(value);
-        if (!verdict.ok) {
-          errors.push({ path: source.path, message: verdict.message, offset: token.start });
-          continue;
-        }
-        // An `@import` fetches an external STYLESHEET, which is exactly what
-        // the go-live review screen exists to show a human.
-        const url = urlForClassification(value);
-        if (isImport && url !== "" && !url.startsWith("#")) scriptSrcs.push(url);
-      }
-    }
-
-    // The URLs a human approves at go-live: remote script, remote stylesheet.
-    if (token.name === "script") {
-      const src = attributeValue(token, "src");
-      if (src !== undefined && src !== "") scriptSrcs.push(src);
-    } else if (token.name === "link") {
-      const rel = (attributeValue(token, "rel") ?? "").toLowerCase().split(/\s+/);
-      const href = attributeValue(token, "href");
-      if (rel.includes("stylesheet") && href !== undefined && href !== "") {
-        scriptSrcs.push(href);
-      }
-    }
+    // (4) and (4b) EVERY URL CHANNEL — https-only, `scriptSrcs`, and W30's
+    // `remoteOrigins`. All of it lives in ONE visitor, which the nested
+    // `srcdoc` walk calls over its own tokens; see `visitUrlChannels`.
+    visitUrlChannels(token, ctx, doc);
+    openedElement(doc, token);
 
     // (2) SLOTS — document order, validated ids, NO DUPLICATES.
     const slotId = attributeValue(token, SLOT_ATTRIBUTE);
@@ -1055,6 +1482,9 @@ export function parseTemplate(html: string, maxBytes: number): ParseTemplateResu
       slotIds: slots.map((slot) => slot.id),
       slots,
       scriptSrcs,
+      // Deduplicated by the Set, ordered by `sort()` — a SET, not a
+      // document-order list. See `ParsedTemplate.remoteOrigins`.
+      remoteOrigins: [...ctx.origins].sort(),
     },
   };
 }
