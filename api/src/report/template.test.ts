@@ -817,3 +817,866 @@ describe("parseTemplate — refuses every fragment parse5 builds a real element 
     });
   }
 });
+
+/**
+ * W30 — `remoteOrigins`, the full remote-host inventory.
+ *
+ * design/2026-08-20-agent-wolf.md § W30. THREE tickets consume this list and
+ * each of them fails in a different direction if it is wrong, which is why
+ * every case below pins an exact array rather than a `toContain`:
+ *
+ *  - **W19** derives the frame's CSP from it. A host MISSING here becomes a
+ *    CSP that is too narrow, the browser blocks the fetch, and the report
+ *    silently does not render — it **fails closed**: safe, and invisible.
+ *  - **W24** lists it on the go-live review screen. The same missing host is
+ *    an **understatement**: a human approves a template that contacts a host
+ *    they were never shown — it **fails open**, and that is the reason R118
+ *    flagged this at all.
+ *  - **W21** serves it, so it must be stable for the same bytes.
+ *
+ * `scriptSrcs` is NOT this list and must not become it. It means "remote
+ * CODE — scripts and stylesheets — which a human is approving as code", and
+ * W24 renders the two separately. Every case below that adds a URL channel
+ * also asserts what `scriptSrcs` did (and did not) do with it.
+ */
+describe("W30: remoteOrigins — every host a template will contact", () => {
+  it("lists the host of an <img> that carries no code at all — the gap this closes", () => {
+    // The ticket's own worked example. Before W30 the go-live screen showed
+    // this template ZERO remote hosts, because `scriptSrcs` correctly reports
+    // no remote code: a human approved a template that phones home.
+    const template = parseOk(withFallback('<img src="https://evil.example/px.gif">'));
+    expect(template.scriptSrcs).toEqual([]);
+    expect(template.remoteOrigins).toEqual(["https://evil.example"]);
+  });
+
+  it("lists the origin of every URL channel the validator already walks", () => {
+    const html = withFallback(
+      [
+        '<script src="https://s.example/a.js"></script>',
+        '<link rel="stylesheet" href="https://l.example/a.css">',
+        '<img src="https://i.example/a.png">',
+        '<img srcset="https://one.example/a.png 1x, https://two.example/a.png 2x">',
+        '<video poster="https://p.example/a.png"></video>',
+        '<form action="https://f.example/post"><button formaction="https://fa.example/post">go</button></form>',
+        '<svg><use xlink:href="https://x.example/a.svg#g"></use></svg>',
+        '<table background="https://b.example/a.png"></table>',
+        '<a href="https://h.example/page" ping="https://ping.example/track">t</a>',
+        '<object data="https://o.example/a.pdf"></object>',
+        '<div style="background:url(https://css.example/a.png)">y</div>',
+        `<style>${AT} url("https://at.example/a.css");</style>`,
+      ].join("\n"),
+    );
+    expect(parseOk(html).remoteOrigins).toEqual([
+      "https://at.example",
+      "https://b.example",
+      "https://css.example",
+      "https://f.example",
+      "https://fa.example",
+      "https://h.example",
+      "https://i.example",
+      "https://l.example",
+      "https://o.example",
+      "https://one.example",
+      "https://p.example",
+      "https://ping.example",
+      "https://s.example",
+      "https://two.example",
+      "https://x.example",
+    ]);
+  });
+
+  it("collapses two paths on one host, and a default :443, into ONE entry", () => {
+    const html = withFallback(
+      [
+        '<img src="https://a.example/one.png">',
+        '<img src="https://a.example/two.png?q=1#frag">',
+        '<img src="https://a.example:443/three.png">',
+        '<img src="https://A.EXAMPLE/four.png">',
+      ].join("\n"),
+    );
+    expect(parseOk(html).remoteOrigins).toEqual(["https://a.example"]);
+  });
+
+  it("keeps a NON-default port as a separate origin — a different port is a different origin", () => {
+    const html = withFallback(
+      '<img src="https://a.example/x.png"><img src="https://a.example:8443/x.png">',
+    );
+    expect(parseOk(html).remoteOrigins).toEqual([
+      "https://a.example",
+      "https://a.example:8443",
+    ]);
+  });
+
+  it("is SORTED, not in document order — it is a set, and W19's CSP must be byte-stable", () => {
+    const html = withFallback(
+      '<img src="https://zulu.example/a.png"><img src="https://alpha.example/a.png">' +
+        '<img src="https://mike.example/a.png">',
+    );
+    expect(parseOk(html).remoteOrigins).toEqual([
+      "https://alpha.example",
+      "https://mike.example",
+      "https://zulu.example",
+    ]);
+  });
+
+  it("is the same list whichever order the same hosts appear in", () => {
+    const one = parseOk(withFallback('<img src="https://a.example/x"><img src="https://b.example/x">'));
+    const two = parseOk(withFallback('<img src="https://b.example/x"><img src="https://a.example/x">'));
+    expect(one.remoteOrigins).toEqual(two.remoteOrigins);
+  });
+
+  it("gives a data: URL and a CSS #fragment NO origin — neither contacts anybody", () => {
+    const html = withFallback(
+      '<img src="data:image/png;base64,AAA" style="fill:url(#grad)">' +
+        "<style>.bar{fill:url(#grad)}</style>",
+    );
+    const template = parseOk(html);
+    expect(template.remoteOrigins).toEqual([]);
+    expect(template.scriptSrcs).toEqual([]);
+  });
+
+  it("leaves R118(3) exactly as it found it: a fragment-only href is still REFUSED", () => {
+    // NOT this ticket's to fix — the attribute path and the CSS path disagree
+    // about `#fragment`, and that disagreement belongs to W25's authoring
+    // contract. It is pinned here so W30 cannot silently change it in either
+    // direction: `href="#chart"` still fails, which is also why the criterion
+    // "a fragment-only href contributes no origin" cannot be asserted through
+    // `remoteOrigins` at all — a template containing one has no `remoteOrigins`
+    // to inspect. The CSS half above is the half that CAN be asserted.
+    expect(messages(withFallback('<a href="#chart">jump</a>'))).toMatch(
+      /must be an absolute `https:` URL/,
+    );
+  });
+
+  it("reports the same host once however many channels reach it", () => {
+    const html = withFallback(
+      '<script src="https://cdn.example/a.js"></script>' +
+        '<img src="https://cdn.example/a.png">' +
+        '<link rel="stylesheet" href="https://cdn.example/a.css">',
+    );
+    const template = parseOk(html);
+    expect(template.remoteOrigins).toEqual(["https://cdn.example"]);
+    // …while `scriptSrcs` still lists BOTH pieces of remote code, by URL, in
+    // document order. The two lists are not redundant: one is hosts, the
+    // other is the code a human is approving.
+    expect(template.scriptSrcs).toEqual([
+      "https://cdn.example/a.js",
+      "https://cdn.example/a.css",
+    ]);
+  });
+
+  it("lists nothing for a template that fetches nothing", () => {
+    expect(parseOk(withFallback("<p>local only</p><script>draw()</script>")).remoteOrigins).toEqual(
+      [],
+    );
+  });
+
+  it("reports the shared fixture's single host", () => {
+    expect(parseOk(VALID).remoteOrigins).toEqual(["https://cdn.example.com"]);
+  });
+
+  it("reads a scheme-only `https:host/path` as that host — a deliberate overstatement", () => {
+    // `https:evil.example/x` has no `//`. Parsed with no base, as here, it
+    // means the host `evil.example`; resolved by a browser against a base of
+    // the SAME scheme it is relative instead, and reaches nobody. The
+    // fail-closed reading is taken on purpose: the template names the host in
+    // its own bytes, so a human seeing it on the review screen is right, and
+    // W19's CSP gains a host the author wrote down. Pinned so a later edit
+    // cannot flip it in either direction unnoticed.
+    expect(parseOk(withFallback('<img src="https:evil.example/x.png">')).remoteOrigins).toEqual([
+      "https://evil.example",
+    ]);
+  });
+
+  it("splits a multi-URL ping — both hosts are POSTed to when the link is followed", () => {
+    // Held as one string, `new URL` refuses the whole value and BOTH hosts go
+    // unlisted. Whitespace is the separator, and it is read from the RAW
+    // value: the classification helper deletes newlines, which would weld two
+    // candidates into one nonsense host.
+    const html = withFallback(
+      '<a href="https://h.example/p" ping="https://p1.example/t\nhttps://p2.example/t">t</a>',
+    );
+    expect(parseOk(html).remoteOrigins).toEqual([
+      "https://h.example",
+      "https://p1.example",
+      "https://p2.example",
+    ]);
+  });
+
+  it("refuses an http: candidate hiding in a multi-URL ping", () => {
+    const html = withFallback(
+      '<a href="https://h.example/p" ping="https://p1.example/t http://p2.example/t">t</a>',
+    );
+    expect(messages(html)).toMatch(/`http:` URLs are not permitted/);
+  });
+
+  it("gives an unparseable https: value no origin — it names no host", () => {
+    // `classifyUrl` accepts anything whose scheme is https:, so `src="https:"`
+    // is a VALID template today. It resolves against the frame's own base URL
+    // rather than reaching a remote host, so there is no origin to report and
+    // inventing one would put a host in W19's CSP that nothing fetches.
+    expect(parseOk(withFallback('<img src="https:">')).remoteOrigins).toEqual([]);
+  });
+});
+
+/**
+ * W30 / R118(2) — the three channels W16's walker never visited.
+ *
+ * R118 recorded four minor defects standing in W16's parser. This is (2), and
+ * it is the one that "silently understates the review screen": a template can
+ * contact a remote host through `iframe[srcdoc]`, `meta[http-equiv=refresh]`
+ * or `object > param[value]`, and none of the three was read by any rule in
+ * the module — so the inventory this ticket adds would have been FALSE on its
+ * own terms.
+ *
+ * Each channel is tested in BOTH directions, because they fail in opposite
+ * ones: the origin must now appear (or W24 understates and W19's CSP blocks
+ * the fetch), and `scriptSrcs` must not have quietly changed meaning (or W24
+ * tells a human that a page navigation is remote code).
+ */
+/**
+ * Escapes one HTML document so it can be carried as a `srcdoc` ATTRIBUTE
+ * VALUE, exactly as an author must escape it — and exactly as a browser
+ * un-escapes it when it parses the attribute. Nesting one srcdoc inside
+ * another therefore escapes the inner document TWICE, which is what makes
+ * these fixtures unreadable by hand and is why they are built rather than
+ * written out.
+ */
+function srcdocFrame(document: string): string {
+  const escaped = document
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+  return `<iframe srcdoc="${escaped}"></iframe>`;
+}
+
+describe("W30 / R118(2): iframe[srcdoc] — a whole nested document", () => {
+  it("folds a nested <img>'s host into the parent's inventory, WITHOUT touching scriptSrcs", () => {
+    const html = withFallback(
+      `<iframe srcdoc='<img src="https://nested.example/px.gif">'></iframe>`,
+    );
+    const template = parseOk(html);
+    expect(template.remoteOrigins).toEqual(["https://nested.example"]);
+    // An `<img>` is not code, wherever it lives.
+    expect(template.scriptSrcs).toEqual([]);
+  });
+
+  it("puts a nested <script src> in scriptSrcs AS WELL — it really is remote code", () => {
+    // The one judgement call in this ticket, written down where W24 will read
+    // it. A `<script src>` inside a srcdoc is fetched and EXECUTED by the
+    // browser, in a document that inherits the embedder's CSP; a human
+    // approving the template is approving that code exactly as they approve a
+    // top-level one. Reporting it only as a host would show them a host and
+    // hide the fact that code runs from it. The `<img>` in the same document
+    // is not code and stays out — the rule is what the URL DOES, not where it
+    // was found.
+    const html = withFallback(
+      `<iframe srcdoc='<script src="https://nested.example/a.js"></script><img src="https://pic.example/a.png">'></iframe>`,
+    );
+    const template = parseOk(html);
+    expect(template.scriptSrcs).toEqual(["https://nested.example/a.js"]);
+    expect(template.remoteOrigins).toEqual([
+      "https://nested.example",
+      "https://pic.example",
+    ]);
+  });
+
+  it("reads an ENTITY-ENCODED srcdoc identically to the literal-angle spelling", () => {
+    // parse5 hands back byte-identical attribute values for these two, which
+    // is why the nested walk decodes character references — and ONLY for
+    // srcdoc. Not decoding would lose the whole nested document, which is the
+    // direction that fails open.
+    const encoded = withFallback(
+      '<iframe srcdoc="&lt;img src=&quot;https://nested.example/px.gif&quot;&gt;"></iframe>',
+    );
+    const literal = withFallback(
+      `<iframe srcdoc='<img src="https://nested.example/px.gif">'></iframe>`,
+    );
+    expect(parseOk(encoded).remoteOrigins).toEqual(["https://nested.example"]);
+    expect(parseOk(encoded).remoteOrigins).toEqual(parseOk(literal).remoteOrigins);
+  });
+
+  it("refuses an http: URL inside a srcdoc, naming the srcdoc in the path", () => {
+    const html = withFallback(`<iframe srcdoc='<img src="http://evil.example/px.gif">'></iframe>`);
+    const errors = errorsOf(html);
+    expect(errors.map((e) => e.path)).toContain("iframe[srcdoc] > img[src]");
+    expect(errors.map((e) => e.message).join("\n")).toMatch(
+      /inside an `<iframe srcdoc>` document: `http:` URLs are not permitted/,
+    );
+  });
+
+  it("reports a nested failure at the IFRAME's offset, not at an offset into the srcdoc value", () => {
+    const fragment = `<iframe srcdoc='<img src="http://evil.example/px.gif">'></iframe>`;
+    const html = withFallback(fragment);
+    const error = errorsOf(html).find((e) => e.path.startsWith("iframe[srcdoc]"));
+    expect(error?.offset).toBe(html.indexOf("<iframe"));
+  });
+
+  it("folds up a DOUBLY nested srcdoc — the guard's stated depth really is walked", () => {
+    const html = withFallback(
+      srcdocFrame(
+        `${srcdocFrame('<img src="https://deep.example/px.gif">')}<img src="https://mid.example/a.png">`,
+      ),
+    );
+    expect(parseOk(html).remoteOrigins).toEqual([
+      "https://deep.example",
+      "https://mid.example",
+    ]);
+  });
+
+  it("REFUSES a triply nested srcdoc rather than under-reporting it", () => {
+    // The guard bites here, and it bites by refusing. Silently not walking
+    // the third level would leave a host out of the inventory, which is the
+    // fail-open direction; a template this module cannot fully inspect is a
+    // template it declines to bless.
+    const html = withFallback(
+      srcdocFrame(srcdocFrame(srcdocFrame('<img src="https://deepest.example/px.gif">'))),
+    );
+    const text = errorsOf(html)
+      .map((e) => e.message)
+      .join("\n");
+    expect(text).toMatch(/nested 3 deep/);
+    expect(text).toMatch(/inspected 2 levels deep/);
+  });
+
+  it("counts nested bytes against the SAME maxBytes budget", () => {
+    // A nested document is parsed like any other, so it cannot be used to
+    // slip past a byte limit the parent respects.
+    const filler = "x".repeat(400);
+    const html = withFallback(`<iframe srcdoc='<p>${filler}</p>'></iframe><p>${filler}</p>`);
+    const limit = Buffer.byteLength(html, "utf8") + 100;
+    // The template itself fits…
+    expect(html.length).toBeLessThan(limit);
+    // …and is still refused, because the nested document is counted too.
+    const text = messages(html, limit);
+    expect(text).toMatch(/nested `<iframe srcdoc>` documents bring the total parsed size/);
+    expect(text).toMatch(new RegExp(`exceeds the limit of ${limit} bytes`));
+  });
+
+  it("accumulates the budget across SIBLING srcdocs, not per document", () => {
+    // Two nested documents that each fit comfortably, and together do not.
+    // A per-document check would pass both; the budget is one budget for the
+    // whole parse, which is what "a nested document cannot be used to blow
+    // it" means.
+    const filler = "y".repeat(60);
+    const html = withFallback(
+      `<iframe srcdoc="<p>${filler}</p>"></iframe><iframe srcdoc="<p>${filler}</p>"></iframe>`,
+    );
+    const limit = Buffer.byteLength(html, "utf8") + 100;
+    expect(parseTemplate(html, limit + 200).valid).toBe(true);
+    expect(messages(html, limit)).toMatch(
+      /nested `<iframe srcdoc>` documents bring the total parsed size/,
+    );
+  });
+
+  it("does NOT apply the fragment rules inside a srcdoc — a nested document IS a document", () => {
+    // `<!doctype>`, `<html>` and `<body>` are errors in the TEMPLATE because
+    // composeFrame owns the skeleton. A srcdoc holds a whole document of its
+    // own, where all three are ordinary and correct.
+    const html = withFallback(
+      `<iframe srcdoc='<!doctype html><html><body><img src="https://nested.example/a.png"></body></html>'></iframe>`,
+    );
+    expect(parseOk(html).remoteOrigins).toEqual(["https://nested.example"]);
+  });
+
+  it("does NOT read a nested [data-wolf-slot] as a slot", () => {
+    // Its content range would land inside an attribute value, so W19's filler
+    // could not write it without corrupting the tag it lives in.
+    const html = withFallback(
+      `<div data-wolf-slot="real"></div><iframe srcdoc='<div data-wolf-slot="phantom"></div>'></iframe>`,
+    );
+    expect(parseOk(html).slotIds).toEqual(["real"]);
+  });
+
+  it("does NOT accept a fallback that only exists inside a srcdoc", () => {
+    // Same reasoning as the `<template>`/`<noscript>` rule: the fallback is
+    // the operator's signal, and one buried in a nested browsing context is
+    // not the fragment's own.
+    const html = `<iframe srcdoc='<div data-wolf-fallback>no chart</div>'></iframe>`;
+    expect(messages(html)).toMatch(/must contain an element carrying `data-wolf-fallback`/);
+  });
+
+  it("decodes NUMERIC and hex character references, not only the named ones", () => {
+    // The named references are pinned by the case above; the numeric branch
+    // is the other half of the same decoder, and dropping it would make an
+    // entire nested document vanish from the inventory with every other test
+    // still green.
+    const decimal = withFallback(
+      '<iframe srcdoc="&#60;img src=&#34;https://num.example/px.gif&#34;&#62;"></iframe>',
+    );
+    const hex = withFallback(
+      '<iframe srcdoc="&#x3C;img src=&#x22;https://hex.example/px.gif&#x22;&#x3E;"></iframe>',
+    );
+    expect(parseOk(decimal).remoteOrigins).toEqual(["https://num.example"]);
+    expect(parseOk(hex).remoteOrigins).toEqual(["https://hex.example"]);
+  });
+
+  it("passes an UNKNOWN reference through VERBATIM, and walks the markup beside it", () => {
+    // The decoder can only lose markup, never invent it: an unrecognised
+    // reference is left exactly as written. Asserted through an error
+    // message, because that is the only place the decoded bytes are
+    // observable from outside — a decoder that DELETED unknown references
+    // would report a different URL here, and the two would be
+    // indistinguishable from the origins alone.
+    const html = withFallback(
+      `<iframe srcdoc='&notarealref; <img src="https://known.example/px.gif"><img src="x?a=&notarealref;b">'></iframe>`,
+    );
+    expect(messages(html)).toContain('"x?a=&notarealref;b" is not one');
+    // …and the real element beside it is still reached, so an unknown
+    // reference costs the inventory nothing.
+    const errors = errorsOf(html);
+    expect(errors).toHaveLength(1);
+    const walked = parseOk(
+      withFallback(
+        `<iframe srcdoc='&notarealref; <img src="https://known.example/px.gif">'></iframe>`,
+      ),
+    );
+    expect(walked.remoteOrigins).toEqual(["https://known.example"]);
+  });
+
+  it("decodes ONCE, so a double-escaped tag stays text and conjures no origin", () => {
+    // `&amp;lt;img …&amp;gt;` is the literal text `<img …>` in the nested
+    // document, not an element — a browser decodes the attribute once too.
+    // Decoding twice would invent a fetch the page never makes and put a host
+    // in W19's CSP that nothing contacts.
+    const html = withFallback(
+      '<iframe srcdoc="&amp;lt;img src=&amp;quot;https://ghost.example/px.gif&amp;quot;&amp;gt;"></iframe>',
+    );
+    expect(parseOk(html).remoteOrigins).toEqual([]);
+  });
+
+  it("does not let a nested <object> leak into the PARENT's param scope", () => {
+    // A srcdoc is a separate document with its own element stack. An
+    // `<object>` opened inside one must not make a `<param>` written after
+    // the iframe — in the parent — look like its child.
+    const html = withFallback(
+      `<iframe srcdoc='<object>'></iframe><param name="movie" value="https://leak.example/x.swf">`,
+    );
+    expect(parseOk(html).remoteOrigins).toEqual([]);
+  });
+
+  it("closes an <object> scope INSIDE a nested document, like any other", () => {
+    // The third direction: not a leak across the boundary, but the nested
+    // document's own `</object>`. A `<param>` after it is as inert there as
+    // it is at the top level.
+    const html = withFallback(
+      `<iframe srcdoc='<object></object><param name="movie" value="https://after.example/x.swf">'></iframe>`,
+    );
+    expect(parseOk(html).remoteOrigins).toEqual([]);
+  });
+
+  it("does not let the PARENT's open <object> reach into a nested document", () => {
+    // …and the same in the other direction: the nested walk starts at depth
+    // zero, so a loose `<param>` inside the srcdoc is as inert as one at the
+    // top level.
+    const html = withFallback(
+      `<object><iframe srcdoc='<param name="movie" value="https://inner.example/x.swf">'></iframe></object>`,
+    );
+    expect(parseOk(html).remoteOrigins).toEqual([]);
+  });
+
+  it("refuses the PARENT when a nested document cannot be tokenised", () => {
+    // The third rule category (see `visitUrlChannels`): the tokenizer's own
+    // strictness recurses. An unterminated tag inside a srcdoc is a region
+    // whose hosts are unknown, so the parent is refused rather than blessed
+    // with an inventory that may be short. Fail-closed, and new — nothing
+    // before W30 read a srcdoc at all.
+    const unterminated = withFallback(
+      `<iframe srcdoc='<img src="https://nested.example/px.gif"'></iframe>`,
+    );
+    expect(messages(unterminated)).toMatch(
+      /inside an `<iframe srcdoc>` document: the tag `<img` is never closed/,
+    );
+    const unclosedForeign = withFallback(`<iframe srcdoc='<svg><g>'></iframe>`);
+    expect(messages(unclosedForeign)).toMatch(/inside an `<iframe srcdoc>` document/);
+  });
+
+  it("does NOT refuse a nested document over benign text or an implied end tag", () => {
+    // The boundary of the rule above: a bare `<` in prose and an unclosed
+    // `<div>` are both ordinary HTML, and neither hides a host.
+    const html = withFallback(
+      `<iframe srcdoc='a &lt; b <div><p>still open'></iframe>` +
+        `<iframe srcdoc='<div><img src="https://fine.example/px.gif">'></iframe>`,
+    );
+    expect(parseOk(html).remoteOrigins).toEqual(["https://fine.example"]);
+  });
+
+  it("still refuses the iframe's own src by the ordinary rule", () => {
+    expect(messages(withFallback('<iframe src="http://evil.example/x"></iframe>'))).toMatch(
+      /`http:` URLs are not permitted/,
+    );
+  });
+});
+
+describe("W30 / R118(2): meta[http-equiv=refresh] — a navigation is a fetch", () => {
+  it("lists the host a refresh navigates to, and does NOT call it code", () => {
+    const html = withFallback('<meta http-equiv="refresh" content="0;URL=https://evil.example/x">');
+    const template = parseOk(html);
+    expect(template.remoteOrigins).toEqual(["https://evil.example"]);
+    expect(template.scriptSrcs).toEqual([]);
+  });
+
+  it("reads the spellings the refresh grammar actually allows", () => {
+    const CASES: Array<[label: string, content: string]> = [
+      ["url= in upper case", "0;URL=https://evil.example/x"],
+      ["url= in lower case", "0;url=https://evil.example/x"],
+      ["spaces around the keyword", "0 ;  url  =  https://evil.example/x"],
+      ["a comma separator", "0,url=https://evil.example/x"],
+      ["NO url= keyword at all", "0; https://evil.example/x"],
+      ["a single-quoted URL", "0;url='https://evil.example/x'"],
+      ["a fractional time", "1.5;url=https://evil.example/x"],
+    ];
+    for (const [label, content] of CASES) {
+      const html = withFallback(`<meta http-equiv="refresh" content="${content}">`);
+      expect(parseOk(html).remoteOrigins, label).toEqual(["https://evil.example"]);
+    }
+  });
+
+  it("reads a DOUBLE-quoted refresh URL, written inside a single-quoted attribute", () => {
+    // Written this way because this module does not decode character
+    // references: `content="0;url=&quot;…&quot;"` is a `"` to a browser and
+    // six literal characters here. That asymmetry is documented on
+    // `urlForClassification` and is fail-closed — the entity spelling is
+    // refused as "not an absolute https: URL" rather than silently accepted.
+    const html = withFallback(
+      `<meta http-equiv="refresh" content='0;url="https://evil.example/x"'>`,
+    );
+    expect(parseOk(html).remoteOrigins).toEqual(["https://evil.example"]);
+  });
+
+  it("finds the refresh however the http-equiv is cased or padded", () => {
+    const html = withFallback(
+      '<meta http-equiv=" ReFrEsH " content="0;url=https://evil.example/x">',
+    );
+    expect(parseOk(html).remoteOrigins).toEqual(["https://evil.example"]);
+  });
+
+  it("refuses an http: refresh target", () => {
+    const errors = errorsOf(
+      withFallback('<meta http-equiv="refresh" content="0;url=http://evil.example/x">'),
+    );
+    expect(errors.map((e) => e.path)).toContain("meta[http-equiv=refresh]");
+    expect(errors.map((e) => e.message).join("\n")).toMatch(/`http:` URLs are not permitted/);
+  });
+
+  it("refuses a javascript: refresh target", () => {
+    expect(
+      messages(withFallback('<meta http-equiv="refresh" content="0;url=javascript:alert(1)">')),
+    ).toMatch(/`javascript:` URLs are not permitted/);
+  });
+
+  it("leaves a refresh with no URL alone — it reloads in place and contacts nobody new", () => {
+    const template = parseOk(withFallback('<meta http-equiv="refresh" content="30">'));
+    expect(template.remoteOrigins).toEqual([]);
+  });
+
+  it("does not read a content-bearing meta that is NOT a refresh as a navigation", () => {
+    // `<meta name="x" content="0;url=…">` navigates nowhere; reading it as a
+    // URL would put a host in W19's CSP that nothing ever fetches.
+    const html = withFallback('<meta name="generator" content="0;url=https://nowhere.example/x">');
+    expect(parseOk(html).remoteOrigins).toEqual([]);
+  });
+
+  it("does not read a URL where the refresh grammar has no time", () => {
+    // `content="https://…"` is not a refresh: the time is mandatory.
+    const html = withFallback('<meta http-equiv="refresh" content="https://nowhere.example/x">');
+    expect(parseOk(html).remoteOrigins).toEqual([]);
+  });
+
+  /**
+   * THE SEPARATOR AND THE TIME — the blocking defect of W30's first cut.
+   *
+   * The first implementation demanded `;` or `,` after the time and refused a
+   * lone `.` as a time. The shared declarative refresh steps allow ASCII
+   * WHITESPACE as a separator on its own (step 8) and make a lone `.` a time
+   * of ZERO (steps 4–6), so three legal, navigating spellings reported NO
+   * host at all — the understatement direction, on the one channel that CSP
+   * cannot catch: W19 substitutes origins into `script-src`, `style-src`,
+   * `img-src` and `font-src`, and a NAVIGATION is governed by none of them.
+   *
+   * ⚠️ Each row below was checked to fail for the RIGHT reason. The two
+   * "no separator" cases already in this file do NOT discriminate — they fail
+   * the time test first — which is exactly how the defect hid from a mutation
+   * that made the separator optional.
+   */
+  const NAVIGATES: Array<[label: string, content: string]> = [
+    ["a semicolon separator", "0;url=https://evil.example/x"],
+    ["ASCII WHITESPACE as the only separator", "0 https://evil.example/x"],
+    ["whitespace as the separator, with the keyword", "0 url=https://evil.example/x"],
+    ["a lone `.` as the time, which is a time of zero", ".;url=https://evil.example/x"],
+    ["a lone `.` and a whitespace separator", ". https://evil.example/x"],
+    ["a tab as the separator", "0\turl=https://evil.example/x"],
+    ["a newline as the separator", "0\nhttps://evil.example/x"],
+    ["whitespace before the punctuation", "0 ; url=https://evil.example/x"],
+  ];
+  for (const [label, content] of NAVIGATES) {
+    it(`lists the host when the refresh ${label}`, () => {
+      const html = withFallback(`<meta http-equiv="refresh" content="${content}">`);
+      expect(parseOk(html).remoteOrigins).toEqual(["https://evil.example"]);
+    });
+  }
+
+  it("skips LEADING whitespace before the time", () => {
+    // Step 1 of the grammar, and the last line in this channel whose
+    // regression direction is fail-OPEN: drop the leading strip and
+    // `content="  0;url=…"` reports no host at all, which is the same shape
+    // as the separator defect that failed this ticket once.
+    const html = withFallback(
+      '<meta http-equiv="refresh" content="  0;url=https://evil.example/x">',
+    );
+    expect(parseOk(html).remoteOrigins).toEqual(["https://evil.example"]);
+  });
+
+  it("refuses an http: refresh reached through a WHITESPACE separator too", () => {
+    // The channel is policed wherever it is found, not only in the spelling
+    // the first cut happened to parse.
+    expect(
+      messages(withFallback('<meta http-equiv="refresh" content="0 http://evil.example/x">')),
+    ).toMatch(/`http:` URLs are not permitted/);
+  });
+
+  it("does not read a refresh whose time is followed by NO separator at all", () => {
+    // `0url=…` puts a non-separator character straight after the time, and
+    // step 8 gives up there. This is the case that discriminates the
+    // separator rule now that whitespace is accepted: it has a time, so it
+    // reaches the separator test rather than dying before it.
+    const html = withFallback('<meta http-equiv="refresh" content="0url=https://nowhere.example/x">');
+    expect(parseOk(html).remoteOrigins).toEqual([]);
+  });
+
+  it("does not read a URL where the time is MISSING but a separator is present", () => {
+    // The discriminating case for the mandatory time: `;url=…` has the
+    // separator and the keyword and still navigates nowhere, because the
+    // grammar collects digits (or a leading `.`) first and gives up when
+    // there are none. Without that rule this reads as a refresh and puts a
+    // host into W19's CSP that no browser ever contacts. (The previous case
+    // does NOT discriminate — it fails the separator test as well.)
+    const html = withFallback('<meta http-equiv="refresh" content=" ;url=https://nowhere.example/x">');
+    expect(parseOk(html).remoteOrigins).toEqual([]);
+  });
+});
+
+describe("W30 / R118(2): object > param[value] — the plugin channel", () => {
+  it("lists a param's host, and does NOT call it code", () => {
+    const html = withFallback(
+      '<object data="https://o.example/a.swf"><param name="movie" value="https://p.example/b.swf"></object>',
+    );
+    const template = parseOk(html);
+    expect(template.remoteOrigins).toEqual(["https://o.example", "https://p.example"]);
+    expect(template.scriptSrcs).toEqual([]);
+  });
+
+  it("reads a param nested below the object, not only its direct child", () => {
+    // parse5 keeps a `<param>` wherever it is written inside the object's
+    // content, and reading the whole subtree is the fail-closed direction.
+    const html = withFallback(
+      '<object><div><param name="src" value="https://deep.example/b.swf"></div></object>',
+    );
+    expect(parseOk(html).remoteOrigins).toEqual(["https://deep.example"]);
+  });
+
+  it("ignores a LOOSE param outside any object — nothing resolves it", () => {
+    const html = withFallback('<param name="movie" value="https://loose.example/b.swf">');
+    const template = parseOk(html);
+    expect(template.remoteOrigins).toEqual([]);
+    // …and it is not an error either: this ticket adds an inventory, it does
+    // not start refusing markup that fetches nothing.
+    expect(parseTemplate(html, BIG).valid).toBe(true);
+  });
+
+  it("stops reading params once the object is closed", () => {
+    const html = withFallback(
+      '<object></object><param name="movie" value="https://after.example/b.swf">',
+    );
+    expect(parseOk(html).remoteOrigins).toEqual([]);
+  });
+
+  it("leaves a param that is not a URL at all alone", () => {
+    // `<param name="quality" value="high">` is a plugin setting. Classifying
+    // it as a URL would refuse a template for a value that fetches nothing.
+    const html = withFallback('<object><param name="quality" value="high"></object>');
+    expect(parseTemplate(html, BIG).valid).toBe(true);
+    expect(parseOk(html).remoteOrigins).toEqual([]);
+  });
+
+  it("reads a scheme-bearing value under ANY param name", () => {
+    const html = withFallback(
+      '<object><param name="whatever" value="https://any.example/b.swf"></object>',
+    );
+    expect(parseOk(html).remoteOrigins).toEqual(["https://any.example"]);
+  });
+
+  it("holds a URL-NAMED param to the https rule even when it is relative", () => {
+    // What `URL_PARAM_NAMES` is actually for. It cannot reach a remote host —
+    // a relative value resolves inside the frame — so it contributes no
+    // origin; it is kept because the https-only doctrine reaches every other
+    // URL attribute uniformly (`<img src="chart.png">` is refused too), and a
+    // param named `movie` is a URL by any reading. Deleting the list would
+    // silently exempt this one channel from a rule the rest of the module
+    // applies.
+    expect(messages(withFallback('<object><param name="movie" value="chart.swf"></object>'))).toMatch(
+      /must be an absolute `https:` URL/,
+    );
+  });
+
+  it("refuses a PROTOCOL-RELATIVE param value under any name", () => {
+    // The other half of `paramValueIsUrl`: `//evil.example/x` names a host
+    // without naming a scheme, so it is caught by shape rather than by name.
+    expect(
+      messages(withFallback('<object><param name="anything" value="//evil.example/x.swf"></object>')),
+    ).toMatch(/protocol-relative/);
+  });
+
+  it("leaves an EMPTY param value alone — it fetches nothing", () => {
+    const html = withFallback('<object><param name="movie" value=""></object>');
+    expect(parseTemplate(html, BIG).valid).toBe(true);
+    expect(parseOk(html).remoteOrigins).toEqual([]);
+  });
+
+  it("refuses an http: param value", () => {
+    const errors = errorsOf(
+      withFallback('<object><param name="movie" value="http://evil.example/b.swf"></object>'),
+    );
+    expect(errors.map((e) => e.path)).toContain("object > param[value]");
+    expect(errors.map((e) => e.message).join("\n")).toMatch(/`http:` URLs are not permitted/);
+  });
+});
+
+describe("W30: scriptSrcs keeps its meaning across all three new channels", () => {
+  it("adds a navigation and a plugin parameter to the HOSTS, and only nested code to the CODE", () => {
+    // The single assertion W24's screen depends on. A human reading that
+    // screen sees two lists: "remote code you are approving" and "hosts this
+    // will contact". A meta refresh and an object param are hosts, not code.
+    // A nested `<script src>` is both.
+    const html = withFallback(
+      [
+        '<meta http-equiv="refresh" content="0;url=https://meta.example/x">',
+        '<object><param name="movie" value="https://param.example/b.swf"></object>',
+        `<iframe srcdoc='<script src="https://nested.example/a.js"></script><img src="https://pic.example/a.png">'></iframe>`,
+      ].join("\n"),
+    );
+    const template = parseOk(html);
+    expect(template.scriptSrcs).toEqual(["https://nested.example/a.js"]);
+    expect(template.remoteOrigins).toEqual([
+      "https://meta.example",
+      "https://nested.example",
+      "https://param.example",
+      "https://pic.example",
+    ]);
+  });
+
+  it("leaves the shared fixture's scriptSrcs byte-for-byte as W16 left it", () => {
+    expect(parseOk(VALID).scriptSrcs).toEqual([
+      "https://cdn.example.com/chart.css",
+      "https://cdn.example.com/chart.js",
+    ]);
+  });
+});
+
+/**
+ * W30 / R118(1) — `image-set()`, the CSS fetch that is not spelled `url()`.
+ *
+ * R118 recorded this beside R118(2): `image-set("http://evil/x.png" 1x)` was
+ * ACCEPTED while the `url()` equivalent was refused, and it contributed
+ * nothing to any inventory. Folded into W30 by the same argument that moved
+ * R118(2) here — the review screen can only show what the inventory holds,
+ * and this ticket forbids a second walker, so it cannot be fixed downstream.
+ */
+describe("W30 / R118(1): image-set() is a URL channel like any other", () => {
+  it("lists the host of a bare-string candidate, and does not call it code", () => {
+    const html = withFallback(
+      '<style>.a{background:image-set("https://is.example/x.png" 1x)}</style>',
+    );
+    const template = parseOk(html);
+    expect(template.remoteOrigins).toEqual(["https://is.example"]);
+    expect(template.scriptSrcs).toEqual([]);
+  });
+
+  it("refuses an http: candidate — the defect R118(1) recorded", () => {
+    expect(
+      messages(withFallback('<style>.a{background:image-set("http://evil.example/x.png" 1x)}</style>')),
+    ).toMatch(/`http:` URLs are not permitted/);
+  });
+
+  it("lists EVERY candidate in the set, and the vendor-prefixed spelling too", () => {
+    const html = withFallback(
+      "<style>" +
+        `.a{background:image-set("https://one.example/x.png" 1x, 'https://two.example/x.png' 2x)}` +
+        '.b{background:-webkit-image-set("https://three.example/x.png" 2x)}' +
+        "</style>",
+    );
+    expect(parseOk(html).remoteOrigins).toEqual([
+      "https://one.example",
+      "https://three.example",
+      "https://two.example",
+    ]);
+  });
+
+  it("reads the function name case-insensitively — CSS function names are", () => {
+    const html = withFallback(
+      '<style>.a{background:IMAGE-SET("https://caps.example/x.png" 1x)}</style>',
+    );
+    expect(parseOk(html).remoteOrigins).toEqual(["https://caps.example"]);
+  });
+
+  it("reads an image-set in a style ATTRIBUTE as well as in a <style> body", () => {
+    const html = withFallback(
+      `<div style='background:image-set("https://attr.example/x.png" 1x)'>y</div>`,
+    );
+    expect(parseOk(html).remoteOrigins).toEqual(["https://attr.example"]);
+  });
+
+  it("does not read `type()`'s MIME string as a URL — the spec's own spelling", () => {
+    // `image-set("…" type("image/avif"))` is the canonical CSS Images 4 form
+    // and MDN's worked example. Reading the MIME string as a candidate
+    // refused a correct template, pointing the author at `"image/avif"`.
+    // Fail-closed, and exactly the kind of baffling rule W25's authoring
+    // contract would inherit.
+    const html = withFallback(
+      '<style>.a{background:image-set("https://t.example/x.avif" type("image/avif"))}</style>',
+    );
+    expect(parseTemplate(html, BIG).valid).toBe(true);
+    expect(parseOk(html).remoteOrigins).toEqual(["https://t.example"]);
+  });
+
+  it("still reads every candidate in a set that mixes url(), type() and bare strings", () => {
+    const html = withFallback(
+      "<style>.a{background:image-set(" +
+        'url("https://u.example/x.png") type("image/png"), ' +
+        '"https://s.example/x.avif" type("image/avif"))}</style>',
+    );
+    expect(parseOk(html).remoteOrigins).toEqual([
+      "https://s.example",
+      "https://u.example",
+    ]);
+  });
+
+  it("does not report a url() inside an image-set TWICE", () => {
+    // The main pattern already matches a nested `url(…)`, so the string scan
+    // removes them first; without that, one mistake would be refused twice
+    // and a review screen would list one host as two.
+    const errors = errorsOf(
+      withFallback('<style>.a{background:image-set(url("http://evil.example/x.png") 1x)}</style>'),
+    );
+    expect(errors.filter((e) => /`http:` URLs are not permitted/.test(e.message))).toHaveLength(1);
+  });
+
+  it("still lists a url() candidate's host, mixed with a bare string", () => {
+    const html = withFallback(
+      '<style>.a{background:image-set(url("https://u.example/x.png") 1x, "https://s.example/x.png" 2x)}</style>',
+    );
+    expect(parseOk(html).remoteOrigins).toEqual([
+      "https://s.example",
+      "https://u.example",
+    ]);
+  });
+
+  it("allows a data: candidate, like every other CSS image", () => {
+    const html = withFallback(
+      '<style>.a{background:image-set("data:image/png;base64,AAA" 1x)}</style>',
+    );
+    expect(parseTemplate(html, BIG).valid).toBe(true);
+    expect(parseOk(html).remoteOrigins).toEqual([]);
+  });
+});
