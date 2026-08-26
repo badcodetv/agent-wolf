@@ -912,6 +912,11 @@ describe("artifacts", () => {
     const c = intercept("GET", 200, [wireArtifact()]);
     const rows = await client().listSessionArtifacts("hyp-1a2b3c4d");
     expect(pathnameOf(c)).toBe("/agent/sessions/by-name/hyp-1a2b3c4d/artifacts");
+    // NO query at all. Levelled against the two file-route cases, which both
+    // pin `queryOf`: `listSessions` on this client DOES carry `?user_email=*`,
+    // so "which routes carry a query" is a real distinction here, and this one
+    // deliberately carries none.
+    expect(queryOf(c)).toEqual({});
     expect(rows).toEqual([
       {
         id: "art-1",

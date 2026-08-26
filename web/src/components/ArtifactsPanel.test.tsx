@@ -155,6 +155,10 @@ describe("ArtifactsPanel", () => {
     // And the panel itself is NOT rendered — Orange's component returns null
     // for an empty list, so a missing empty state would be a silent blank.
     expect(screen.queryByTestId("artifacts-panel")).toBeNull();
+    // 🔴 Mirrors its sibling below. An empty session is NOT a problem, so no
+    // severity marker may appear: § 2 is emphatic that if the everyday state
+    // is styled as a warning, a real alert loses all its force.
+    expect(screen.queryByTestId("severity")).toBeNull();
   });
 
   it("artifacts_panel: a failed read costs the BLOCK, not the page — a degraded severity naming the cause", async () => {
@@ -167,6 +171,10 @@ describe("ArtifactsPanel", () => {
     // actionable half and flattening it would throw it away.
     expect(severity).toHaveTextContent("no session hyp-1a2b3c4d");
     expect(screen.queryByTestId("artifacts-panel")).toBeNull();
+    // 🔴 Mirrors its sibling above: a failed read is NOT an empty session, and
+    // rendering "nothing has been written yet" over an unreadable list is the
+    // one confusion this pair exists to keep apart.
+    expect(screen.queryByTestId("artifacts-empty")).toBeNull();
   });
 
   // ── The mapping ───────────────────────────────────────────────────────

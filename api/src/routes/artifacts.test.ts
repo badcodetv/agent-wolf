@@ -350,6 +350,9 @@ describe("artifacts_list", () => {
     const h = await harness({ artifacts: listed([]) });
     const res = await get(h, ARTIFACTS);
     expect(res.status).toBe(200);
+    // Mirrors its sibling below ("an ABSENT session is 404, never a 500"):
+    // both cases name the status they must NOT be, and both now assert it.
+    expect(res.status).not.toBe(404);
     expect(res.json).toEqual({ artifacts: [] });
   });
 
@@ -380,6 +383,11 @@ describe("artifacts_list", () => {
     const h = await harness({ artifacts: listed([orangeArtifact()]) });
     const res = await get(h, ARTIFACTS, false);
     expect(res.status).toBe(401);
+    // The KIND too, levelling this case with the other three error cases in
+    // this group (404/502/400 all pin it). Without it a route that answered
+    // 401 from somewhere other than `requireSignedIn` — Express's own body, a
+    // hand-rolled guard — reads the same.
+    expect(res.json.kind).toBe("forbidden");
     expect(h.stub.requests).toEqual([]);
   });
 
