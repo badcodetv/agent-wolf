@@ -145,6 +145,14 @@ interface StubConfig {
   memoriesById?: Record<string, string>;
   /** What `POST /agent/memories` answers with. */
   appendStatus?: number;
+  /**
+   * Serve EVERY page as page zero, ignoring `offset` entirely — which is
+   * exactly what Orange does when it cannot parse the parameter:
+   * `go/httpapi/history.go:107-125` runs `strconv.Atoi` and falls back to `0`
+   * on ANY parse error rather than rejecting the request. The session walk's
+   * only exit was a short page, so against this server it never ends. W32.
+   */
+  sessionsIgnoreOffset?: boolean;
 }
 
 const EMPTY_MEMORIES = '{"memories":[]}';
@@ -239,7 +247,10 @@ class Stub {
       const offset = Number(url.searchParams.get("offset") ?? "0");
       const worker = url.searchParams.get("worker");
       const filtered = worker === null ? rows : rows.filter((r) => r.worker === worker);
-      return { status: 200, data: JSON.stringify(filtered.slice(offset, offset + limit)) };
+      // `sessionsIgnoreOffset` reproduces Orange's silent `offset -> 0`
+      // fallback; otherwise the offset is honoured (W22, R180).
+      const from = this.config.sessionsIgnoreOffset === true ? 0 : offset;
+      return { status: 200, data: JSON.stringify(filtered.slice(from, from + limit)) };
     }
     if (url.pathname.startsWith("/agent/memories/")) {
       const id = decodeURIComponent(url.pathname.slice("/agent/memories/".length));
@@ -546,6 +557,139 @@ describe("store_session_index", () => {
     const index = await store.readSessionIndex({ sessionPageSize: 2 });
     expect(index.size).toBe(4);
     expect(stub.sessionRequests).toHaveLength(3);
+  });
+});
+
+// ── The session index's iteration budget (W32) ──────────────────────────
+
+describe("store_session_index_budget", () => {
+  /**
+   * `count` distinct hypothesis sessions, scaled up from a CAPTURED row so the
+   * field shape is Orange's. The volume is not: no unit test may create two
+   * thousand containers.
+   */
+  function manySessions(count: number): CapturedSessionRow[] {
+    const template = ALL_SESSION_ROWS[0];
+    if (template === undefined) throw new Error("no captured session rows");
+    return Array.from({ length: count }, (_, i) => ({
+      ...template,
+      id: `session-${i}`,
+      name: `hyp-${i.toString(16).padStart(8, "0")}`,
+    }));
+  }
+
+  function offsetsOf(stub: Stub): (string | null)[] {
+    return stub.sessionRequests.map((r) => new URL(r.path, BASE_URL).searchParams.get("offset"));
+  }
+
+  async function failureOf(promise: Promise<unknown>): Promise<WolfError> {
+    const outcome = await promise.then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(outcome).toBeInstanceOf(WolfError);
+    return outcome as WolfError;
+  }
+
+  it("store_session_index_budget: a server that ignores offset is stopped by the PAGE budget, and it THROWS", async () => {
+    // The exact production failure: Orange parses `offset` with `strconv.Atoi`
+    // and falls back to 0 on any parse error, so it answers page zero forever.
+    // The walk's only exit was `page.length < limit`, which such a server never
+    // produces. Before W32 this ran until the process died (2.8 GB RSS).
+    const { store, stub } = harness({
+      sessions: sessionsNamed("hyp-1a2b3c4d", "hyp-2b3c4d5e"),
+      sessionsIgnoreOffset: true,
+    });
+    const err = await failureOf(store.readSessionIndex({ sessionPageSize: 2 }));
+    // `internal`: OUR invariant broke. Not `invalid` — no HTTP caller can set
+    // this option — and not `unavailable`, the one RETRYABLE kind, which would
+    // have the poller re-enter the same non-terminating walk every tick.
+    expect(err.kind).toBe("internal");
+    expect(err.status).toBe(500);
+    // Debuggable from the log line alone: the route, the page count, the row
+    // count, and that the walk did not converge. "timeout" would reproduce the
+    // silence this exists to remove.
+    expect(err.message).toContain("GET /agent/sessions");
+    expect(err.message).toContain("did not converge");
+    expect(err.message).toContain("50 pages of limit=2");
+    expect(err.message).toContain("100 rows");
+    // The PAGE budget, not the row budget — 100 rows is nowhere near 20000.
+    expect(err.message).not.toContain("rows over");
+    // It stopped because the budget ran out, not because the test runner did.
+    expect(stub.sessionRequests).toHaveLength(50);
+    // And it really was walking: the offset advanced on every request, so the
+    // 50 are 50 distinct pages asked for, not 50 retries of one.
+    const offsets = offsetsOf(stub);
+    expect(offsets[0]).toBe("0");
+    expect(offsets[1]).toBe("2");
+    expect(offsets[49]).toBe("98");
+  });
+
+  it("store_session_index_budget: a large page size hits the ROW budget FIRST, at ten pages", async () => {
+    // One bound is not enough. With a 2000-row page the walk exhausts rows
+    // (20000) five times before it would exhaust pages (50), so a page cap
+    // alone leaves this case open — and this is the shape a server returning a
+    // full page of duplicates produces.
+    const { store, stub } = harness({ sessions: manySessions(2000), sessionsIgnoreOffset: true });
+    const err = await failureOf(store.readSessionIndex({ sessionPageSize: 2000 }));
+    expect(err.kind).toBe("internal");
+    expect(err.status).toBe(500);
+    expect(err.message).toContain("GET /agent/sessions");
+    expect(err.message).toContain("did not converge");
+    expect(err.message).toContain("20000 rows over 10 pages of limit=2000");
+    // The ROW budget fired, not the page budget.
+    expect(err.message).not.toContain("50 pages");
+    expect(stub.sessionRequests).toHaveLength(10);
+    // As above: it really was walking, so the ten are ten distinct pages asked
+    // for rather than ten retries of one.
+    expect(offsetsOf(stub)[0]).toBe("0");
+    expect(offsetsOf(stub)[1]).toBe("2000");
+    // Rows are counted as RECEIVED, not as indexed. This server returns the
+    // same 2000 rows every time, so the de-duplicated index never exceeds 2000
+    // and a budget counted off `index.size` would never fire here — the page
+    // budget would fire instead, forty pages later, with the other message.
+    expect(offsetsOf(stub)[9]).toBe("18000");
+  });
+
+  it("store_session_index_budget: a non-positive or non-integer sessionPageSize is refused at the edge, before ANY request", async () => {
+    // `limit = 0` is the same defect wearing a caller's clothes: every page is
+    // empty, `0 < 0` is false, and the walk pages forever against an offset
+    // that never moves.
+    const { store, stub } = harness({ sessions: ALL_SESSION_ROWS });
+    for (const bad of [0, -1, -200, 2.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const err = await failureOf(store.readSessionIndex({ sessionPageSize: bad }));
+      expect(err.kind, `sessionPageSize=${bad}`).toBe("internal");
+      expect(err.status, `sessionPageSize=${bad}`).toBe(500);
+      expect(err.message, `sessionPageSize=${bad}`).toContain(
+        "sessionPageSize must be a positive integer",
+      );
+      expect(err.message, `sessionPageSize=${bad}`).toContain(String(bad));
+      // The route, as both budget throws carry it. This is the third case of
+      // one rule and it was the thin one: it asserted the rule sentence and the
+      // offending value, and neither the route nor the status.
+      expect(err.message, `sessionPageSize=${bad}`).toContain("GET /agent/sessions");
+    }
+    expect(stub.sessionRequests).toHaveLength(0);
+    // The positive control for the line above: the same stub, still installed,
+    // DOES record requests. Without it "no requests were made" would also pass
+    // against a stub that was never wired up.
+    const index = await store.readSessionIndex({ sessionPageSize: 2 });
+    expect(index.size).toBe(4);
+    expect(stub.sessionRequests.length).toBeGreaterThan(0);
+  });
+
+  it("store_session_index_budget: 49 full pages and a short one converge — the budget's other side", async () => {
+    // The largest walk that still succeeds, and the proof the cap is checked
+    // AFTER the short-page exit rather than before it: 50 requests, no throw.
+    const { store, stub } = harness({ sessions: manySessions(99) });
+    const index = await store.readSessionIndex({ sessionPageSize: 2 });
+    expect(index.size).toBe(99);
+    expect(stub.sessionRequests).toHaveLength(50);
+    const offsets = offsetsOf(stub);
+    expect(offsets[48]).toBe("96");
+    expect(offsets[49]).toBe("98");
+    expect(index.has("00000000")).toBe(true);
+    expect(index.has("00000062")).toBe(true);
   });
 });
 

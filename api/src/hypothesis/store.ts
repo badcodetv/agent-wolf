@@ -1220,6 +1220,43 @@ const BOARD_LIMIT = 100;
 /** The per-name follow-up. */
 const DETAIL_LIMIT = 50;
 
+/**
+ * The session walk's two budgets (W32).
+ *
+ * The walk's only exit was ever a short page (`page.length < limit`), so a
+ * server that keeps answering with page zero is not an error to it — it is an
+ * infinite loop with no timeout, no error and no log. 🔴 **Orange does exactly
+ * that**: `go/httpapi/history.go:107-125` parses `offset` with `strconv.Atoi`
+ * and falls back to `0` on ANY parse error rather than rejecting the request,
+ * so one regression, a proxy that strips a query parameter, or a route change
+ * turns every board read, every detail read and the poller's enumeration into
+ * an unbounded request flood against the dependency. W31 reproduced it at
+ * 2.8 GB RSS before it was killed.
+ *
+ * BOTH bounds are needed and neither subsumes the other: at the default page
+ * size the pages run out first, while a caller with a large page size exhausts
+ * rows five times over before reaching fifty pages — which is also the shape a
+ * server returning a full page of DUPLICATES produces. Rows are counted as
+ * RECEIVED, never as indexed, for that second reason: a duplicate-returning
+ * server leaves `index.size` constant forever.
+ *
+ * 49 full pages plus a short one is the largest walk that converges; at the
+ * default page size of 200 that is 9 999 sessions, two orders of magnitude
+ * past anything Wolf can produce (Orange's host port pool caps concurrent
+ * sessions at 100 by default). Reaching either budget is therefore OUR
+ * invariant breaking, which is why it is `internal` rather than `invalid`.
+ *
+ * 🔴 **No `details` bag on any of the three throws, deliberately.** An
+ * `internal` error's `details` reaches NOTHING: `app.ts:78` answers the client
+ * with `{kind, message}` only, and `app.ts:68` logs `{kind, path, msg}` — not
+ * `details`. The only readers in this file (`reportTamperFrom`,
+ * `withReportTamper`) look for one `tamper` key and nothing else. A payload
+ * that cannot be observed is a comment written as code (R148), and it invites a
+ * later reader to trust it. Everything a log line needs is in the `message`.
+ */
+const SESSION_INDEX_MAX_PAGES = 50;
+const SESSION_INDEX_MAX_ROWS = 20_000;
+
 const KIND_HYPOTHESIS = "hypothesis";
 const KIND_EVALUATION = "evaluation";
 
@@ -1241,8 +1278,23 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
 
   async function readSessionIndex(opts?: ReadOptions): Promise<SessionIndex> {
     const limit = opts?.sessionPageSize ?? SESSION_PAGE_SIZE;
+    // Refused at the EDGE, before a single request. A non-positive page size is
+    // the same non-termination wearing a caller's clothes: with `limit = 0`
+    // every page comes back empty, `0 < 0` is false, and the walk pages forever
+    // against an offset that never moves. `internal` and not `invalid` because
+    // no HTTP caller can reach this option — only Wolf code sets it, so a bad
+    // value here is a bug of ours.
+    if (!Number.isInteger(limit) || limit <= 0) {
+      throw new WolfError(
+        "internal",
+        `readSessionIndex: sessionPageSize must be a positive integer, got ${String(limit)} — ` +
+          `a non-positive page size makes the GET /agent/sessions walk unable to reach a short page`,
+      );
+    }
     const index = new Map<string, SessionIndexEntry>();
     let offset = 0;
+    let pages = 0;
+    let rows = 0;
     // Both filters are load-bearing and both are server-side. `user_email=*`
     // because an API key's synthetic email (`api-key:<project>`) matches no
     // session row; `worker=interviewer` because the list is ordered
@@ -1253,6 +1305,8 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
     for (;;) {
       const params: ListSessionsParams = { worker: INTERVIEWER_WORKER, limit, offset };
       const page: SessionListRow[] = await client.listSessions(params);
+      pages += 1;
+      rows += page.length;
       for (const row of page) {
         const id = hypothesisIdFromSessionName(row.name);
         if (id === null) continue; // e.g. a project-level chat session
@@ -1268,7 +1322,26 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
       }
       // A short page is the end of the walk. A full page is not proof there is
       // another, so one extra request at the boundary is the price.
+      //
+      // Checked BEFORE the budgets so a walk that converges on its fiftieth
+      // request is never refused for reaching the page budget on it.
       if (page.length < limit) break;
+      if (pages >= SESSION_INDEX_MAX_PAGES) {
+        throw new WolfError(
+          "internal",
+          `readSessionIndex: the GET /agent/sessions page walk did not converge — ` +
+            `${pages} pages of limit=${limit} (${rows} rows) and never a short page. ` +
+            `A server that ignores "offset" returns page zero forever.`,
+        );
+      }
+      if (rows >= SESSION_INDEX_MAX_ROWS) {
+        throw new WolfError(
+          "internal",
+          `readSessionIndex: the GET /agent/sessions page walk did not converge — ` +
+            `${rows} rows over ${pages} pages of limit=${limit} and never a short page. ` +
+            `A server that ignores "offset" returns page zero forever.`,
+        );
+      }
       offset += limit;
     }
     return index;
