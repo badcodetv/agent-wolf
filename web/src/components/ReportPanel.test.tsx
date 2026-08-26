@@ -116,10 +116,24 @@ describe("🔴 the panel registers no `message` listener either", () => {
     // already there.
     const spy = vi.spyOn(window, "addEventListener");
     try {
+      const messageCalls = (): unknown[] => spy.mock.calls.filter(([type]) => type === "message");
       renderPanel(block({ drift: null }));
       renderPanel(block({ drift: null, unreadable: true }));
       renderPanel(block({ has_template: false, drift: null }));
-      expect(spy.mock.calls.filter(([type]) => type === "message")).toEqual([]);
+      // Proof the branches really rendered, so the empty listener list is
+      // about three frameless panels and not about three failed renders.
+      expect(screen.getAllByTestId("report-empty").length).toBe(2);
+      expect(screen.getByTestId("report-withheld")).toBeInTheDocument();
+      expect(messageCalls()).toEqual([]);
+
+      // 🔴 The same positive control as its sibling above (R148). Without it
+      // this assertion holds whether or not the spy is wired to the right
+      // target — a listener spy that never observes a registration passes
+      // for the wrong reason, and this pair had it on one half only.
+      const probe = (): void => {};
+      window.addEventListener("message", probe);
+      expect(messageCalls().length).toBe(1);
+      window.removeEventListener("message", probe);
     } finally {
       spy.mockRestore();
     }
