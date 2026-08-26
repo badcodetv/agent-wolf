@@ -17,6 +17,7 @@
 
 import type {
   AmendmentDecision,
+  ArtifactsResponse,
   BoardRow,
   EmbedTokenResponse,
   HumanVerdict,
@@ -265,6 +266,23 @@ export function amendSpec(
     decision,
     rationale,
   });
+}
+
+/**
+ * `GET /api/hypotheses/:id/artifacts` — the metadata list for this
+ * hypothesis's `hyp-<id>` session, proxied SERVER-SIDE.
+ *
+ * 🔴 The browser is never sent to Orange for it. Orange sets no CORS headers,
+ * and the only credential that opens its artifact routes is Wolf's
+ * project-wide `WOLF_API_KEY` — so the list is fetched by the API, with the
+ * key, and re-served here. There is no `download_url` in the response and
+ * nothing in `web/` may build one.
+ *
+ * `{ artifacts: [] }` is the ordinary day-one answer, not a failure. A `404`
+ * means no session named `hyp-<id>` exists.
+ */
+export function fetchArtifacts(id: string): Promise<ArtifactsResponse> {
+  return getJson<ArtifactsResponse>(`/api/hypotheses/${encodeURIComponent(id)}/artifacts`);
 }
 
 // ── The report candidate (W24) ──────────────────────────────────────────

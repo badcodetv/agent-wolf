@@ -12,6 +12,7 @@ import { createAuthRouter } from "./routes/auth.js";
 import { createHypothesesRouter } from "./routes/hypotheses.js";
 import { createEmbedRouter } from "./routes/embed.js";
 import { createSeriesRouter } from "./routes/series.js";
+import { createArtifactsRouter } from "./routes/artifacts.js";
 import { createReportRouter } from "./routes/report.js";
 
 /**
@@ -239,6 +240,19 @@ export function createApp(logger: Logger, config: WolfConfig): Express {
   // `router.use`, so neither can 401 anything it does not serve.
   app.use(createEmbedRouter({ client, config, logger }));
   app.use(createSeriesRouter({ client, logger }));
+
+  // ── W29: the artifact metadata list ───────────────────────────────────
+  //
+  // Mounted with W11's two for the same reasons: Express matches whole paths,
+  // so `/api/hypotheses/:id/artifacts` never collides with
+  // `/api/hypotheses/:id`, and this router guards its single route with
+  // `requireSignedIn` itself (R79) rather than a path-prefixed `router.use`.
+  //
+  // 🔴 `app.test.ts` asserts this line with a signed-in, MALFORMED-id probe.
+  // "401 when signed out" does NOT discriminate — W8's path-prefixed
+  // `router.use("/api/hypotheses", requireSignedIn)` 401s everything under the
+  // prefix whether or not this router exists (R133).
+  app.use(createArtifactsRouter({ client, logger }));
 
   // ── W21: the report frame and the two template-writing routes ─────────
   //

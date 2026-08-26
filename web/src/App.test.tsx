@@ -73,9 +73,16 @@ describe("the route table", () => {
       "GET /api/hypotheses/1a2b3c4d/embed-token": {
         json: { token: "t", expires_at_sec: Math.floor(Date.now() / 1000) + 900, embed_url: "" },
       },
+      // W29's panel fetches its own list. Stubbed even though the assertions
+      // below would survive without it: `stubFetchRoutes` throws on an
+      // unrouted path, the panel catches that as a failed read and renders a
+      // degraded marker, and the route test would then be passing over a page
+      // that is quietly broken.
+      "GET /api/hypotheses/1a2b3c4d/artifacts": { json: { artifacts: [] } },
     });
     await settle();
     expect(screen.getByTestId("detail-column")).toBeInTheDocument();
+    expect(screen.getByTestId("artifacts-empty")).toBeInTheDocument();
     expect(screen.getByTestId("section-timeline")).toBeInTheDocument();
     expect(screen.getByTestId("chat-rail")).toBeInTheDocument();
   });

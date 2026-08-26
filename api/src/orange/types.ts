@@ -260,3 +260,51 @@ export interface VerifyGoogleResult {
   email: string;
   emailVerified: boolean;
 }
+
+// ── Artifacts (W29) ──────────────────────────────────────────────────────
+
+/**
+ * One row of `GET /agent/sessions/by-name/{name}/artifacts` — the individual,
+ * user-facing files a session's container produced (`go/artifacts/artifacts.go`'s
+ * `Artifact`). Distinct from a snapshot: an artifact is one file, a snapshot is
+ * a whole filesystem.
+ *
+ * ⚠️ **This is the one Orange route whose wire is already camelCase.** The
+ * memories, datasets, workers and schedules routes all send snake_case
+ * (`created_by_worker`, `size_bytes`, …) and `client.ts` translates; the Go
+ * `Artifact` struct is tagged `filePath` / `mimeType` / `fileSize` / `isDir`
+ * and needs none. Do not "fix" the mapper to read snake_case keys — it would
+ * silently map every field to its zero value, which `strField`/`numField` make
+ * indistinguishable from an empty artifact.
+ *
+ * `fileSize` is renamed `fileSizeBytes` here on the house rule that a unit
+ * belongs in the type, and `blobPath` and `meta` are deliberately NOT mapped:
+ * the blob path is the STORE's object key and nothing above this layer has any
+ * business with it.
+ */
+export interface ArtifactRecord {
+  id: string;
+  /** Orange's session uuid. Kept here and dropped at Wolf's own route — the browser addresses a session by NAME. */
+  sessionId: string;
+  /** The dedup key, with `sessionId`. Spelt with or without a leading slash depending on who wrote it. */
+  filePath: string;
+  /** `"file" | "code" | "image" | "data" | "webapp"`, and extensible — kept as a string on purpose. */
+  artifactType: string;
+  /** `"live" | "extracted" | "lost" | "extraction_failed"`. A string, so a fifth value Orange adds does not become a parse failure here. */
+  status: string;
+  label: string;
+  description: string;
+  mimeType: string;
+  /** `fileSize` on the wire. Bytes. */
+  fileSizeBytes: number;
+  /** `"tool" | "auto" | "upload"` — write-once in Orange. */
+  source: string;
+  /** When true, the bytes are one blob per file under a PREFIX; the file route serves nothing for it. */
+  isDir: boolean;
+}
+
+/** The bytes of one artifact — `GET /agent/sessions/by-name/{name}/artifacts/file?path=…`. */
+export interface ArtifactFile {
+  contentType: string;
+  body: ArrayBuffer;
+}
