@@ -335,6 +335,25 @@ class Stub {
       // "only open requests reach the board" would be decoration against a
       // stub that returned everything either way.
       if (url.searchParams.get("state") === "open") {
+        // ⚠️ `?? 0` is what makes this filter backward-compatible with the
+        // fixtures written before it, and that is worth stating rather than
+        // leaving to be rediscovered: the pre-existing `hypotheses_detail`
+        // attention fixture omits `answered_at` and `timed_out_at` entirely
+        // on all three of its rows, so a strict filter would drop all three
+        // and redden a W8 test for a reason unrelated to the code under test.
+        //
+        // It makes this fake MORE PERMISSIVE than Orange — but only for a
+        // hand-written fixture, never for a shape Orange can produce: both
+        // fields are NON-POINTER on the Go side (`go/agentdb/attention.go`
+        // :54-58), so the real wire always carries them.
+        //
+        // The two-clause rule is Orange's own, verified rather than guessed:
+        // `SessionAwaitsHuman` queries `answered_at = 0 AND timed_out_at = 0`
+        // (`go/agentdb/attention.go:278`), and `expires_at` is deliberately
+        // NOT part of it — "ExpiresAt 0 means no deadline ... a request
+        // without one simply waits" (`:51-52`). Do not add an expiry clause
+        // here "for realism": it would make the fake STRICTER than Orange,
+        // which is the one direction a fake is never wrong in by accident.
         rows = rows.filter(
           (row) => Number(row["answered_at"] ?? 0) === 0 && Number(row["timed_out_at"] ?? 0) === 0,
         );
@@ -516,6 +535,110 @@ async function post(
   }
   return { status: res.status, json };
 }
+
+// ── The fake's own behaviour (R180) ─────────────────────────────────────
+//
+// 🔴 A fake is load-bearing test infrastructure that no mutation can reach: a
+// mutation of FIXTURE code dies nowhere, because mutation testing's whole
+// mechanism is "change the code, watch a test fail" and a fake has no test
+// above it to fail. The prescription is to TEST THE FAKE'S OWN BEHAVIOUR,
+// driven through the real client — so a fixture regression fails here, on its
+// own, rather than silently re-converting a downstream defence into
+// decoration.
+//
+// Without this, exactly one board case observed the `state=open` filter, and
+// it observed it incidentally: rewrite that case and the fake could quietly
+// revert to permissive with nothing red.
+
+describe("stub_attention_requests", () => {
+  const ANSWERED = {
+    id: "ar-answered", session_id: "sess-a", worker: "interviewer", message: "already dealt with",
+    created_at: 1787334311, expires_at: 1787334911, answered_at: 1787334400, timed_out_at: 0,
+  };
+  const TIMED_OUT = {
+    id: "ar-timed-out", session_id: "sess-b", worker: "interviewer", message: "nobody answered",
+    created_at: 1787334311, expires_at: 1787334911, answered_at: 0, timed_out_at: 1787334500,
+  };
+  const OPEN = {
+    id: "ar-open", session_id: "sess-c", worker: "interviewer", message: "which basket?",
+    created_at: 1787334311, expires_at: 1787334911, answered_at: 0, timed_out_at: 0,
+  };
+
+  function client(): ReturnType<typeof createOrangeClient> {
+    const stub = new Stub(pool, {
+      attention: JSON.stringify({ attention_requests: [ANSWERED, TIMED_OUT, OPEN] }),
+    });
+    stub.install();
+    return createOrangeClient({
+      baseUrl: ORANGE,
+      apiKey: API_KEY,
+      logger: createLogger({ logLevel: "silent" }),
+    });
+  }
+
+  it("stub_attention_requests: with state=open the fake hides an ANSWERED request", async () => {
+    const rows = await client().listAttentionRequests({ state: "open" });
+    // Levelled against its TIMED-OUT twin below (R222 — this round's own
+    // sweep): the twin names the row it expects gone, and so does this one.
+    expect(rows.map((r) => r.id)).not.toContain("ar-answered");
+    expect(rows.map((r) => r.id)).toEqual(["ar-open"]);
+  });
+
+  it("stub_attention_requests: with state=open the fake hides a TIMED-OUT request", async () => {
+    // The twin of the case above, on the other of Orange's two closing
+    // conditions — asserted the same way, so neither half is the thin one.
+    const rows = await client().listAttentionRequests({ state: "open" });
+    expect(rows.map((r) => r.id)).not.toContain("ar-timed-out");
+    expect(rows.map((r) => r.id)).toEqual(["ar-open"]);
+  });
+
+  it("stub_attention_requests: WITHOUT the parameter the fake returns all three", async () => {
+    // 🔴 The half that makes the two above mean something. A fake that
+    // returned one row whatever it was asked would satisfy them both; only
+    // the unfiltered call proves the parameter is what did the work.
+    const rows = await client().listAttentionRequests();
+    expect(rows.map((r) => r.id)).toEqual(["ar-answered", "ar-timed-out", "ar-open"]);
+  });
+
+  it("stub_attention_requests: an EXPIRED but unanswered request is still OPEN, as Orange defines it", async () => {
+    // Orange's `open` is `answered_at = 0 AND timed_out_at = 0` and nothing
+    // else (`go/agentdb/attention.go:278`); `expires_at` is not a clause,
+    // because a request without a deadline "simply waits" (`:51-52`). Pinned
+    // so nobody adds an expiry filter to the fake "for realism" and makes it
+    // STRICTER than the thing it stands in for.
+    const stub = new Stub(pool, {
+      attention: JSON.stringify({
+        attention_requests: [
+          { id: "ar-expired", session_id: "sess-e", worker: "interviewer", message: "long overdue", created_at: 1, expires_at: 2, answered_at: 0, timed_out_at: 0 },
+        ],
+      }),
+    });
+    stub.install();
+    const rows = await createOrangeClient({
+      baseUrl: ORANGE, apiKey: API_KEY, logger: createLogger({ logLevel: "silent" }),
+    }).listAttentionRequests({ state: "open" });
+    expect(rows.map((r) => r.id)).toEqual(["ar-expired"]);
+  });
+
+  it("stub_attention_requests: a row omitting answered_at/timed_out_at is treated as OPEN", async () => {
+    // The backward-compatibility branch, pinned rather than left implicit —
+    // the pre-existing detail fixture's rows have neither field. On the real
+    // wire both are non-pointer and always present, so this leniency can only
+    // ever affect a hand-written fixture.
+    const stub = new Stub(pool, {
+      attention: JSON.stringify({
+        attention_requests: [
+          { id: "ar-legacy", session_id: "sess-d", worker: "interviewer", message: "no state fields", created_at: 1787334311, expires_at: 1787334911 },
+        ],
+      }),
+    });
+    stub.install();
+    const rows = await createOrangeClient({
+      baseUrl: ORANGE, apiKey: API_KEY, logger: createLogger({ logLevel: "silent" }),
+    }).listAttentionRequests({ state: "open" });
+    expect(rows.map((r) => r.id)).toEqual(["ar-legacy"]);
+  });
+});
 
 // ── The attention model (W27) ───────────────────────────────────────────
 //
@@ -839,7 +962,7 @@ describe("hypotheses_board", () => {
 
   // ── W27: the projections ──────────────────────────────────────────────
 
-  it("hypotheses_board: every row carries restated_from, so /archive needs no detail read per terminal row", async () => {
+  it("hypotheses_board: every row carries restated_from, so /archive CAN stop paying a detail read per terminal row", async () => {
     const stub = twelve();
     stub.board = page([
       { ...stateRow(ids[0]!, "live", "A restatement"), labels: { kind: "hypothesis", name: ids[0]!, status: "live", owner: slugifyOwner(OWNER), restated_from: "deadbeef" } },
@@ -1742,9 +1865,84 @@ describe("hypotheses_detail", () => {
     const h = await harness(stub);
     const res = await get(h, `/api/hypotheses/${ID}`);
 
+    expect(res.status).toBe(200);
     expect(res.json.challenge_reason).toBeNull();
     expect(res.json.hypothesis.status).toBe("challenged");
     // The read WAS made — the absence is a reading, not a skip.
+    expect(fullContentReads(h.stub)).toContain(`/agent/memories/state-${ID}`);
+    // ⚠️ The pair this belongs to: `challenge_reason: null` here means "the
+    // poller recorded no rationale", and in the FAILED-read case below it
+    // means "Orange would not answer". 🔴 **They are indistinguishable on the
+    // wire, deliberately** — both render W14's pinned absent-reason sentence,
+    // which is true either way, and the failure is on the log instead. What
+    // both cases must therefore share is that the PAGE SURVIVED; levelled
+    // here after the sweep found only the other half saying so (R222).
+    expect(res.json.spec_validation).toBeDefined();
+    expect(res.json.atoms.worker).toBe(`researcher-${ID}`);
+  });
+
+  it("hypotheses_detail: a FAILED state-memory read costs challenge_reason and NOTHING ELSE on the page", async () => {
+    // 🔴 S1. This read is the LEAST important field on the page and it sits on
+    // the page carrying the human's decision controls. Every sibling read on
+    // this handler degrades deliberately — the attention list, the schedule
+    // list, the report block — and this one must too, or a transient Orange
+    // failure takes down the spec, the scoreboard, the verdict and the tamper
+    // warnings along with it.
+    //
+    // Asserted the way the neighbours are: the REST OF THE PAGE is named. A
+    // test that only checked `challenge_reason === null` would pass against a
+    // page that returned nothing at all.
+    const stub = baseStub();
+    const row = stateRow(ID, "challenged", "Copper is the new oil");
+    stub.board = page([row]);
+    stub.details![`hypothesis:${ID}`] = page([row]);
+    stub.details![`hypothesis-spec:${ID}`] = page([
+      memoryRow({ id: "spec-1", labels: { kind: "hypothesis-spec", name: ID, status: "locked" } }),
+    ]);
+    stub.details![`evaluation:${ID}`] = page([
+      memoryRow({ id: "eval-1", labels: { kind: "evaluation", name: ID }, snippet: "score=0.5 …" }),
+    ]);
+    stub.details![`verdict:${ID}`] = page([
+      memoryRow({ id: "verdict-1", labels: { kind: "verdict", name: ID, status: "confirmed" }, snippet: "the thesis held" }),
+    ]);
+    stub.memoriesById = {
+      "spec-1": JSON.stringify({
+        id: "spec-1", labels: { kind: "hypothesis-spec", name: ID, status: "locked" },
+        content: specJson(), created_by_worker: "", created_by_session: "", created_at: 1787334047000,
+      }),
+      "eval-1": JSON.stringify({
+        id: "eval-1", labels: { kind: "evaluation", name: ID },
+        content:
+          'score=0.5 tripped=1 holding=2 indeterminate=0 evaluated=2026-08-20T06:05:00Z\n' +
+          '{"evaluated_at_ms":1787334047000,"support_score":0.5,"conditions":[],"metrics":[]}',
+        created_by_worker: "", created_by_session: "", created_at: 1787334047000,
+      }),
+      "verdict-1": JSON.stringify({
+        id: "verdict-1", labels: { kind: "verdict", name: ID, status: "confirmed" },
+        content: "the thesis held", created_by_worker: "", created_by_session: "", created_at: 1787334048000,
+      }),
+    };
+    // The state row alone is unreadable — an UPSTREAM failure, not a parse
+    // failure. Every other full-content read on this page still works.
+    stub.failMemoryById = { [`state-${ID}`]: 503 };
+    const h = await harness(stub);
+    const res = await get(h, `/api/hypotheses/${ID}`);
+
+    expect(res.status).toBe(200);
+    // The cost, and the whole cost.
+    expect(res.json.challenge_reason).toBeNull();
+    // 🔴 The rest of the page, named field by field — this is the half that
+    // makes the assertion above mean something.
+    expect(res.json.spec_source).toBe("hypothesis-spec");
+    expect(res.json.spec.thesis).toBeTypeOf("string");
+    expect(res.json.spec_validation.valid).toBe(true);
+    expect(res.json.evaluation.support_score).toBe(0.5);
+    expect(res.json.verdict.status).toBe("confirmed");
+    expect(res.json.hypothesis.status).toBe("challenged");
+    expect(res.json.state_history).toHaveLength(1);
+    expect(res.json.atoms.worker).toBe(`researcher-${ID}`);
+    // And the read WAS attempted — `null` here is a degradation, not the
+    // status gate quietly skipping it.
     expect(fullContentReads(h.stub)).toContain(`/agent/memories/state-${ID}`);
   });
 

@@ -203,10 +203,17 @@ export interface BoardRow {
   /**
    * Optional label carried forward across a re-roll (W27).
    *
-   * It is on the DETAIL row already; putting it here too is what stops
-   * `/archive` paying one full detail read per terminal row just to draw the
-   * "restated from" lineage (R138 hand-off 2). It costs nothing — `readBoard`
-   * has already resolved it.
+   * It is on the DETAIL row already; putting it here too is what LETS
+   * `/archive` stop paying one full detail read per terminal row just to draw
+   * the "restated from" lineage (R138 hand-off 2). It costs nothing —
+   * `readBoard` has already resolved it.
+   *
+   * ⚠️ **Present tense would be false today.** `web/src/api/types.ts` does not
+   * yet declare this field on its `BoardRow`, and `web/src/pages/Archive.tsx`
+   * still calls `fetchHypothesis` per terminal row. The server half is what
+   * ships here; the client half is a separate ticket. (R211 class — a
+   * sentence that is behaviourally true of the future and mechanically false
+   * of the present is what a reader debugs against.)
    */
   restated_from: string | null;
   /**
@@ -884,8 +891,10 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
       // is `null`. A row whose line 1 was blank comes back as `""` and stays
       // `""`.
       headline: report?.headline ?? null,
-      // Already resolved by `readBoard`; serving it here is what keeps
-      // `/archive` from paying a detail read per terminal row (R138).
+      // Already resolved by `readBoard`; serving it here is what LETS
+      // `/archive` stop paying a detail read per terminal row (R138). It has
+      // not stopped yet — `web/` does not read this field. See the field's
+      // docstring above.
       restated_from: record.restatedFrom,
     };
     // 🔴 ABSENT STAYS ABSENT. `summary?.attention ?? 0` here would make "this
@@ -1273,11 +1282,32 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
    * the 500 characters the list route returns. The read is paid ONLY for a
    * challenged hypothesis — see `HypothesisDetail.challenge_reason` for why
    * the field is gated on the status rather than served for every state.
+   *
+   * 🔴 **It degrades to `null` rather than failing the page**, like every
+   * other read on this handler — the attention list, the schedule list, the
+   * report block. This is the LEAST important field on the page and it sits
+   * on the page carrying the human's verdict controls: letting a transient
+   * Orange failure here take down the spec, the scoreboard, the verdict and
+   * the tamper warnings would trade the whole decision surface for one
+   * sentence. `error` rather than `warn` because, unlike a missing schedule,
+   * a state row Wolf itself wrote and cannot read back is a real fault.
+   *
+   * The UI cannot tell this apart from "the poller recorded no rationale",
+   * and that is the accepted cost: both render the pinned absent-reason
+   * sentence W14 already ships, which is true either way.
    */
   async function challengeReasonFor(record: HypothesisRecord): Promise<string | null> {
     if (record.status !== "challenged" || record.statusMemoryId === null) return null;
-    const full = await client.getMemory(record.statusMemoryId);
-    return parseHypothesisContent(full.content).rationale;
+    try {
+      const full = await client.getMemory(record.statusMemoryId);
+      return parseHypothesisContent(full.content).rationale;
+    } catch (err) {
+      logger.error(
+        { id: record.id, memory_id: record.statusMemoryId, err },
+        "detail: could not read the challenged state row — challenge_reason omitted",
+      );
+      return null;
+    }
   }
 
   function detailRow(record: HypothesisRecord): HypothesisDetailRow {
