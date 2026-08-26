@@ -132,7 +132,9 @@ describe("🔴 unreadable is degraded, and it is not drift's business", () => {
     const notice = within(screen.getByTestId("report-notice-unreadable")).getByTestId("severity");
     expect(notice).toHaveAttribute("data-severity", "degraded");
     expect(notice).toHaveTextContent(UNREADABLE_CAUSE);
-    expect(UNREADABLE_CAUSE).toMatch(/cannot be read/i);
+    // A distinctive phrase, and one that carries the fact that a tick DID
+    // run — which is the whole difference between this and the empty state.
+    expect(UNREADABLE_CAUSE).toMatch(/tick ran[\s\S]*cannot be read/i);
   });
 
   it("🔴 renders NOTHING for {drift: null, unreadable: false} — the empty state is the panel's", () => {
@@ -187,6 +189,8 @@ describe("drift is degraded and names the slots", () => {
     const notice = within(screen.getByTestId("report-notice-drift")).getByTestId("severity");
     expect(notice).toHaveAttribute("data-severity", "degraded");
     expect(notice).toHaveTextContent("stale-slot");
+    // The rendered sentence, not just the id inside it.
+    expect(notice).toHaveTextContent(/does not match its template/);
   });
 
   it("names the unfilled slots", () => {
@@ -206,9 +210,15 @@ describe("drift is degraded and names the slots", () => {
     // means the template declares a slot the writer skipped, and the fixes
     // are opposite.
     expect(text.indexOf("gone")).not.toBe(text.indexOf("missing"));
-    expect(driftCause({ orphan_slots: ["gone"], unfilled_slots: ["missing"] })).toContain(
-      "gone",
-    );
+
+    // 🔴 The slot names alone are not the sentence. Pinned as literals — not
+    // through the builder — because the two LABELS are what tell the reader
+    // which name is which, and the whole sentence still contains both names
+    // with the labels stripped out.
+    const sentence = driftCause({ orphan_slots: ["gone"], unfilled_slots: ["missing"] });
+    expect(sentence).toMatch(/does not match its template/);
+    expect(sentence).toMatch(/filled but not declared[^;]*gone/);
+    expect(sentence).toMatch(/declared by the template but not filled[^;]*missing/);
   });
 
   it("🔴 renders nothing for a tick that matched the template exactly", () => {

@@ -209,6 +209,12 @@ describe("🔴 indeterminate is visually distinct from holding", () => {
     expect(countText("holding")).toContain("●");
     expect(countText("tripped")).toContain("◉");
     expect(countText("indeterminate")).toContain("△");
+    // Never glyph-alone either: § 2b's rule is a glyph AND a word, so the
+    // three labels are pinned as literals beside their glyphs. Without this,
+    // a band rendering three bare figures passes every other assertion here.
+    expect(countText("holding")).toContain("holding");
+    expect(countText("tripped")).toContain("tripped");
+    expect(countText("indeterminate")).toContain("indeterminate");
   });
 
   it("gives the indeterminate figure a DASHED rule and the others a solid one", () => {

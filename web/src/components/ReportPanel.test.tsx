@@ -170,6 +170,21 @@ describe("the empty states name why, and never show a blank frame", () => {
     // whether to run the interview or wait for tomorrow.
     expect(screen.getByTestId("report-empty")).toHaveTextContent(NO_REPORT_TEMPLATE);
     expect(NO_REPORT_TEMPLATE).not.toBe(NO_REPORT_YET);
+
+    // Criterion 3's "never a blank frame", asserted on the RENDERED text and
+    // placed FIRST so it is the assertion that dies on an emptied constant —
+    // an assertion that never gets to run is not the one doing the work.
+    expect((screen.getByTestId("report-empty").textContent ?? "").trim().length).toBeGreaterThan(20);
+
+    // 🔴 Pinned as LITERALS, not through the imported constant: an assertion
+    // made through the thing it checks still holds when that thing is emptied
+    // or replaced with gibberish. A distinctive phrase rather than the whole
+    // sentence, so a copy edit to the tail does not fail the test for nothing.
+    expect(NO_REPORT_TEMPLATE).toMatch(/^no report template yet\b/);
+    // …and it names WHY, which is the half of criterion 3 the identity
+    // phrase alone does not carry: the reader has to learn where a template
+    // comes from, not merely that there isn't one.
+    expect(NO_REPORT_TEMPLATE).toMatch(/interview/);
   });
 
   it("🔴 mounts no frame when a report exists but its template does not", () => {
@@ -209,6 +224,17 @@ describe("🔴 unreadable withholds the frame — it is not an empty state", () 
     expect(screen.queryByTestId("report-frame")).toBeNull();
     expect(screen.getByTestId("report-withheld")).toHaveTextContent(REPORT_WITHHELD);
     expect(screen.queryByTestId("report-empty")).toBeNull();
+
+    // Never blank here either — this panel is the one a model can cause at
+    // will, so a wordless box is the worst possible outcome. Asserted first,
+    // for the reason given on the sibling state above.
+    expect((screen.getByTestId("report-withheld").textContent ?? "").trim().length).toBeGreaterThan(20);
+
+    // Literals again, for the reason above. The first phrase is the panel's
+    // identity — the frame is being withheld — and the second is the reason,
+    // which is what stops this reading as "there is nothing here yet".
+    expect(REPORT_WITHHELD).toMatch(/^this report is not being shown\b/);
+    expect(REPORT_WITHHELD).toMatch(/could not read/);
   });
 
   it("🔴 tells {drift: null, unreadable: true} apart from {drift: null, unreadable: false}", () => {
