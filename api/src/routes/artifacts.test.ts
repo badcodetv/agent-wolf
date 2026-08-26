@@ -325,6 +325,19 @@ describe("artifacts_list", () => {
     expect(parsed.session).toBe(SESSION_NAME);
     expect(parsed.artifacts).toBe(2);
 
+    // 🔴 The SHAPE, not only the values. Three fields and no more — pinned
+    // because the prohibitions below are negative assertions and a negative
+    // assertion cannot see a field nobody thought to forbid. A sweep found
+    // this: adding `records` to this line left every "does not contain"
+    // assertion green, because the client's mapper had already dropped the
+    // two strings they name. The next field added here might not be so
+    // harmless, and the point of the rule is that adding one is a DELIBERATE
+    // act rather than a silent one.
+    const ownKeys = Object.keys(parsed).filter(
+      (key) => !["level", "time", "pid", "hostname", "msg"].includes(key),
+    );
+    expect(ownKeys.sort()).toEqual(["artifacts", "id", "session"]);
+
     const allLines = h.lines.join("");
     expect(allLines).not.toContain(UPSTREAM_DOWNLOAD_URL);
     expect(allLines).not.toContain("download_url");
