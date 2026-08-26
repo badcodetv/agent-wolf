@@ -241,7 +241,34 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value as Record<string, unknown>;
 }
 
+/**
+ * "This key is present and not explicitly null" — the § Vocabulary rule (R62)
+ * that an explicit `null` and an omitted key are the same thing.
+ *
+ * ⚠️ **`Object.hasOwn` first, and it is load-bearing.** A bare `record[key]`
+ * walks the prototype chain, and `LABEL_VALUE_PATTERN` — which is what
+ * constrains a metric slug — accepts `[A-Za-z0-9]`, so it is not only
+ * `constructor` that gets through. Measured, 2026-08-26: **seven**
+ * `Object.prototype` keys are slug-legal AND made this function return `true`
+ * for the empty record — `constructor`, `hasOwnProperty`, `isPrototypeOf`,
+ * `propertyIsEnumerable`, `toString`, `valueOf` and `toLocaleString`.
+ *
+ * The live consequence was at W18's `buildSeriesPayload`, the one call site
+ * whose key is chosen by a model: a spec metric with any of those slugs and
+ * NO dataset written took the present branch instead of the missing-dataset
+ * branch and threw `TypeError: Cannot read properties of undefined (reading
+ * 'length')` — falsifying W18's own criterion that a metric whose dataset is
+ * missing "appears with empty arrays and `version: 0`, never absent". Once
+ * the spec is locked, the frame route then 500s on every request for that
+ * hypothesis until a human amendment renames the metric.
+ *
+ * Fixed HERE rather than at the call site: the other call sites all pass
+ * fixed string literals today and are unaffected, but "the key is a literal"
+ * is a property of each caller, not of this function, and the next caller to
+ * pass a model-chosen key would re-open it.
+ */
 export function present(record: Record<string, unknown>, key: string): boolean {
+  if (!Object.hasOwn(record, key)) return false;
   const v = record[key];
   return v !== undefined && v !== null;
 }

@@ -84,6 +84,17 @@ export interface TemplateError {
 /** One `[data-wolf-slot]` region, located in the ORIGINAL bytes. */
 export interface TemplateSlot {
   id: string;
+  /**
+   * The lowercased tag name of the element the slot is declared on.
+   *
+   * Recorded because W19's `composeFrame` re-checks `UNFILLABLE_SLOT_ELEMENTS`
+   * on a `ParsedTemplate` it did not necessarily get from here, and the tag
+   * name cannot be recovered from the byte offsets: scanning backwards from
+   * `contentStart` for the opening `<` finds the wrong one whenever an
+   * attribute value contains a `<`. This module has the name in hand at the
+   * moment the slot is recorded; nobody downstream does.
+   */
+  tagName: string;
   /** Offset of the slot element's first child byte (i.e. just past its start tag). */
   contentStart: number;
   /** Offset just past the slot element's last child byte (i.e. at its end tag). */
@@ -257,6 +268,41 @@ const SKELETON_ELEMENTS = new Set(["html", "head", "body"]);
  * nothing at all, so the mandatory-fallback rule looks through them.
  */
 const INERT_ELEMENTS = new Set(["template", "noscript"]);
+
+/**
+ * Elements a slot may not be DECLARED ON, because their children are text
+ * and not markup.
+ *
+ * ⚠️ **This is a security rule, not a tidiness rule** — W19's Ruling 2,
+ * closing **R150(3)**. `sanitiseSlot`'s output is safe in *element content*
+ * and nowhere else. A slot on `<style>`, `<title>`, `<textarea>`, `<xmp>`,
+ * `<iframe>`, `<noembed>`, `<noframes>` or `<plaintext>` is a breakout site:
+ * filled content either renders as literal characters a human reads as the
+ * day's analysis, or — where a closing tag survives the sanitiser — ends the
+ * element early and re-enters markup. R150(3) built that exploit end to end
+ * and it **failed, but only because of a DOMPurify attribute regex**: the
+ * path is closed today by a library rather than by anything this codebase
+ * wrote, which is precisely the dependency that stops holding on an upgrade.
+ *
+ * Refusing it HERE is the load-bearing half of the ruling: the template is
+ * then never locked, rather than failing at render on a template that can
+ * only be changed by an amendment.
+ *
+ * ⚠️ **`noscript` and `template` are deliberately ABSENT.** The inert rule
+ * one check below already refuses a slot declared on either — measured, not
+ * assumed — so adding them here would change only WHICH message a human
+ * sees, never whether the template is refused. That is no new coverage and
+ * one more list to keep in sync, which is the R148 concern in its milder
+ * form. *(It is not the strong form: this check runs BEFORE the inert rule,
+ * so an entry added here would fire rather than sit dead — mutation-tested,
+ * and the "leaves them to the inert rule" case in `frame.test.ts` pins the
+ * split so neither rule can quietly stop covering them.)* W19's copy of this
+ * set DOES carry both, because that path has no inert rule in front of it.
+ */
+const UNFILLABLE_SLOT_ELEMENTS = new Set([
+  "script", "style", "textarea", "title", "xmp",
+  "iframe", "noembed", "noframes", "plaintext",
+]);
 
 const WHITESPACE = new Set([" ", "\t", "\n", "\f", "\r"]);
 
@@ -1502,6 +1548,18 @@ export function parseTemplate(html: string, maxBytes: number): ParseTemplateResu
       });
       continue;
     }
+    if (UNFILLABLE_SLOT_ELEMENTS.has(token.name)) {
+      errors.push({
+        path: `[${SLOT_ATTRIBUTE}="${slotId}"]`,
+        message:
+          `slot ${JSON.stringify(slotId)} is declared on \`<${token.name}>\`, whose children ` +
+          "are TEXT and not markup: sanitised slot content is only safe inside an ordinary " +
+          "element, so filling this one would render as literal characters or break out of " +
+          "the element entirely",
+        offset: token.start,
+      });
+      continue;
+    }
     if (inert) {
       // Same reasoning as the fallback rule above, applied to slots: a
       // `<template>`'s content is an inert fragment and a `<noscript>`'s
@@ -1568,6 +1626,7 @@ export function parseTemplate(html: string, maxBytes: number): ParseTemplateResu
     seenSlotIds.add(slotId);
     slots.push({
       id: slotId,
+      tagName: token.name,
       contentStart: token.end,
       contentEnd: closingToken ? closingToken.start : token.end,
     });

@@ -300,3 +300,68 @@ describe("timestamps are epoch milliseconds in a field named tMs", () => {
     expect(point?.tMs).toBe(T0);
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* a metric slug that names an Object.prototype key                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * ⚠️ **Added by W19's fix round, by orchestrator ruling.** The bug was in
+ * W3's `present()`, which walked the prototype chain; this is the call site
+ * where it reached a user, because it is the only one whose key is chosen by
+ * a MODEL rather than written as a literal.
+ *
+ * MEASURED before the fix, 2026-08-26: every slug below took the PRESENT
+ * branch with an empty `seriesByMetric` and threw
+ * `TypeError: Cannot read properties of undefined (reading 'length')` inside
+ * `downsampleLTTB` — falsifying this ticket's own criterion that a metric
+ * whose dataset is missing "appears with empty arrays and `version: 0`, never
+ * absent — an absent key makes the locked template's chart code throw, and
+ * the template cannot be fixed without an amendment". The spec is frozen at
+ * go-live, so a hypothesis that got such a slug would have 500ed on every
+ * frame request until a human amendment renamed the metric.
+ *
+ * All seven are legal metric slugs: `LABEL_VALUE_PATTERN` accepts
+ * `[A-Za-z0-9]`, so the surface is not just `constructor`.
+ */
+const PROTOTYPE_SLUGS = [
+  "constructor",
+  "hasOwnProperty",
+  "isPrototypeOf",
+  "propertyIsEnumerable",
+  "toString",
+  "valueOf",
+  "toLocaleString",
+];
+
+describe("a metric slug that collides with an Object.prototype key", () => {
+  it.each(PROTOTYPE_SLUGS)(
+    "series_missing_dataset_named_%s_is_empty_not_a_throw",
+    (slug) => {
+      const s = spec([metric(slug, { unit: "usd" })]);
+      const payload = buildSeriesPayload(s, {}, 100);
+
+      expect(Object.hasOwn(payload, slug)).toBe(true);
+      expect(payload[slug]).toEqual({ unit: "usd", version: 0, points: [] });
+    },
+  );
+
+  it.each(PROTOTYPE_SLUGS)("series_present_dataset_named_%s_is_still_used", (slug) => {
+    // The fix must not turn a metric that DOES have data into an empty one.
+    const s = spec([metric(slug, { unit: "usd" })]);
+    const seriesByMetric: SeriesByMetric = { [slug]: { points: [p(0, 5), p(1, 7)], version: 3 } };
+    const payload = buildSeriesPayload(s, seriesByMetric, 100);
+
+    expect(payload[slug]).toEqual({
+      unit: "usd",
+      version: 3,
+      points: [p(0, 5), p(1, 7)],
+    });
+  });
+
+  it("series_prototype_slug_payload_serialises_and_round_trips", () => {
+    const s = spec([metric("constructor"), metric("toString")]);
+    const payload = buildSeriesPayload(s, {}, 100);
+    expect(JSON.parse(serialiseSeriesPayload(payload))).toEqual(payload);
+  });
+});

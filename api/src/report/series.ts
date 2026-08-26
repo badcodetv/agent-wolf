@@ -181,9 +181,23 @@ export function buildSeriesPayload(
 
   for (const metric of spec.metrics) {
     if (present(seriesByMetric, metric.slug)) {
-      // `present()` has just proven `seriesByMetric[metric.slug]` is neither
-      // `undefined` nor an explicit `null`; the cast reflects that runtime
-      // fact rather than re-deriving it under `noUncheckedIndexedAccess`.
+      // `present()` has proven the slug is an OWN key of `seriesByMetric`
+      // whose value is neither `undefined` nor an explicit `null`; the cast
+      // reflects that runtime fact rather than re-deriving it under
+      // `noUncheckedIndexedAccess`.
+      //
+      // ⚠️ **The own-key half is not decoration, and this comment used to
+      // omit it — which made it false for exactly the keys that broke.**
+      // Until 2026-08-26 `present()` read the property straight off the
+      // record, so it walked the prototype chain: a metric slug of
+      // `constructor`, `hasOwnProperty`, `isPrototypeOf`,
+      // `propertyIsEnumerable`, `toString`, `valueOf` or `toLocaleString`
+      // (all seven are legal under `LABEL_VALUE_PATTERN`) took THIS branch
+      // with no dataset written, and this cast — which typecheck cannot
+      // question — carried an inherited function into `input.points`, where
+      // `downsampleLTTB` threw. The metric slug is chosen by a model and
+      // frozen by the locked spec, so it would have thrown on every request
+      // for that hypothesis, permanently. Fixed in `present()` itself.
       const input = seriesByMetric[metric.slug] as SeriesInput;
       payload[metric.slug] = {
         unit: metric.unit,
