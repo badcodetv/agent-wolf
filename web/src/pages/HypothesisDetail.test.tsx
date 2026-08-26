@@ -7,6 +7,7 @@ import { renderWithProviders, stubFetchRoutes, type FetchRoutes } from "../testU
 const ID = "1a2b3c4d";
 const DETAIL = `GET /api/hypotheses/${ID}`;
 const TOKEN = `GET /api/hypotheses/${ID}/embed-token`;
+const ARTIFACTS = `GET /api/hypotheses/${ID}/artifacts`;
 
 function detailBody(over: Record<string, unknown> = {}) {
   return {
@@ -28,8 +29,26 @@ function detailBody(over: Record<string, unknown> = {}) {
   };
 }
 
+/** W22's report block, with only the field under test varying. */
+function reportBlock(over: Record<string, unknown> = {}) {
+  return {
+    has_template: true,
+    structure_hash: "sha256:abc",
+    stripped_count: 0,
+    updated_at_ms: 1_780_000_000_000,
+    drift: null,
+    unreadable: false,
+    tamper: null,
+    ...over,
+  };
+}
+
 async function renderDetail(routes: FetchRoutes) {
-  const stub = stubFetchRoutes(routes);
+  // W29's panel fetches its own list, so every render of this page makes the
+  // request. Defaulted here rather than in each case — `stubFetchRoutes`
+  // THROWS on an unrouted path, which is what keeps the no-live-network pin
+  // honest — and overridable by any case that cares what comes back.
+  const stub = stubFetchRoutes({ [ARTIFACTS]: { json: { artifacts: [] } }, ...routes });
   renderWithProviders(
     <Routes>
       <Route path="/hypotheses/:id" element={<HypothesisDetail />} />
@@ -64,11 +83,12 @@ describe("HypothesisDetail (W13's frame; W14 fills the left column)", () => {
     expect(screen.getByTestId("orange-chat-frame")).toBeInTheDocument();
   });
 
-  it("takes the Go Live gate from spec_validation and nothing else", async () => {
+  it("takes the Go Live gate from spec_validation and report.has_template, and nothing else", async () => {
     await renderDetail({
       [DETAIL]: {
         json: detailBody({
           spec_validation: { valid: false, errors: [{ path: "horizon_days", message: "required" }] },
+          report: reportBlock({ has_template: true }),
         }),
       },
       [TOKEN]: tokenRoute,
@@ -99,6 +119,143 @@ describe("HypothesisDetail (W13's frame; W14 fills the left column)", () => {
     const alert = screen.getByTestId("severity");
     expect(alert).toHaveAttribute("data-severity", "attacked");
     expect(alert).toHaveTextContent(/cross-hypothesis write/i);
+  });
+});
+
+/**
+ * 🔴 R219 — the Go Live gate's TEMPLATE half, wired on the DETAIL page.
+ *
+ * W24 built `GoLiveButton`'s second prop and proved all four combinations at
+ * COMPONENT level, then wired it on the go-live review screen only:
+ * `HypothesisDetail.tsx` went on rendering the button with `specValidation`
+ * alone, so the detail page's Go Live button was enabled with no template
+ * accepted — while the comment on that very line claimed W24 had added the
+ * other half. W24 was right not to reach into this file; the gap was assigned
+ * here, to the ticket that owns it.
+ *
+ * These are therefore PAGE-LEVEL wiring cases, not a second copy of
+ * `GoLiveButton.test.tsx`: each one dies when the page stops passing
+ * `templateAccepted={detail.report?.has_template}`, and nothing in the
+ * component suite can.
+ *
+ * All four assert the SAME three things — the button's disabled state, whether
+ * the template sentence is on screen, and whether the spec errors are — so the
+ * pair written second cannot quietly carry a thinner list than the first
+ * (R182).
+ */
+describe("🔴 R219 — the detail page passes BOTH halves of the Go Live gate", () => {
+  it("spec valid + template accepted → ENABLED, no blocking sentence of either kind", async () => {
+    await renderDetail({
+      [DETAIL]: {
+        json: detailBody({
+          spec_validation: { valid: true, errors: [] },
+          report: reportBlock({ has_template: true }),
+        }),
+      },
+      [TOKEN]: tokenRoute,
+    });
+    expect(screen.getByTestId("go-live-button")).toBeEnabled();
+    expect(screen.queryByTestId("template-blocked")).toBeNull();
+    expect(screen.queryByTestId("spec-errors")).toBeNull();
+  });
+
+  it("🔴 spec valid + NO template accepted → DISABLED, and the template sentence is on screen", async () => {
+    // THE case. Before R219 was closed this button was enabled and the server
+    // answered the click with W22's 422 — an action offered and then refused.
+    await renderDetail({
+      [DETAIL]: {
+        json: detailBody({
+          spec_validation: { valid: true, errors: [] },
+          report: reportBlock({ has_template: false }),
+        }),
+      },
+      [TOKEN]: tokenRoute,
+    });
+    expect(screen.getByTestId("go-live-button")).toBeDisabled();
+    // The literal sentence, not the exported constant: an assertion that reads
+    // the constant the component renders holds however the constant changes.
+    expect(screen.getByTestId("template-blocked")).toHaveTextContent(
+      "No report template has been accepted yet, so this hypothesis cannot go live: " +
+        "review the candidate and accept it first.",
+    );
+    expect(screen.queryByTestId("spec-errors")).toBeNull();
+  });
+
+  it("spec INVALID + template accepted → DISABLED, spec errors only — the two halves are read independently", async () => {
+    await renderDetail({
+      [DETAIL]: {
+        json: detailBody({
+          spec_validation: { valid: false, errors: [{ path: "horizon_days", message: "required" }] },
+          report: reportBlock({ has_template: true }),
+        }),
+      },
+      [TOKEN]: tokenRoute,
+    });
+    expect(screen.getByTestId("go-live-button")).toBeDisabled();
+    expect(screen.queryByTestId("template-blocked")).toBeNull();
+    expect(screen.getByTestId("spec-errors")).toHaveTextContent("horizon_days: required");
+  });
+
+  it("NO report block at all → ENABLED: silence from the server is not a refusal", async () => {
+    // `report` is optional on the wire (an older server, a fixture, a router
+    // built without the report pair), so `templateAccepted` is `undefined` —
+    // which blocks nothing, exactly as an absent `spec_validation` does. W22's
+    // server-side 422 is the backstop, not a second gate decided here.
+    await renderDetail({
+      [DETAIL]: { json: detailBody({ spec_validation: { valid: true, errors: [] } }) },
+      [TOKEN]: tokenRoute,
+    });
+    expect(screen.getByTestId("go-live-button")).toBeEnabled();
+    expect(screen.queryByTestId("template-blocked")).toBeNull();
+    expect(screen.queryByTestId("spec-errors")).toBeNull();
+  });
+});
+
+// ── W29: the artifact surface ───────────────────────────────────────────
+
+describe("W29 — the artifacts section", () => {
+  it("renders Orange's ArtifactPanel from `…/artifacts`, once, inside its own section", async () => {
+    const stub = await renderDetail({
+      [DETAIL]: { json: detailBody() },
+      [TOKEN]: tokenRoute,
+      [ARTIFACTS]: {
+        json: {
+          artifacts: [
+            {
+              id: "art-1",
+              file_path: "/workspace/report.md",
+              artifact_type: "file",
+              status: "extracted",
+              label: "Report",
+              description: "",
+              mime_type: "text/markdown",
+              file_size_bytes: 4096,
+              source: "tool",
+              is_dir: false,
+            },
+          ],
+        },
+      },
+    });
+    const section = screen.getByTestId("section-artifacts");
+    expect(within(section).getByTestId("artifacts-panel")).toBeInTheDocument();
+    expect(within(section).getByText("report.md")).toBeInTheDocument();
+    expect(stub.countFor(ARTIFACTS)).toBe(1);
+    // § 2: artifact METADATA is `machine`, so there is no tint and no stamp.
+    expect(within(section).queryByTestId("provenance-stamp")).toBeNull();
+  });
+
+  it("renders the explicit empty state for a session that has written nothing", async () => {
+    // R198: the same assertion list as its sibling above — the section, what
+    // is in it, the request count and the absence of a provenance stamp.
+    // Trimming the second half of a pair to "what looks relevant" is how a
+    // case ends up passing for a reason it does not state.
+    const stub = await renderDetail({ [DETAIL]: { json: detailBody() }, [TOKEN]: tokenRoute });
+    const section = screen.getByTestId("section-artifacts");
+    expect(within(section).getByTestId("artifacts-empty")).toBeInTheDocument();
+    expect(within(section).queryByTestId("artifacts-panel")).toBeNull();
+    expect(stub.countFor(ARTIFACTS)).toBe(1);
+    expect(within(section).queryByTestId("provenance-stamp")).toBeNull();
   });
 });
 
@@ -255,6 +412,7 @@ describe("W14's left column", () => {
       "section-scoreboard",
       "section-conditions",
       "section-charts",
+      "section-artifacts",
       "section-proposals",
       "section-timeline",
     ]);

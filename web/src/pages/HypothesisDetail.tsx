@@ -8,7 +8,7 @@
  * │  THE CASE · tripped rows · 3 research notes  │  │  Orange embed  │  │
  * │  REPORT (fixed height, expand)               │  │  sticky, 100vh │  │
  * │  SCOREBOARD · CONDITIONS · CHARTS            │  │                │  │
- * │  PROPOSALS · TIMELINE            ↓ scroll    │  └────────────────┘  │
+ * │  ARTIFACTS · PROPOSALS · TIMELINE  ↓ scroll  │  └────────────────┘  │
  * └──────────────────────────────────────────────┴──────────────────────┘
  *    left: scrolls normally, ~1fr           right: sticky rail, 100vh
  * ```
@@ -31,9 +31,25 @@
  * ## One fetch
  *
  * `GET /api/hypotheses/:id` is read once, here, and handed down as props.
- * There is no second detail fetch and no second detail type — the charts
- * section makes the only other requests on the page, one per metric of the
- * locked spec.
+ * There is no second detail fetch and no second detail type.
+ *
+ * 🔴 **THREE** blocks make requests of their own, and none of them is a second
+ * read of the detail payload:
+ *
+ *  1. the charts section — one series per metric of the locked spec;
+ *  2. (W29) the artifacts panel — `…/artifacts`, a list this page has no other
+ *     way to get, since the detail payload does not carry it;
+ *  3. **the RAIL** — `ChatRail` (`:60` below) renders `OrangeChatFrame`
+ *     (`ChatRail.tsx:89`), which calls `fetchEmbedToken`
+ *     (`OrangeChatFrame.tsx:106`) on every mount. It is easy to miss because
+ *     the rail is a sibling of the scrolling column rather than a block
+ *     inside it — but it is on this page, and every page-level test stubs it
+ *     as `[TOKEN]`.
+ *
+ * *(This paragraph said "two" and named the first two. It said "one" before
+ * that and named only the charts. Both counts were wrong for the same reason:
+ * the writer corrected the sentence without opening what it names. R211's
+ * check applies to a correction as much as to the claim it replaces.)*
  *
  * ## It degrades; it does not throw
  *
@@ -53,6 +69,7 @@ import { Link as RouterLink, useParams } from "react-router";
 import Link from "@mui/material/Link";
 import Severity from "../components/trust/Severity.js";
 import AmendmentList from "../components/AmendmentList.js";
+import ArtifactsPanel from "../components/ArtifactsPanel.js";
 import ChallengedCase from "../components/ChallengedCase.js";
 import ChatRail from "../components/ChatRail.js";
 import ConditionTable from "../components/ConditionTable.js";
@@ -159,10 +176,21 @@ export default function HypothesisDetail() {
               <TamperWarning key={`${tamper.reason}:${tamper.memory_id}`} tamper={tamper} />
             ))}
 
-            {/* The spec half of the Go Live gate (W24 adds the template half). */}
+            {/* 🔴 BOTH halves of the Go Live gate — § 6b: enabled iff the spec
+                validates AND a report template has been accepted, and neither
+                condition alone enables it.
+
+                W24 built the second prop and wired it on the go-live REVIEW
+                screen; this page kept passing `specValidation` alone, so the
+                button here offered an action W22's server-side `422` would
+                refuse (R219). `report` is optional on the wire, and
+                `templateAccepted` is `undefined` when the block is absent —
+                which blocks nothing, exactly as an absent `spec_validation`
+                does. Silence from the server is not a refusal. */}
             <GoLiveButton
               hypothesisId={id}
               specValidation={detail.spec_validation}
+              templateAccepted={detail.report?.has_template}
               onDone={() => void load()}
             />
 
@@ -230,6 +258,14 @@ export default function HypothesisDetail() {
                 spec={detail.spec ?? null}
                 specSource={detail.spec_source}
               />
+            </Section>
+
+            {/* W29. § 2 maps artifact METADATA to `machine`: it is Orange's
+                record of what a container wrote, not model prose — so the
+                panel carries no tint and no stamp. The panel itself is
+                Orange's own `ArtifactPanel`, under WOLF's ThemeProvider. */}
+            <Section title="ARTIFACTS">
+              <ArtifactsPanel hypothesisId={id} />
             </Section>
 
             <Section title="PROPOSALS">

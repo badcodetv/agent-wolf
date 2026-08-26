@@ -135,7 +135,7 @@ describe("createOrangeClient reads no environment variable", () => {
   });
 });
 
-// ── The 23 routes, one dedicated test each (plus a few extra per-route cases) ──
+// ── The 25 routes, one dedicated test each (plus a few extra per-route cases) ──
 
 describe("sessions", () => {
   it("POST /agent/session — sends name and worker, maps {id,status,workflowId}", async () => {
@@ -878,6 +878,138 @@ describe("embed token and google verification", () => {
       details: { variable: "GOOGLE_CLIENT_ID" },
       upstreamBody: "not mounted",
     });
+  });
+});
+
+// ── Artifacts (W29): the twenty-fourth and twenty-fifth routes ─────────────
+
+describe("artifacts", () => {
+  /**
+   * Orange's artifact wire, verbatim from `go/artifacts/artifacts.go`'s struct
+   * tags. 🔴 **camelCase** — this is the one route on this client whose wire is
+   * not snake_case, and a mapper that reads `file_path` here would map every
+   * field to its zero value with nothing failing.
+   */
+  function wireArtifact(over: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: "art-1",
+      sessionId: "sess-99",
+      filePath: "/workspace/report.md",
+      artifactType: "file",
+      status: "extracted",
+      blobPath: "gs://bucket/sess-99/report.md",
+      label: "Report",
+      description: "the daily report",
+      mimeType: "text/markdown",
+      fileSize: 4096,
+      source: "tool",
+      isDir: false,
+      ...over,
+    };
+  }
+
+  it("GET /agent/sessions/by-name/{name}/artifacts — maps the CAMELCASE wire, and drops blobPath", async () => {
+    const c = intercept("GET", 200, [wireArtifact()]);
+    const rows = await client().listSessionArtifacts("hyp-1a2b3c4d");
+    expect(pathnameOf(c)).toBe("/agent/sessions/by-name/hyp-1a2b3c4d/artifacts");
+    // NO query at all. Levelled against the two file-route cases, which both
+    // pin `queryOf`: `listSessions` on this client DOES carry `?user_email=*`,
+    // so "which routes carry a query" is a real distinction here, and this one
+    // deliberately carries none.
+    expect(queryOf(c)).toEqual({});
+    expect(rows).toEqual([
+      {
+        id: "art-1",
+        sessionId: "sess-99",
+        filePath: "/workspace/report.md",
+        artifactType: "file",
+        status: "extracted",
+        label: "Report",
+        description: "the daily report",
+        mimeType: "text/markdown",
+        fileSizeBytes: 4096,
+        source: "tool",
+        isDir: false,
+      },
+    ]);
+    // `fileSize` became `fileSizeBytes`; `blobPath` and `meta` became nothing.
+    expect(Object.keys(rows[0] ?? {})).not.toContain("blobPath");
+    expect(Object.keys(rows[0] ?? {})).not.toContain("fileSize");
+  });
+
+  it("GET …/artifacts — a BARE array, not a {\"artifacts\":[]} envelope", async () => {
+    // Unlike memories, datasets, schedules, deliveries and attention requests,
+    // this route writes the slice directly. A client expecting an envelope
+    // would see zero artifacts on every healthy session.
+    intercept("GET", 200, { artifacts: [wireArtifact()] });
+    await expect(client().listSessionArtifacts("hyp-1a2b3c4d")).rejects.toMatchObject({
+      kind: "invalid",
+    });
+  });
+
+  it("GET …/artifacts — an empty session is an empty array, not an error", async () => {
+    intercept("GET", 200, []);
+    await expect(client().listSessionArtifacts("hyp-1a2b3c4d")).resolves.toEqual([]);
+  });
+
+  it("GET …/artifacts — 404 (no such session) maps to not_found", async () => {
+    intercept("GET", 404, "session not found");
+    await expect(client().listSessionArtifacts("hyp-deadbeef")).rejects.toMatchObject({
+      kind: "not_found",
+      status: 404,
+    });
+  });
+
+  it("GET …/artifacts/file — sends the path as ?path= and returns the bytes with their content type", async () => {
+    // The fake HONOURS `?path=` (R180): the bytes it answers with are derived
+    // from the query it was sent, so a client that dropped the parameter — or
+    // spelt it differently — cannot make this assertion pass.
+    const captured: { path?: string; apiKey?: string; dispatched?: boolean } = {};
+    pool
+      .intercept({ method: "GET", path: (p: string) => { captured.path = p; return true; } })
+      .reply((opts) => {
+        captured.apiKey = headerValue(opts.headers, "x-api-key");
+        captured.dispatched = true;
+        const want = new URL(String(opts.path), BASE_URL).searchParams.get("path") ?? "";
+        return {
+          statusCode: 200,
+          data: `bytes of ${want}` as never,
+          responseOptions: { headers: { "content-type": "text/markdown" } },
+        };
+      });
+    dispatches.push(captured);
+
+    const file = await client().getSessionArtifactFile("hyp-1a2b3c4d", "/workspace/report.md");
+    expect(new URL(captured.path ?? "", BASE_URL).pathname).toBe(
+      "/agent/sessions/by-name/hyp-1a2b3c4d/artifacts/file",
+    );
+    expect(
+      Object.fromEntries(new URL(captured.path ?? "", BASE_URL).searchParams.entries()),
+    ).toEqual({ path: "/workspace/report.md" });
+    expect(file.contentType).toBe("text/markdown");
+    expect(Buffer.from(file.body).toString("utf8")).toBe("bytes of /workspace/report.md");
+  });
+
+  it("GET …/artifacts/file — the path stays in the QUERY; its slashes never become path segments", async () => {
+    // ⚠️ **Proved by URL inspection rather than by behaviour** (R180(4)): this
+    // fake answers the same bytes whatever `?path=` says, so this is a test of
+    // the request we MADE, not of the answer we got. The case above is the
+    // behavioural half — its fake derives the bytes from the query — and the
+    // two are deliberately different instruments on the same parameter.
+    const c = intercept("GET", 200, "x", { "content-type": "text/plain" });
+    await client().getSessionArtifactFile("hyp-1a2b3c4d", "a/b/c.txt");
+    // Two segments after `by-name`, then `artifacts/file`, and nothing else:
+    // folding the file path into the path would address a route Orange does
+    // not serve, and the failure would be a 404 with no explanation.
+    expect(pathnameOf(c)).toBe("/agent/sessions/by-name/hyp-1a2b3c4d/artifacts/file");
+    expect(queryOf(c)).toEqual({ path: "a/b/c.txt" });
+  });
+
+  it("GET …/artifacts/file — 404 (no such artifact) maps to not_found", async () => {
+    intercept("GET", 404, "artifact not found");
+    await expect(
+      client().getSessionArtifactFile("hyp-1a2b3c4d", "/nope.md"),
+    ).rejects.toMatchObject({ kind: "not_found", status: 404 });
   });
 });
 

@@ -142,6 +142,19 @@ describe("createApp", () => {
       expect(res.status).toBe(400);
     });
 
+    // W29's mount, and the same R133 hole: every case in artifacts.test.ts
+    // builds its own bare express() app, so deleting the `app.use` line in
+    // createApp leaves that file entirely green while the browser gets a 404.
+    // Same discriminator, and for the same reason: `requireHypothesisId`
+    // answers 400 `invalid` before any upstream call, so this needs no
+    // MockAgent and touches no network, while an unmounted route falls
+    // through to Express's own 404.
+    it("mounts the artifacts route — a malformed id is 400, not 404", async () => {
+      const { base, cookie } = await signedInBase();
+      const res = await fetch(`${base}/api/hypotheses/NOTANID/artifacts`, { headers: { cookie } });
+      expect(res.status).toBe(400);
+    });
+
     // W22's wiring. `createApp` is the ONLY place `composeReportStats` is
     // handed to the hypotheses router, so this is the only test that can fail
     // when that argument is dropped — every test in hypotheses.test.ts builds

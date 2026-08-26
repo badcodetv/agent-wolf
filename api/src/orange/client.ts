@@ -1,11 +1,16 @@
 /**
  * A typed client for every Orange route Wolf touches — the list is
- * exhaustive and closed at twenty-three routes; see
+ * exhaustive and closed at twenty-five routes; see
  * design/2026-08-20-agent-wolf.md § W2's Scope and § W2b's Scope (which
  * added the twenty-third, `GET /agent/workers/{name}`, by owner ruling R91
  * — the list is closed against casual addition, not against an owner
- * ruling). No other file may add a route here except W15 and W2b, both
+ * ruling). No other file may add a route here except W15, W2b and W29, all
  * strictly serial after W2.
+ *
+ * **W29 added the twenty-fourth and twenty-fifth**, both artifact reads:
+ * `GET /agent/sessions/by-name/{name}/artifacts` and
+ * `…/artifacts/file?path=…`. Wolf's client had NO artifact support at all —
+ * no method, no type — so these are new surface rather than wiring.
  *
  * The client reads no environment variable: it is constructed with
  * `createOrangeClient({ baseUrl, apiKey })` and the caller supplies both
@@ -21,6 +26,8 @@ import { WolfError, type WolfErrorKind } from "../errors.js";
 import {
   toMs,
   toSec,
+  type ArtifactFile,
+  type ArtifactRecord,
   type AttentionRequestRecord,
   type CreateSessionResult,
   type DatasetDownload,
@@ -144,6 +151,32 @@ export interface OrangeClient {
 
   createEmbedToken(session: string, ttlSeconds?: number): Promise<EmbedTokenResult>;
   verifyGoogle(credential: string): Promise<VerifyGoogleResult>;
+
+  /**
+   * `GET /agent/sessions/by-name/{name}/artifacts` (W29) — the METADATA list
+   * for one session, addressed by the name Wolf chose (`hyp-<id>`) rather than
+   * by an Orange uuid Wolf would have to hold.
+   *
+   * A bare JSON array on the wire (`writeJSON(w, list)`), not a
+   * `{"artifacts":[…]}` envelope — unlike memories, datasets and schedules.
+   * A 404 is an absent session (Orange resolves the name first and does not
+   * distinguish "no such session" from "another project's session", by
+   * design), and maps to `not_found` through the default status table.
+   */
+  listSessionArtifacts(sessionName: string): Promise<ArtifactRecord[]>;
+
+  /**
+   * `GET /agent/sessions/by-name/{name}/artifacts/file?path=…` (W29) — the
+   * BYTES of one artifact, addressed by the two things an integrator actually
+   * chose: the session name and the file path.
+   *
+   * The path travels as a QUERY parameter and must not be folded into the URL
+   * path: a stored `filePath` contains slashes, and encoding them into the
+   * path would address a route that does not exist. Orange normalises the
+   * leading slash for us (`slashVariants`), so `report.md` and `/report.md`
+   * find the same row.
+   */
+  getSessionArtifactFile(sessionName: string, filePath: string): Promise<ArtifactFile>;
 }
 
 export interface CreateOrangeClientOptions {
@@ -552,6 +585,28 @@ function mapProjectSettings(raw: unknown, where: string): ProjectSettings {
   };
 }
 
+/**
+ * Orange's artifact row. 🔴 The wire is **camelCase here and nowhere else** on
+ * this client — see `ArtifactRecord`'s doc comment. `blobPath` and `meta` are
+ * read by nothing: the blob path is the store's own object key.
+ */
+function mapArtifactRecord(raw: unknown, where: string): ArtifactRecord {
+  if (!isRecord(raw)) throw invalidShape(where, "expected an object");
+  return {
+    id: strField(raw, "id"),
+    sessionId: strField(raw, "sessionId"),
+    filePath: strField(raw, "filePath"),
+    artifactType: strField(raw, "artifactType"),
+    status: strField(raw, "status"),
+    label: strField(raw, "label"),
+    description: strField(raw, "description"),
+    mimeType: strField(raw, "mimeType"),
+    fileSizeBytes: numField(raw, "fileSize"),
+    source: strField(raw, "source"),
+    isDir: boolField(raw, "isDir"),
+  };
+}
+
 function mapSessionListRow(raw: unknown, where: string): SessionListRow {
   if (!isRecord(raw)) throw invalidShape(where, "expected an object");
   return {
@@ -564,7 +619,7 @@ function mapSessionListRow(raw: unknown, where: string): SessionListRow {
   };
 }
 
-// ── The 23 route methods ───────────────────────────────────────────────
+// ── The 25 route methods ───────────────────────────────────────────────
 
 function createSession(
   ctx: ClientContext,
@@ -932,6 +987,39 @@ function verifyGoogle(ctx: ClientContext, credential: string): Promise<VerifyGoo
   });
 }
 
+function listSessionArtifacts(ctx: ClientContext, sessionName: string): Promise<ArtifactRecord[]> {
+  const where = `GET /agent/sessions/by-name/${sessionName}/artifacts`;
+  return doRequest(ctx, {
+    method: "GET",
+    path: `/agent/sessions/by-name/${encodeURIComponent(sessionName)}/artifacts`,
+  }).then(({ json }) => {
+    // A BARE array, unlike every other list route on this client. Orange
+    // normalises a nil slice to `[]` before writing it, so an empty session is
+    // an empty array and never `null`.
+    if (!Array.isArray(json)) throw invalidShape(where, "expected a bare array");
+    return json.map((row) => mapArtifactRecord(row, where));
+  });
+}
+
+function getSessionArtifactFile(
+  ctx: ClientContext,
+  sessionName: string,
+  filePath: string,
+): Promise<ArtifactFile> {
+  return doRequest(ctx, {
+    method: "GET",
+    path: `/agent/sessions/by-name/${encodeURIComponent(sessionName)}/artifacts/file`,
+    // A QUERY parameter, never a path segment: a stored file path contains
+    // slashes and belongs in `?path=`, which is the only thing this route
+    // reads (a session id in the query is ignored by Orange on purpose).
+    query: { path: filePath },
+    parse: "bytes",
+  }).then(({ bytes, contentType }) => ({
+    contentType: contentType ?? "",
+    body: bytes ?? new ArrayBuffer(0),
+  }));
+}
+
 // ── Construction ───────────────────────────────────────────────────────
 
 export function createOrangeClient(options: CreateOrangeClientOptions): OrangeClient {
@@ -973,5 +1061,9 @@ export function createOrangeClient(options: CreateOrangeClientOptions): OrangeCl
 
     createEmbedToken: (session, ttlSeconds) => createEmbedToken(ctx, session, ttlSeconds),
     verifyGoogle: (credential) => verifyGoogle(ctx, credential),
+
+    listSessionArtifacts: (sessionName) => listSessionArtifacts(ctx, sessionName),
+    getSessionArtifactFile: (sessionName, filePath) =>
+      getSessionArtifactFile(ctx, sessionName, filePath),
   };
 }

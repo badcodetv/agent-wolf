@@ -518,3 +518,41 @@ export interface ReportTemplateAccepted {
   remote_origins: string[];
   script_srcs: string[];
 }
+
+// ── Artifacts (W29) ─────────────────────────────────────────────────────
+
+/**
+ * One row of `GET /api/hypotheses/:id/artifacts` — the metadata Orange holds
+ * for a file the session's container wrote. Mirrors `api/src/routes/artifacts.ts`'s
+ * `ArtifactRow`, which is an ALLOW-LIST: Orange's `blobPath` (the store's own
+ * object key) and its session uuid are dropped on the server and never reach
+ * this type.
+ *
+ * 🔴 There is no `download_url` here and there must never be one. Orange sets
+ * no CORS headers, so a URL on its origin fails in the browser anyway — and
+ * the only credential that opens it is Wolf's project-wide API key.
+ *
+ * `status` and `artifact_type` are strings, not unions: Orange's own sets are
+ * extensible, and a closed union would turn a new value into a parse failure
+ * that costs the whole panel.
+ */
+export interface ArtifactRow {
+  id: string;
+  /** Orange's dedup key with the session; may or may not carry a leading slash. */
+  file_path: string;
+  artifact_type: string;
+  /** `live` | `extracted` | `lost` | `extraction_failed`, and open to more. */
+  status: string;
+  label: string;
+  description: string;
+  mime_type: string;
+  /** Bytes. */
+  file_size_bytes: number;
+  source: string;
+  is_dir: boolean;
+}
+
+/** `GET /api/hypotheses/:id/artifacts`. An empty `artifacts` is the ordinary day-one state. */
+export interface ArtifactsResponse {
+  artifacts: ArtifactRow[];
+}
