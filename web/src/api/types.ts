@@ -167,6 +167,78 @@ export interface HypothesisDetail {
    * plainly meanwhile.
    */
   challenge_reason?: ChallengeReason | string | null;
+  /**
+   * W22's report block. Declared OPTIONAL for the reason `headline` is: an
+   * older server, a fixture, or a router built without the report pair can
+   * hand back a payload without it, and a missing block must cost the panel,
+   * never the page (R140).
+   */
+  report?: ReportBlock | null;
+}
+
+/**
+ * The pinned report block — `design/2026-08-20-agent-wolf.md` § "The detail
+ * route's report block, pinned", mirroring `api/src/routes/hypotheses.ts`.
+ *
+ * 🔴 **The composed report document is NOT here and must never be.** It leaves
+ * the API through `GET /api/hypotheses/:id/report/frame` and nowhere else,
+ * because the bytes are safe only inside the sandboxed frame that route's CSP
+ * header applies to. In a JSON payload the SPA rendered, they would have no
+ * sandbox, no `frame-ancestors` and no opaque origin.
+ */
+export interface ReportBlock {
+  /** A LOCKED, TRUSTED `report-template` exists. The gate for W24's Go Live button. */
+  has_template: boolean;
+  /** W16's structure hash. `null` with no template. */
+  structure_hash: string | null;
+  /**
+   * DOMPurify records — nodes **and** attributes — removed across every filled
+   * slot.
+   *
+   * 🔴 **Three states, not two.** `> 0` is "content was removed"; `0` is "the
+   * sanitiser removed nothing"; **`null` is "nobody counted"** — no producer
+   * was wired into the router, so no pass happened. `null > 0` is `false` in
+   * JavaScript, so a `> 0` test alone renders the third state as the clean
+   * one, which is exactly the "a stripped XSS attempt reported as clean"
+   * failure the field is shaped to prevent.
+   *
+   * 🔴 The SIGN is the contract, the MAGNITUDE is not: it counts library
+   * records, so a DOMPurify upgrade moves the number with nothing being wrong.
+   * Render it magnitude-agnostically and never pin a magnitude in a test.
+   */
+  stripped_count: number | null;
+  /** The newer of the template row's and the report row's creation time, unix **milliseconds**. */
+  updated_at_ms: UnixMs | null;
+  /**
+   * W20's slot drift.
+   *
+   * 🔴 `null` means **no readable `kind=report` slots exist**, and since R185
+   * it means that and nothing else — read `unreadable` beside it.
+   * `{drift: null, unreadable: false}` is "no tick has run yet";
+   * `{drift: null, unreadable: true}` is "a tick ran and its report cannot be
+   * read". `{orphan_slots: [], unfilled_slots: []}` is a third thing again: a
+   * tick that matched the template exactly.
+   */
+  drift: { orphan_slots: string[]; unfilled_slots: string[] } | null;
+  /**
+   * Wolf could not read something it stored: the newest `kind=report` body is
+   * not a flat `{slotId: html}` map, or the locked template no longer
+   * validates. Either way `GET …/report/frame` fails for the same state, so
+   * the panel must not mount the frame.
+   *
+   * 🔴 A **degraded** condition with its own cause sentence, never an empty
+   * state — rendering it as "no tick yet" is what W22's verifier proved can
+   * hide a cross-hypothesis attack.
+   */
+  unreadable: boolean;
+  /**
+   * Anomalies on the template row or the report row. `null` when there are
+   * none.
+   *
+   * 🔴 It SURVIVES `unreadable`, so a block can carry both at once and
+   * neither branch may swallow the other.
+   */
+  tamper: Tamper[] | null;
 }
 
 /** `GET /api/hypotheses/:id/embed-token`. `expires_at_sec` is unix SECONDS. */

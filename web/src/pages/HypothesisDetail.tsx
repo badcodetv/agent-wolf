@@ -22,9 +22,11 @@
  * document from outside it. W13 built `ChatRail` and owns every part of that;
  * this page passes it a bare id and does not re-implement the column.
  *
- * **W23 composes into the TOP of the left column**: `VerdictBand` above the
- * verdict actions, and `ReportPanel` as the child of `ReportFrameHost` where
- * the placeholder sits today. The condition table is unchanged by W23.
+ * **W23 composed into the TOP of the left column** (2026-08-26): `VerdictBand`
+ * above the verdict actions, and `ReportPanel` as the child of
+ * `ReportFrameHost`, which replaced W14's placeholder. The report block's
+ * notices (`ReportDrift`) sit between the provenance stamp and the frame — see
+ * the comment at that seam. The condition table was unchanged by W23.
  *
  * ## One fetch
  *
@@ -56,12 +58,16 @@ import ChatRail from "../components/ChatRail.js";
 import ConditionTable from "../components/ConditionTable.js";
 import GoLiveButton from "../components/GoLiveButton.js";
 import MetricCharts from "../components/MetricCharts.js";
+import Provenance from "../components/trust/Provenance.js";
+import ReportDrift from "../components/ReportDrift.js";
 import ReportFrameHost from "../components/ReportFrameHost.js";
+import ReportPanel from "../components/ReportPanel.js";
 import Scoreboard from "../components/Scoreboard.js";
 import StatusChip from "../components/StatusChip.js";
 import TamperWarning from "../components/TamperWarning.js";
 import Timeline from "../components/Timeline.js";
 import VerdictActions from "../components/VerdictActions.js";
+import VerdictBand from "../components/VerdictBand.js";
 import { ApiError, fetchHypothesis } from "../api/client.js";
 import type { HypothesisDetail as Detail, SpecCondition } from "../api/types.js";
 
@@ -75,10 +81,6 @@ import type { HypothesisDetail as Detail, SpecCondition } from "../api/types.js"
  */
 export const TITLE_TRUNCATED_CAUSE =
   "this title is cut — the memory list returns a 500-byte snippet and line 1 ran past it";
-
-/** The placeholder W23's `ReportPanel` replaces. There is no `report` block on the payload yet (W22). */
-export const REPORT_PLACEHOLDER =
-  "no report panel yet — the report layer lands with W22 and W23";
 
 /** A section heading. Density over air: a label, not a card. */
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -164,7 +166,11 @@ export default function HypothesisDetail() {
               onDone={() => void load()}
             />
 
-            {/* ── W23 composes `VerdictBand` immediately above this ────── */}
+            <VerdictBand
+              status={detail.hypothesis.status}
+              evaluation={detail.evaluation ?? null}
+            />
+
             <VerdictActions
               hypothesisId={id}
               status={detail.hypothesis.status}
@@ -179,15 +185,31 @@ export default function HypothesisDetail() {
               statFor={statFor}
             />
 
-            {/* ── W23's `ReportPanel` becomes this host's child ─────────── */}
-            <ReportFrameHost>
-              <Typography
-                data-testid="report-placeholder"
-                sx={{ fontSize: 13, color: "text.secondary", p: 2 }}
+            {/* The report block, § 5's layout exactly: the model ground and
+                its stamp wrap everything, the notices sit ABOVE the frame so
+                they cannot scroll away from what they are about, and the
+                frame is `ReportFrameHost`'s child inside the fixed box.
+
+                🔴 `kind` is `machine` when no template has been locked: with
+                nothing model-authored on screen, the tinted ground and the
+                stamp would be claiming an author for an empty state.
+                `Provenance kind="machine"` renders no wrapper at all, which
+                is exactly what that case wants. */}
+            <Box data-testid="report-section">
+              <Provenance
+                kind={detail.report?.has_template === true ? "model" : "machine"}
+                // ⚠️ The pinned report block carries NO writer — not
+                // `written_by_worker`, not `written_by_session` — so the stamp
+                // falls back to `UNKNOWN_WRITER` rather than borrowing a
+                // writer from a neighbouring row it cannot vouch for.
+                atMs={detail.report?.updated_at_ms ?? null}
               >
-                {REPORT_PLACEHOLDER}
-              </Typography>
-            </ReportFrameHost>
+                <ReportDrift report={detail.report ?? null} />
+                <ReportFrameHost>
+                  <ReportPanel hypothesisId={id} report={detail.report ?? null} />
+                </ReportFrameHost>
+              </Provenance>
+            </Box>
 
             <Section title="SCOREBOARD">
               <Scoreboard evaluation={detail.evaluation ?? null} />
