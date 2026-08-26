@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { MockAgent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import type { AddressInfo } from "node:net";
 import express from "express";
 import { createApp, createErrorHandler } from "./app.js";
@@ -111,9 +112,14 @@ describe("createApp", () => {
     // rejects it as 400 `invalid` BEFORE any upstream call, so this needs no
     // MockAgent and touches no network. Unmounted, Express falls through to
     // 404. 400-vs-404 is the discriminator.
-    async function signedInBase(): Promise<{ base: string; cookie: string }> {
+    async function signedInBase(
+      env: NodeJS.ProcessEnv = {},
+    ): Promise<{ base: string; cookie: string }> {
       const base = await listen(
-        createApp(createLogger({ logLevel: "silent" }), testConfig({ WOLF_TEST_LOGIN: "kai@badcode.dev:test-password" })),
+        createApp(
+          createLogger({ logLevel: "silent" }),
+          testConfig({ WOLF_TEST_LOGIN: "kai@badcode.dev:test-password", ...env }),
+        ),
       );
       const res = await fetch(`${base}/api/auth/dev-login`, {
         method: "POST",
@@ -134,6 +140,113 @@ describe("createApp", () => {
       const { base, cookie } = await signedInBase();
       const res = await fetch(`${base}/api/hypotheses/NOTANID/series/brent_crude`, { headers: { cookie } });
       expect(res.status).toBe(400);
+    });
+
+    // W22's wiring. `createApp` is the ONLY place `composeReportStats` is
+    // handed to the hypotheses router, so this is the only test that can fail
+    // when that argument is dropped — every test in hypotheses.test.ts builds
+    // its own bare express() app and injects its own (or none), which is
+    // exactly the R133 hole W11's two cases above were added to close.
+    //
+    // The discriminator is `stripped_count`: a NUMBER only when a producer
+    // was wired in. Unwired the block is still served with
+    // `stripped_count: null`, so asserting the block's presence would prove
+    // nothing at all.
+    it("wires composeReportStats into the detail route — stripped_count is a number, not null", async () => {
+      const ID = "1a1a1a1a";
+      const TEMPLATE =
+        '<section><div data-wolf-fallback>no chart</div>' +
+        '<div data-wolf-slot="headline"></div></section>';
+      // ⚠️ An ANSWER-ONLY stub, deliberately: it dispatches on path and on the
+      // selector's `kind=` term and ignores `limit`, `latest_per` and
+      // `include_retracted`. That is honest here because the assertion is
+      // about ONE thing — whether a producer was wired in — and not about
+      // query semantics, which `routes/hypotheses.test.ts` grades against a
+      // stub that does honour those three (R180).
+      const agent = new MockAgent();
+      agent.disableNetConnect();
+      agent.enableNetConnect((host) => host.startsWith("127.0.0.1") || host.startsWith("localhost"));
+      const previous = getGlobalDispatcher();
+      setGlobalDispatcher(agent);
+      try {
+        const pool = agent.get("http://orange.test:4100");
+        pool
+          .intercept({ method: "GET", path: () => true })
+          .reply((opts) => {
+            const url = new URL(String(opts.path), "http://orange.test:4100");
+            const selector = url.searchParams.get("selector") ?? "";
+            const kind = selector
+              .split(",")
+              .find((term) => term.startsWith("kind="))
+              ?.slice("kind=".length);
+            const memory = (
+              id: string,
+              labels: Record<string, string>,
+              snippet: string,
+            ): Record<string, unknown> => ({
+              id,
+              labels,
+              snippet,
+              score: 0,
+              created_by_worker: "",
+              created_by_session: "",
+              created_at: 1787334047000,
+            });
+            let body: unknown = { memories: [] };
+            if (url.pathname === "/agent/sessions") {
+              body = [
+                {
+                  id: "sess-hyp-1a1a1a1a",
+                  name: `hyp-${ID}`,
+                  worker: "interviewer",
+                  status: "running",
+                  created_at: 1787334311,
+                  updated_at: 1787334313,
+                },
+              ];
+            } else if (url.pathname === `/agent/memories/tmpl-1`) {
+              body = {
+                id: "tmpl-1",
+                labels: { kind: "report-template", name: ID, status: "locked" },
+                content: `9f2c1d0e\n${TEMPLATE}`,
+                created_by_worker: "",
+                created_by_session: "",
+                created_at: 1787334040000,
+              };
+            } else if (url.pathname === "/agent/memories" && kind === "hypothesis") {
+              body = {
+                memories: [
+                  memory("state-1", { kind: "hypothesis", name: ID, status: "draft" }, "Copper\nthesis"),
+                ],
+              };
+            } else if (url.pathname === "/agent/memories" && kind === "report-template") {
+              body = {
+                memories: [
+                  memory("tmpl-1", { kind: "report-template", name: ID, status: "locked" }, "9f2c1d0e"),
+                ],
+              };
+            }
+            return {
+              statusCode: 200,
+              data: JSON.stringify(body) as never,
+              responseOptions: { headers: { "content-type": "application/json" } },
+            };
+          })
+          .persist();
+
+        const { base, cookie } = await signedInBase({ ORANGE_BASE_URL: "http://orange.test:4100" });
+        const res = await fetch(`${base}/api/hypotheses/${ID}`, { headers: { cookie } });
+        expect(res.status).toBe(200);
+        const detail = (await res.json()) as { report: { has_template: boolean; stripped_count: unknown } };
+        expect(detail.report.has_template).toBe(true);
+        // A template with no filled slots removes nothing, so the number is 0
+        // — and 0 is only reachable through a wired producer. `null` here is
+        // the unwired app.
+        expect(typeof detail.report.stripped_count).toBe("number");
+      } finally {
+        setGlobalDispatcher(previous);
+        await agent.close();
+      }
     });
 
     it("refuses to build at all when WOLF_MCP_TOKEN is unset, naming the variable", () => {

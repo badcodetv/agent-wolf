@@ -34,7 +34,15 @@ import type {
 import { requireSignedIn, signedInUser } from "../auth/session.js";
 import { loadConfig, type WolfConfig } from "../config.js";
 import { validateSpec, type SpecError } from "../hypothesis/spec.js";
-import { createProvisioner, researcherWorkerFor, type Provisioner } from "../hypothesis/provision.js";
+import {
+  createProvisioner,
+  researcherWorkerFor,
+  specRejection,
+  type Provisioner,
+} from "../hypothesis/provision.js";
+import { detectDrift, type DriftResult } from "../report/drift.js";
+import { parseTemplate } from "../report/template.js";
+import type { ReportComposeStats } from "./report.js";
 import type { HypothesisStatus } from "../hypothesis/lifecycle.js";
 import {
   INTERVIEWER_WORKER,
@@ -45,6 +53,8 @@ import {
   type EvaluationSummary,
   type HypothesisRecord,
   type HypothesisStore,
+  type ReportRead,
+  type ReportSummary,
   type SessionLookup,
   type Tamper,
 } from "../hypothesis/store.js";
@@ -99,6 +109,16 @@ export interface BoardRow {
   support_score: number | null;
   conditions_summary: ConditionsSummary | null;
   updated_at_ms: UnixMs | null;
+  /**
+   * Line 1 of this hypothesis's newest own `kind=report` (W22).
+   *
+   * 🔴 `null` means **no report yet**; `""` means **the report said nothing on
+   * line 1**. They are different facts and the board renders them differently
+   * — `headline === null` on a `live` hypothesis is the cheap board-level
+   * proxy for "the report layer is not working" (UI design § 4 point 4) —
+   * so neither is ever defaulted into the other.
+   */
+  headline: string | null;
   tamper?: Tamper[];
 }
 
@@ -145,6 +165,50 @@ export interface HypothesisAtoms {
   datasets: string[];
 }
 
+/**
+ * The detail payload's report block, pinned byte for byte by
+ * design/2026-08-20-agent-wolf.md § "The detail route's report block, pinned".
+ *
+ * `has_template` is first because it is the GATE: W24's Go Live button is
+ * enabled iff `spec_validation.valid && report.has_template`, so this one
+ * payload carries both halves, and `POST …/go-live` enforces the same two
+ * server-side.
+ */
+export interface ReportBlock {
+  /** A LOCKED, TRUSTED `report-template` exists. A forged one is not one. */
+  has_template: boolean;
+  /** W16's structure hash — line 1 of the template memory. `null` with no template. */
+  structure_hash: string | null;
+  /**
+   * DOMPurify records (nodes **and** attributes) removed across every filled
+   * slot, from W21's `composeReportStats` — the ONE producer in this process,
+   * bound to the frame cache, so this number describes the document the frame
+   * route actually serves.
+   *
+   * 🔴 The SIGN is the contract, never the magnitude: a library upgrade moves
+   * it without anything being wrong. And `null` is NOT `0` — `0` means "the
+   * sanitiser removed nothing", `null` means "no producer was wired into this
+   * router, so nobody has counted". W23 must not render the second as the
+   * first.
+   */
+  stripped_count: number | null;
+  /**
+   * The newest of the template row's and the report row's `created_at`, unix
+   * MILLISECONDS — the memory table's unit, not the `agent_*` tables' seconds.
+   * `null` when neither row exists.
+   */
+  updated_at_ms: UnixMs | null;
+  /**
+   * W20's slot drift. 🔴 `null` means **no `kind=report` memory exists at
+   * all** — the empty state, which is not drift and must stay distinguishable
+   * from `{orphan_slots: [], unfilled_slots: []}`, a tick that matched the
+   * template exactly.
+   */
+  drift: { orphan_slots: string[]; unfilled_slots: string[] } | null;
+  /** Anomalies on the template row or the report row. `null` when there are none. */
+  tamper: Tamper[] | null;
+}
+
 export interface HypothesisDetail {
   hypothesis: HypothesisDetailRow;
   spec: unknown | null;
@@ -156,6 +220,7 @@ export interface HypothesisDetail {
   verdict: { id: string; status: string | null; content: string; created_at_ms: UnixMs } | null;
   attention_requests: AttentionRequestRow[];
   atoms: HypothesisAtoms;
+  report: ReportBlock;
 }
 
 // ── Options ─────────────────────────────────────────────────────────────
@@ -184,6 +249,33 @@ export interface CreateHypothesesRouterOptions {
    */
   config?: WolfConfig;
   provisioner?: Provisioner;
+  /**
+   * W21's `composeReportStats`, from `createReportRouter`'s returned pair.
+   *
+   * 🔴 **The ONE producer of `stripped_count`.** The number can only come out
+   * of `composeFrame`, which lives behind the report router's frame cache, and
+   * that accessor is bound to the SAME instance — so calling it is what makes
+   * this payload's number describe the document `GET …/report/frame` actually
+   * serves. Running a second `sanitiseSlot` pass here would produce a second
+   * number that can disagree with the served document, and the two agree
+   * almost always, which is what would make it dangerous rather than obvious
+   * (§ "HTTP routes added", note 2).
+   *
+   * OPTIONAL for the reason `provisioner` is: a caller may build this router
+   * with three options. When it is absent nothing is guessed —
+   * `report.stripped_count` is `null`, which is a different answer from `0`
+   * and says "nobody counted" rather than "nothing was removed". Every other
+   * field of the block is served either way.
+   *
+   * It deliberately does NOT hand back the composed `html`, and this router
+   * must never ask for it: the document is safe only inside the sandboxed
+   * frame the CSP header applies to, and a JSON payload the SPA renders has
+   * no sandbox, no `frame-ancestors` and no opaque origin (ruled 2026-08-26).
+   */
+  composeReportStats?: (
+    id: string,
+    options?: { sessions?: SessionLookup },
+  ) => Promise<ReportComposeStats | null>;
 }
 
 const createBody = z.object({
@@ -318,8 +410,14 @@ function classifyCreateFailure(err: unknown, sessionName: string): never {
  * one-element lookup is exactly right here — and it costs no second index
  * read.
  */
-function lookupFor(id: string): SessionLookup {
-  return new Set([id]);
+function lookupFor(record: { id: string; sessionId: string | null }): SessionLookup {
+  // A `Map`, not a `Set`, because W22's cross-hypothesis rule has a SECOND
+  // clause — "written by this hypothesis's own `hyp-<id>` session" — and
+  // `sessionIdFrom` can only answer it from a lookup that carries the id. The
+  // record already holds it, so this costs no second index read; a `Set` here
+  // would silently drop the clause and let an interview-session report read as
+  // somebody else's.
+  return new Map([[record.id, record.sessionId]]);
 }
 
 function firstLine(text: string): string {
@@ -364,6 +462,24 @@ function evidenceRow(row: MemorySearchResultRow): EvidenceRow {
   };
 }
 
+/**
+ * One tamper array out of several, de-duplicated on `reason` + `memory_id` —
+ * the same identity `hypothesis/store.ts` uses, because the board's state read
+ * and its report read can both witness the same hostile retraction. `null`
+ * when there is nothing to report, so an absent array never renders as an
+ * empty warning.
+ */
+function mergeTamper(...groups: (readonly Tamper[] | undefined)[]): Tamper[] | null {
+  const out: Tamper[] = [];
+  for (const group of groups) {
+    for (const t of group ?? []) {
+      if (out.some((x) => x.reason === t.reason && x.memory_id === t.memory_id)) continue;
+      out.push(t);
+    }
+  }
+  return out.length === 0 ? null : out;
+}
+
 function datasetNamesFrom(id: string, spec: unknown): string[] {
   if (spec === null || typeof spec !== "object") return [];
   const metrics = (spec as { metrics?: unknown }).metrics;
@@ -403,13 +519,21 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
    */
   let built: Provisioner | undefined = options.provisioner;
   function provisioner(): Provisioner {
-    built ??= createProvisioner({
-      client,
-      store,
-      logger,
-      config: options.config ?? loadConfig(),
-    });
+    built ??= createProvisioner({ client, store, logger, config: wolfConfig() });
     return built;
+  }
+
+  /**
+   * Resolved on FIRST USE and memoised, for the same reason the provisioner is
+   * built lazily: a caller may construct this router with three options, and
+   * reading the environment eagerly would make every existing route test
+   * depend on the ambient one. W22 needs it for `WOLF_REPORT_MAX_BYTES`, which
+   * is a PARAMETER to the template parser and never read inside it.
+   */
+  let resolvedConfig: WolfConfig | undefined = options.config;
+  function wolfConfig(): WolfConfig {
+    resolvedConfig ??= loadConfig();
+    return resolvedConfig;
   }
 
   function idParam(req: Request): string | undefined {
@@ -497,14 +621,32 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
       // evaluations. Both are O(1) in the hypothesis count — twelve
       // hypotheses cost the same two requests as one.
       const records: HypothesisRecord[] = await store.readBoard();
-      const summaries = await store.readEvaluationSummaries(
-        new Set(records.map((record) => record.id)),
+      // Every hypothesis's `hyp-<id>` session id, which `readBoard` already
+      // resolved. It is both the trust rule's third clause (`has`) and the
+      // cross-hypothesis rule's second (`get`), and building it here is what
+      // keeps the two follow-up reads from walking the session list again.
+      const sessions: SessionLookup = new Map(
+        records.map((record) => [record.id, record.sessionId]),
       );
-      res.status(200).json(records.map((record) => boardRow(record, summaries.get(record.id))));
+      const [summaries, reports] = await Promise.all([
+        store.readEvaluationSummaries(sessions),
+        store.readReportSummaries(sessions),
+      ]);
+      res
+        .status(200)
+        .json(
+          records.map((record) =>
+            boardRow(record, summaries.get(record.id), reports.get(record.id)),
+          ),
+        );
     })().catch(next);
   });
 
-  function boardRow(record: HypothesisRecord, summary: EvaluationSummary | undefined): BoardRow {
+  function boardRow(
+    record: HypothesisRecord,
+    summary: EvaluationSummary | undefined,
+    report: ReportSummary | undefined,
+  ): BoardRow {
     const row: BoardRow = {
       id: record.id,
       // A hypothesis in the session index whose state row is missing (or
@@ -525,8 +667,18 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
               evaluated_at_ms: summary.evaluatedAtMs,
             },
       updated_at_ms: record.updatedAtMs,
+      // No entry at all means no `kind=report` row for this hypothesis, which
+      // is `null`. A row whose line 1 was blank comes back as `""` and stays
+      // `""`.
+      headline: report?.headline ?? null,
     };
-    if (record.tamper !== undefined) row.tamper = record.tamper;
+    // The report read's anomalies join the state row's on the SAME array: a
+    // cross-hypothesis report write puts the hypothesis in NEEDS A HUMAN,
+    // which is where an attack on what it says belongs, and the detail page
+    // reports the identical anomaly in `report.tamper`. (Unlike the evaluation
+    // read, which only logs — its anomalies have no detail-page counterpart.)
+    const tamper = mergeTamper(record.tamper, report?.tamper);
+    if (tamper !== null) row.tamper = tamper;
     return row;
   }
 
@@ -576,7 +728,7 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
       // 404s when the id is not in the session index — the authoritative
       // index of hypotheses is the SESSION LIST, never memory.
       const record = await store.readHypothesis(id);
-      const sessions = lookupFor(id);
+      const sessions = lookupFor(record);
 
       const [specRows, candidateRows, evaluationRows, verdictRows, noteRows, amendmentRows] =
         await Promise.all([
@@ -637,6 +789,7 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
         amendments: amendmentRows.map(evidenceRow),
         verdict,
         attention_requests: await attentionRequestsFor(id, record.sessionId),
+        report: await reportBlockFor(id, sessions),
         atoms: {
           session_id: record.sessionId,
           worker: researcherWorkerFor(id),
@@ -661,6 +814,7 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
     void (async () => {
       const user = signedInUser(req);
       const id = requireHypothesisId(idParam(req));
+      await requireLockedTemplate(id);
       const result = await provisioner().goLive({ id, email: user.email });
       res.status(200).json(result);
     })().catch(next);
@@ -710,6 +864,148 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
       res.status(200).json(result);
     })().catch(next);
   });
+
+  /**
+   * The pinned `report` block (§ "The detail route's report block, pinned").
+   *
+   * It goes through W15's `store.readTemplate` / `store.readLatestReport` and
+   * nowhere else, so the trust rule, the retraction rule and W22's
+   * cross-hypothesis rule have exactly ONE implementation each — and so this
+   * page and W21's frame cannot disagree about which template is locked or
+   * which report is this hypothesis's own.
+   */
+  async function reportBlockFor(id: string, sessions: SessionLookup): Promise<ReportBlock> {
+    const [templateRead, reportRead] = await Promise.all([
+      store.readTemplate(id, { sessions }),
+      readLatestReportOrDegrade(id, sessions),
+    ]);
+    const template = templateRead.template;
+    const report = reportRead.report;
+
+    // Slot drift needs the template's DECLARED slot ids, which only the
+    // parser knows. `parseTemplate` never throws for bad template input — it
+    // answers `{valid: false, errors}` — so a stored template that no longer
+    // validates cannot take this page down.
+    let declared: string[] = [];
+    if (template !== null) {
+      const parsed = parseTemplate(template.html, wolfConfig().reportMaxBytes);
+      if (parsed.valid) {
+        declared = parsed.template.slotIds;
+      } else {
+        // Wolf's own stored state is unusable: it passed this same parser
+        // before it was written, so a validator change or a shrunken budget
+        // is the only way here. Declaring NO slots makes every filled slot an
+        // orphan, which surfaces loudly on the page instead of hiding — and
+        // the frame route answers `internal` for the same state.
+        logger.error(
+          { id, memory_id: template.memoryId, errors: parsed.errors },
+          "detail report block: the stored template no longer validates",
+        );
+      }
+    }
+    const drift: DriftResult = detectDrift(declared, report?.slots ?? null);
+
+    // The newer of the two, picked rather than `Math.max`-ed: `UnixMs` is a
+    // BRANDED type and `Math.max` would launder the unit away.
+    const updatedAtMs: UnixMs | null =
+      report !== null && template !== null
+        ? report.createdAtMs >= template.createdAtMs
+          ? report.createdAtMs
+          : template.createdAtMs
+        : (report?.createdAtMs ?? template?.createdAtMs ?? null);
+
+    return {
+      has_template: template !== null,
+      structure_hash: template?.structureHash ?? null,
+      stripped_count: await strippedCountFor(id, sessions, template !== null),
+      updated_at_ms: updatedAtMs,
+      drift:
+        drift === null
+          ? null
+          : { orphan_slots: drift.orphanSlotIds, unfilled_slots: drift.unfilledSlotIds },
+      tamper: mergeTamper(templateRead.tamper, reportRead.tamper),
+    };
+  }
+
+  /**
+   * `readLatestReport` THROWS `invalid` when a report's body is not a flat
+   * `{slotId: html}` map, and that is right for W21's frame — but a model
+   * inside a container is what writes that body, so letting it reach here
+   * would hand untrusted content a way to take down the page carrying the
+   * VERDICT BUTTONS. It is logged and degraded to "no readable report"
+   * instead; the frame route still reports the real failure.
+   */
+  async function readLatestReportOrDegrade(
+    id: string,
+    sessions: SessionLookup,
+  ): Promise<ReportRead> {
+    try {
+      return await store.readLatestReport(id, { sessions });
+    } catch (err) {
+      if (err instanceof WolfError && err.kind === "invalid") {
+        logger.error({ id, err }, "detail report block: the newest report body does not parse");
+        return { report: null, tamper: [] };
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * The ONE `stripped_count` in this process, or `null` — never a second
+   * sanitiser pass and never a guessed zero. Composing can fail on the same
+   * untrusted content the guard above is about, so a failure costs the count
+   * and nothing else.
+   */
+  async function strippedCountFor(
+    id: string,
+    sessions: SessionLookup,
+    hasTemplate: boolean,
+  ): Promise<number | null> {
+    if (options.composeReportStats === undefined || !hasTemplate) return null;
+    try {
+      const stats = await options.composeReportStats(id, { sessions });
+      return stats?.strippedCount ?? null;
+    } catch (err) {
+      logger.error({ id, err }, "detail report block: composing the frame stats failed");
+      return null;
+    }
+  }
+
+  /**
+   * R45's server-side half, and the second gate on go-live (W22).
+   *
+   * W24's Go Live button is enabled iff `spec_validation.valid &&
+   * report.has_template`, and `GET /api/hypotheses/:id` now carries both. This
+   * is the backstop for the race — and for anything that is not the button.
+   * **W9 is not reopened**: the spec half stays entirely in the provisioner,
+   * this half stays entirely here, and there is one 422 body shape between
+   * them (`specRejection`).
+   *
+   * ⚠️ Ordering: it runs BEFORE the provisioner, so a hypothesis that is both
+   * template-less and not a draft answers 422 rather than 409. That is
+   * deliberate — this is the GATE, evaluated exactly where the button
+   * evaluates it — and both answers are refusals that write nothing.
+   *
+   * It is the SAME read the detail block reports, so a `report-template`
+   * forged from inside a container does not open the gate either: it fails
+   * `isTrusted` and `readTemplate` hands back `null`.
+   */
+  async function requireLockedTemplate(id: string): Promise<void> {
+    // 404s when the id is not in the session index, exactly as every other
+    // per-hypothesis read does.
+    const { template } = await store.readTemplate(id);
+    if (template !== null) return;
+    throw specRejection(
+      [
+        {
+          path: "report.has_template",
+          message:
+            "no report template has been locked for this hypothesis — author one before going live",
+        },
+      ],
+      `hypothesis ${id} cannot go live: no report template is locked`,
+    );
+  }
 
   function detailRow(record: HypothesisRecord): HypothesisDetailRow {
     const row: HypothesisDetailRow = {

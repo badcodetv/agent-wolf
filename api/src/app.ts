@@ -204,7 +204,31 @@ export function createApp(logger: Logger, config: WolfConfig): Express {
   // never even parse a cookie.
   app.use(cookieParser(config.sessionSecret));
   app.use(createAuthRouter({ client, config, logger }));
-  app.use(createHypothesesRouter({ store, client, logger }));
+
+  // ── W21's report router, CONSTRUCTED here and MOUNTED below ───────────
+  //
+  // 🔴 The construction is hoisted above the hypotheses router and the mount
+  // is NOT: they are two separate decisions and only the first one moved (W22).
+  // `report.composeReportStats` is the ONE producer of `stripped_count`, bound
+  // to this instance's frame cache, and `GET /api/hypotheses/:id` must carry
+  // that field — so the hypotheses router cannot be built before the report
+  // router exists. Mount order is a different question, answered where the
+  // `app.use` still is; moving that as well would change route precedence
+  // nobody sanctioned.
+  const report = createReportRouter({ store, client, config, logger });
+
+  // `config` is passed now that this file has it in hand: the router's own
+  // fallback (`loadConfig()` on first use) exists for callers that do not, and
+  // W22 needs `reportMaxBytes` to parse a stored template for slot drift.
+  app.use(
+    createHypothesesRouter({
+      store,
+      client,
+      logger,
+      config,
+      composeReportStats: report.composeReportStats,
+    }),
+  );
 
   // ── W11: the two read-only routes the BROWSER needs ───────────────────
   //
@@ -225,18 +249,10 @@ export function createApp(logger: Logger, config: WolfConfig): Express {
   // `requireSignedIn` itself (R79) and holds the frame cache, so there is one
   // instance of it for the app — a second would be a second cache.
   //
-  // 🔴 **`report.composeReportStats` is the ONE producer of
-  // `stripped_count`** and it is bound to this instance's cache.
-  // `GET /api/hypotheses/:id` must carry that field (§ "The detail route's
-  // report block, pinned"), and the only alternatives are a second sanitiser
-  // pass — which § "HTTP routes added" note 2 forbids, and whose number can
-  // disagree with the document actually served — or omitting a mandatory
-  // field. **W22 wires it: add `composeReportStats` to
-  // `CreateHypothesesRouterOptions` and pass `report.composeReportStats`
-  // below.** That is one line here and one in `routes/hypotheses.ts`; it needs
-  // W22 added to this file's row in § "Parallelism and file ownership", which
-  // lists W1, W7, W8, W11, W21 and W29 and not W22 (W21's hand-off).
-  const report = createReportRouter({ store, client, config, logger });
+  // 🔴 It is CONSTRUCTED above, with the hypotheses router, and mounted here.
+  // Do not move this line up to join it: construction order exists so
+  // `composeReportStats` can be passed into the hypotheses router; mount
+  // order decides route precedence and nothing has sanctioned changing it.
   app.use(report.router);
 
   app.use(createErrorHandler(logger));
