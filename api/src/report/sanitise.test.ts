@@ -360,17 +360,18 @@ const EVENT_HANDLER_ATTRS = [
  * THE OUTPUT STRING — "different from the input" is satisfied by `""`, which
  * is exactly the trap R120(1) sprang.
  *
- * `parserAbsorbed` marks the rows whose element the HTML parser hoists into
- * `<head>` before DOMPurify walks anything, so nothing is recorded as
- * removed and `strippedCount` is 0. See `countStripped`'s KNOWN GAP note.
- * Behind the prose marker the same rows land in `<body>` and ARE counted,
- * which is why every row is also run wrapped.
+ * `headOnlyElement` marks the rows whose element an HTML parser would hoist
+ * into `<head>` if the content were parsed in document context. Before the
+ * profile carried `FORCE_BODY: true` those rows never reached the sanitiser
+ * at all and `strippedCount` reported 0 for them (W17's F2, ruled and closed
+ * 2026-08-26, R147). They are still marked, because they are exactly the
+ * rows that regress if `FORCE_BODY` is ever removed.
  */
 interface Vector {
   name: string;
   input: string;
   forbidden: string[];
-  parserAbsorbed?: true;
+  headOnlyElement?: true;
 }
 
 const VECTORS: Vector[] = [
@@ -378,7 +379,7 @@ const VECTORS: Vector[] = [
     name: "<script>",
     input: `<script>alert(1)</script>`,
     forbidden: ["<script", "alert(1)"],
-    parserAbsorbed: true,
+    headOnlyElement: true,
   },
   {
     name: "<script> with prose either side",
@@ -409,13 +410,13 @@ const VECTORS: Vector[] = [
     name: "<link>",
     input: `<link rel="stylesheet" href="https://${EVIL}/x.css">`,
     forbidden: ["<link", "href", EVIL],
-    parserAbsorbed: true,
+    headOnlyElement: true,
   },
   {
     name: "<style>",
     input: `<style>body{background:url(https://${EVIL}/x)}</style>`,
     forbidden: ["<style", EVIL, "background"],
-    parserAbsorbed: true,
+    headOnlyElement: true,
   },
   {
     // ⚠️ Nothing here may end with the CSS @import keyword sitting directly
@@ -436,13 +437,13 @@ const VECTORS: Vector[] = [
     name: "<base>",
     input: `<base href="https://${EVIL}/">`,
     forbidden: ["<base", "href", EVIL],
-    parserAbsorbed: true,
+    headOnlyElement: true,
   },
   {
     name: "<meta http-equiv=refresh>",
     input: `<meta http-equiv="refresh" content="0;url=https://${EVIL}/x">`,
     forbidden: ["<meta", "http-equiv", EVIL],
-    parserAbsorbed: true,
+    headOnlyElement: true,
   },
   {
     name: "srcdoc",
@@ -503,7 +504,7 @@ const VECTORS: Vector[] = [
     name: "<title>",
     input: `<title>a title</title>`,
     forbidden: ["<title", "a title"],
-    parserAbsorbed: true,
+    headOnlyElement: true,
   },
   {
     name: "id attribute (decoy for the template's getElementById)",
@@ -599,21 +600,42 @@ describe("the vector table", () => {
     expectAbsent(sanitiseSlot(`<img src=x onerror=alert(1)>`).html, ["onerror", "alert(1)", "img"]);
   });
 
-  // 🔴 The KNOWN GAP, pinned so it is visible rather than silent: a slot
-  // whose content BEGINS with a <head>-only element has that element
-  // absorbed by the parser before DOMPurify walks anything, so the output is
-  // safe but `strippedCount` reports 0. DOMPurify's FORCE_BODY closes it in
-  // one line; that key is not in the pinned profile and adding it is an
-  // owner decision. If this test ever goes red because the count became
-  // non-zero, the gap has been closed and this test should be deleted.
-  it.each(VECTORS.filter((vector) => vector.parserAbsorbed === true).map((v) => [v.name, v] as const))(
-    "KNOWN GAP — %s alone is removed by the PARSER, so strippedCount understates it as 0",
-    (_name, vector) => {
-      const bare = sanitiseSlot(vector.input);
-      expect(bare.html).toBe("");
-      expect(bare.strippedCount).toBe(0);
-      // Behind any body content the same vector is counted properly.
-      expect(sanitiseSlot(MARKER + vector.input).strippedCount).toBeGreaterThan(0);
+  // 🔴 THE FORCE_BODY CRITERION (R147). Each of these elements is one an
+  // HTML parser hoists into <head> in document context. Before
+  // `FORCE_BODY: true` each was discarded by the PARSER, never reached the
+  // sanitiser, and reported `strippedCount: 0` — so the single worst slot in
+  // the product, `<script>alert(1)</script>` alone, rendered as an empty
+  // region with NO degraded-severity notice, because W23 gates that notice
+  // on `stripped_count > 0`. This is the test that fails if `FORCE_BODY` is
+  // ever removed from the profile.
+  it.each(
+    VECTORS.filter((vector) => vector.headOnlyElement === true).map((v) => [v.name, v] as const),
+  )("counts %s even when it is the FIRST thing in a slot (FORCE_BODY)", (_name, vector) => {
+    const bare = sanitiseSlot(vector.input);
+    expect(bare.html).toBe("");
+    // The element and everything the sanitiser stripped from it.
+    expect(bare.strippedCount).toBeGreaterThan(0);
+    // ...and the count no longer depends on whether prose happens to precede
+    // it, which is what "the parser decided, not the sanitiser" looked like.
+    expect(sanitiseSlot(MARKER + vector.input).strippedCount).toBe(bare.strippedCount);
+  });
+
+  // The seven head-only elements the ruling names, each as the FIRST thing in
+  // a slot, asserted by name rather than only through the vector table.
+  it.each([
+    ["script", `<script>alert(1)</script>`],
+    ["style", `<style>p{color:red}</style>`],
+    ["link", `<link rel="stylesheet" href="https://${EVIL}/x.css">`],
+    ["meta", `<meta http-equiv="refresh" content="0;url=https://${EVIL}/">`],
+    ["base", `<base href="https://${EVIL}/">`],
+    ["title", `<title>t</title>`],
+    ["template", `<template><p>x</p></template>`],
+  ])(
+    "counts a leading <%s>, which the parser used to swallow before the sanitiser saw it",
+    (_name, input) => {
+      const result = sanitiseSlot(input);
+      expect(result.html).toBe("");
+      expect(result.strippedCount).toBeGreaterThan(0);
     },
   );
 });
@@ -622,21 +644,40 @@ describe("the vector table", () => {
 /* 5. mutation-XSS regressions                                         */
 /* ================================================================== */
 
+/** The three regressions the ticket names, plus two of the same family. */
+const MXSS_CASES: Array<[string, string]> = [
+  ["noscript/title breakout", `<noscript><p title="</noscript><img src=x onerror=alert(1)>">`],
+  ["svg/style breakout", `<svg><style><img src=x onerror=alert(1)></style></svg>`],
+  [
+    "math/mglyph/style breakout",
+    `<math><mtext><table><mglyph><style><!--</style><img title="--><img src=x onerror=alert(1)>">`,
+  ],
+  ["math wrapper around prose", `<math><mtext>${KEEP}</mtext></math>`],
+  [
+    "form/isindex style breakout",
+    `<form><math><mtext></form><form><mglyph><style></math><img src=x onerror=alert(1)>`,
+  ],
+];
+
 describe("mutation-XSS regressions", () => {
   // The three named in the ticket. Each is a case where a naive sanitiser's
   // OUTPUT reparses into something dangerous — which is also why the
   // idempotence checks above matter: a sanitiser whose output is not a fixed
   // point is reading its own output differently from how it read the input.
-  it.each([
-    ["noscript/title breakout", `<noscript><p title="</noscript><img src=x onerror=alert(1)>">`],
-    ["svg/style breakout", `<svg><style><img src=x onerror=alert(1)></style></svg>`],
-    [
-      "math/mglyph/style breakout",
-      `<math><mtext><table><mglyph><style><!--</style><img title="--><img src=x onerror=alert(1)>">`,
-    ],
-    ["math wrapper around prose", `<math><mtext>${KEEP}</mtext></math>`],
-    ["form/isindex style breakout", `<form><math><mtext></form><form><mglyph><style></math><img src=x onerror=alert(1)>`],
-  ])("neutralises %s", (_name, input) => {
+  // 🔴 The ONE output the FORCE_BODY ruling changed, pinned so the change is
+  // recorded rather than absorbed. Before: `<p></p>` — an empty paragraph
+  // survived, because in document context the `<noscript>` was hoisted into
+  // `<head>` and its `<p>` fell into `<body>` on its own, ROUTING AROUND
+  // `FORBID_CONTENTS`. After: `""` — the sanitiser now sees the `<noscript>`
+  // it was always meant to suppress. Strictly tighter; no dangerous token was
+  // present in either.
+  it("FORCE_BODY changed exactly one output: the noscript breakout now suppresses whole", () => {
+    expect(sanitiseSlot(`<noscript><p title="</noscript><img src=x onerror=alert(1)>">`).html).toBe(
+      "",
+    );
+  });
+
+  it.each(MXSS_CASES)("neutralises %s", (_name, input) => {
     const once = sanitiseSlot(input);
     expectAbsent(once.html, ["onerror", "alert(1)", "<img", "<svg", "<math", "<style", "<noscript"]);
     // Idempotent: reparsing the output yields the same bytes, so the browser
@@ -700,9 +741,41 @@ describe("strippedCount", () => {
   it("does not count a model-authored <body> tag as the wrapper root twice", () => {
     // The parser merges a nested <body> start tag into the existing body, so
     // there is no second element to remove — and the prose still survives.
+    // `class` is on the allow list, so it merges and is not removed either.
     const result = sanitiseSlot(`<p>a</p><body class="x"><p>b</p></body>`);
     expect(result.html).toBe(`<p>a</p><p>b</p>`);
     expect(result.strippedCount).toBe(0);
+  });
+
+  // F8, re-measured after FORCE_BODY: a handler on a model-authored <body>
+  // merges onto the wrapper element, and the neutralisation pass strips it
+  // off the removed subtree — so it IS counted, and it is gone.
+  it("counts a handler on a model-authored <body>", () => {
+    const result = sanitiseSlot(`<p>a</p><body onload="alert(1)"><p>b</p></body>`);
+    expect(result.html).toBe(`<p>a</p><p>b</p>`);
+    expect(result.strippedCount).toBe(1);
+  });
+
+  // The FORCE_BODY sentinel is literally a `<remove>` element DOMPurify
+  // prefixes to the input. A model that writes one of its own must still be
+  // counted — the artefact skip looks only at the head of the record list,
+  // in a fixed order, so the model's copy sits past it.
+  it("counts a model-authored <remove> element, which is the sentinel's own tag name", () => {
+    const result = sanitiseSlot(`<remove>${KEEP}</remove>`);
+    expect(result.html).toBe(KEEP);
+    expect(result.strippedCount).toBe(1);
+    const second = sanitiseSlot(`<p>a</p><remove>x</remove>`);
+    expect(second.html).toBe(`<p>a</p>x`);
+    expect(second.strippedCount).toBe(1);
+  });
+
+  // DOMPurify substitutes `<!-->` for an EMPTY input, so its placeholder
+  // comment must not be counted — while a comment the MODEL wrote must be.
+  it("counts a model-authored comment but not DOMPurify's empty-input placeholder", () => {
+    expect(sanitiseSlot("").strippedCount).toBe(0);
+    const result = sanitiseSlot(`<p>a</p><!-- a note to nobody -->`);
+    expect(result.html).toBe(`<p>a</p>`);
+    expect(result.strippedCount).toBe(1);
   });
 });
 
@@ -902,3 +975,5 @@ describe("exactly one sanitiser is in the tree", () => {
     expect(dependencies["isomorphic-dompurify"]).toBe("^2");
   });
 });
+
+
