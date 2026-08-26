@@ -124,3 +124,108 @@ describe("the gate is `valid === false`, never `!valid`", () => {
     expect(screen.queryByTestId("spec-errors")).toBeNull();
   });
 });
+
+/**
+ * W24's half of the same gate. **A second PROP, never a second gate** — the
+ * ownership row says so, and the reason is the one W13 wrote down for the
+ * spec half: a go-live decision made in two places drifts, and the drift is
+ * only visible when the two disagree.
+ *
+ * 🔴 The rule the design pins is "**neither condition alone enables it**"
+ * (UI § 6b: enabled iff `spec_validation.valid && report.has_template`), and
+ * every combination below is asserted rather than the two obvious ones —
+ * because a gate written as `specBlocked && templateBlocked` passes a
+ * both-false and a both-true test and is wrong in exactly the two cases that
+ * matter.
+ */
+describe("the template half of the gate (W24)", () => {
+  it("is DISABLED when the spec validates but NO template has been accepted", () => {
+    stubFetchRoutes({});
+    renderWithProviders(
+      <GoLiveButton
+        hypothesisId={ID}
+        specValidation={{ valid: true, errors: [] }}
+        templateAccepted={false}
+      />,
+    );
+    expect(button()).toBeDisabled();
+    expect(screen.getByTestId("template-blocked")).toBeInTheDocument();
+    // The SPEC is fine, so the spec's blocking reason must not appear — a
+    // gate that says "the spec candidate does not validate" when the spec is
+    // valid sends the human to fix the wrong thing.
+    expect(screen.queryByTestId("spec-errors")).toBeNull();
+  });
+
+  it("is DISABLED when a template is accepted but the spec does NOT validate", () => {
+    stubFetchRoutes({});
+    renderWithProviders(
+      <GoLiveButton
+        hypothesisId={ID}
+        specValidation={{ valid: false, errors: [{ path: "horizon_days", message: "must be at least 1" }] }}
+        templateAccepted
+      />,
+    );
+    expect(button()).toBeDisabled();
+    expect(screen.getByText("horizon_days: must be at least 1")).toBeInTheDocument();
+    expect(screen.queryByTestId("template-blocked")).toBeNull();
+  });
+
+  it("is DISABLED when BOTH are refused, and lists BOTH reasons", () => {
+    stubFetchRoutes({});
+    renderWithProviders(
+      <GoLiveButton
+        hypothesisId={ID}
+        specValidation={{ valid: false, errors: [{ path: "metrics", message: "must not be empty" }] }}
+        templateAccepted={false}
+      />,
+    );
+    expect(button()).toBeDisabled();
+    expect(screen.getByText("metrics: must not be empty")).toBeInTheDocument();
+    expect(screen.getByTestId("template-blocked")).toBeInTheDocument();
+  });
+
+  it("is ENABLED only when BOTH hold", () => {
+    stubFetchRoutes({});
+    renderWithProviders(
+      <GoLiveButton
+        hypothesisId={ID}
+        specValidation={{ valid: true, errors: [] }}
+        templateAccepted
+      />,
+    );
+    expect(button()).toBeEnabled();
+    expect(screen.queryByTestId("template-blocked")).toBeNull();
+    expect(screen.queryByTestId("spec-errors")).toBeNull();
+  });
+
+  it("names the report template in words, not a bare marker", () => {
+    // § 2's Channel S rule reaches the blocking reasons too: a disabled
+    // button with no sentence is how a human sits waiting for a launch that
+    // will never enable itself.
+    stubFetchRoutes({});
+    renderWithProviders(
+      <GoLiveButton
+        hypothesisId={ID}
+        specValidation={{ valid: true, errors: [] }}
+        templateAccepted={false}
+      />,
+    );
+    expect(screen.getByTestId("template-blocked")).toHaveTextContent(
+      "No report template has been accepted yet, so this hypothesis cannot go live: review the candidate and accept it first.",
+    );
+  });
+
+  it("stays ENABLED when `templateAccepted` is absent — silence is not a refusal", () => {
+    // The SAME rule the spec half already holds to, and the reason it is not
+    // a widening: `HypothesisDetail` renders this button without the prop
+    // today, and W22's server-side 422 (path `report.has_template`) is the
+    // real backstop. A client that blocked on an unstated field would be a
+    // gate decided in the browser wearing the server's clothes.
+    stubFetchRoutes({});
+    renderWithProviders(
+      <GoLiveButton hypothesisId={ID} specValidation={{ valid: true, errors: [] }} />,
+    );
+    expect(button()).toBeEnabled();
+    expect(screen.queryByTestId("template-blocked")).toBeNull();
+  });
+});

