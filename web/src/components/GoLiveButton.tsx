@@ -18,6 +18,22 @@
  *
  * W24 extends this gate with the accepted-template condition; W13 ships the
  * spec half, and W24 should add a second **prop**, not a second gate.
+ *
+ * ## The template half (W24)
+ *
+ * 🔴 **Enabled iff `spec_validation.valid && report.has_template`** — UI
+ * design § 6b. **Neither condition alone enables it**, which is why both
+ * blocking reasons are rendered independently: a human whose spec is fine and
+ * whose template is missing must be told about the template, not sent back to
+ * re-read a spec that validates.
+ *
+ * `templateAccepted` is OPTIONAL and `undefined` does not block, exactly as
+ * an absent `spec_validation` does not. That is the same rule, not a
+ * loophole: silence from the server is not a refusal, W22 built the
+ * server-side `422` backstop with a `path` of `report.has_template`, and a
+ * browser that refused to launch on a field the payload never carried would
+ * be a second gate decided here. A caller that KNOWS the answer passes the
+ * boolean; today the go-live review screen does.
  */
 
 import { useState } from "react";
@@ -30,15 +46,29 @@ import type { SpecValidation } from "../api/types.js";
 
 export interface GoLiveButtonProps {
   hypothesisId: string;
-  /** The server's verdict. The ONLY input to the enabled/disabled decision. */
+  /** The server's verdict on the spec. Half of the enabled/disabled decision. */
   specValidation: SpecValidation;
+  /**
+   * `report.has_template` from `GET /api/hypotheses/:id` — the other half.
+   *
+   * `false` blocks and says so. `undefined` means the caller has not read the
+   * report block and blocks nothing; see the file header for why that is the
+   * same rule the spec half already holds to and not a widening of it.
+   */
+  templateAccepted?: boolean;
   /** Called after a successful go-live, so the page can re-read. */
   onDone?: () => void;
 }
 
+/** The blocking reason for the template half, in words. § 2: never a bare marker. */
+export const NO_TEMPLATE_ACCEPTED =
+  "No report template has been accepted yet, so this hypothesis cannot go live: " +
+  "review the candidate and accept it first.";
+
 export default function GoLiveButton({
   hypothesisId,
   specValidation,
+  templateAccepted,
   onDone,
 }: GoLiveButtonProps) {
   const [busy, setBusy] = useState(false);
@@ -54,8 +84,14 @@ export default function GoLiveButton({
   // during render — which does not "fail closed", it takes the whole detail
   // page down. Silence from the server is not a refusal, and W9's 422 on the
   // POST is the real backstop.
-  const blocked = specValidation?.valid === false;
+  const specBlocked = specValidation?.valid === false;
   const errors = specValidation?.errors ?? [];
+
+  // `=== false` for the same reason, and read INDEPENDENTLY of the spec half:
+  // an `&&` between the two would enable the button whenever either was
+  // satisfied, which is the one thing § 6b forbids.
+  const templateBlocked = templateAccepted === false;
+  const blocked = specBlocked || templateBlocked;
 
   async function submit(): Promise<void> {
     setBusy(true);
@@ -84,7 +120,13 @@ export default function GoLiveButton({
         </Button>
       </Box>
 
-      {blocked ? (
+      {templateBlocked ? (
+        <Typography data-testid="template-blocked" sx={{ fontSize: 13, color: "text.secondary" }}>
+          {NO_TEMPLATE_ACCEPTED}
+        </Typography>
+      ) : null}
+
+      {specBlocked ? (
         <Box data-testid="spec-errors" sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
           <Typography sx={{ fontSize: 13, color: "text.secondary" }}>
             The spec candidate does not validate, so this hypothesis cannot go live yet:

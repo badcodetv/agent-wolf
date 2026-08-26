@@ -21,6 +21,8 @@ import type {
   EmbedTokenResponse,
   HumanVerdict,
   HypothesisDetail,
+  ReportCandidate,
+  ReportTemplateAccepted,
   SeriesResponse,
   SignedInUser,
 } from "./types.js";
@@ -263,4 +265,50 @@ export function amendSpec(
     decision,
     rationale,
   });
+}
+
+// ── The report candidate (W24) ──────────────────────────────────────────
+
+/**
+ * `GET /api/hypotheses/:id/report-candidate` — the newest candidate the
+ * hypothesis owns, its two URL lists, and whatever tamper the read witnessed.
+ *
+ * A `404 not_found` is the EMPTY STATE, not a failure: the interview has not
+ * produced a candidate yet. Its `details.tamper` is the one thing that must
+ * not be swallowed — "there is no candidate" and "the only candidate was
+ * written by something that is not this hypothesis" are different facts.
+ */
+export function fetchReportCandidate(id: string): Promise<ReportCandidate> {
+  return getJson<ReportCandidate>(`/api/hypotheses/${encodeURIComponent(id)}/report-candidate`);
+}
+
+/**
+ * `POST /api/hypotheses/:id/report-template` — `{ html }`, 201
+ * `{ structure_hash, … }`.
+ *
+ * The bytes are the candidate's, verbatim: `structure_hash` is sha256 of
+ * exactly these, so trimming or re-serialising them would lock a template
+ * whose hash is not the one the human approved. A **422** carries
+ * `details.errors: [{ path, message }]` and is `invalid` in the shared
+ * taxonomy — never `internal`. A **409** means a template is already locked
+ * and the amendment route is the replacement path.
+ */
+export function acceptReportTemplate(id: string, html: string): Promise<ReportTemplateAccepted> {
+  return postJson<ReportTemplateAccepted>(
+    `/api/hypotheses/${encodeURIComponent(id)}/report-template`,
+    { html },
+  );
+}
+
+/**
+ * `GET /api/hypotheses/:id/report-candidate/frame` — the URL the review
+ * screen's preview iframe points at.
+ *
+ * 🔴 A URL, never `srcdoc`, for the same reason `ReportPanel` gives for the
+ * locked frame: the CSP is a HEADER, and a header only applies to a document
+ * the browser fetched. The candidate's HTML is in this client's hands (the
+ * accept button posts it back) and it must never be rendered from there.
+ */
+export function reportCandidateFrameSrc(id: string): string {
+  return `/api/hypotheses/${encodeURIComponent(id)}/report-candidate/frame`;
 }

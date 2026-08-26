@@ -217,6 +217,40 @@ class FakeOrange {
     });
   }
 
+  /**
+   * A `kind=report-candidate`: the INTERVIEW writes it, from inside the
+   * container, so its provenance is never empty. The default names this
+   * hypothesis's own `hyp-<id>` session, which is clause 2 of `isOwnReport`.
+   */
+  candidate(
+    id: string,
+    html: string,
+    opts: { memoryId?: string; worker?: string; session?: string; summary?: string } = {},
+  ): MemRow {
+    return this.memory({
+      id: opts.memoryId ?? `cand-${id}`,
+      labels: { kind: "report-candidate", name: id },
+      content: `${opts.summary ?? "a proposed report template"}\n${html}`,
+      worker: opts.worker ?? "",
+      session: opts.session ?? `sess-hyp-${id}`,
+    });
+  }
+
+  /** Retracts a row the way WOLF does: empty provenance, so it really is withdrawn. */
+  retractByWolf(memoryId: string): this {
+    const row = this.memories.find((m) => m.id === memoryId);
+    if (row === undefined) throw new Error(`no such row to retract: ${memoryId}`);
+    row.retractedBy = [
+      {
+        memory_id: memoryId,
+        created_by_worker: "",
+        created_by_session: "",
+        created_at: 1787334098000,
+      },
+    ];
+    return this;
+  }
+
   spec(
     id: string,
     spec: Record<string, unknown> = workedSpec(),
@@ -2204,5 +2238,542 @@ describe("report_amendment", () => {
 
     expect(res.status).toBe(401);
     expect(h.orange.requests).toHaveLength(0);
+  });
+});
+
+/* ================================================================== */
+/* GET …/report-candidate — the read W24 needs and nothing had (R206)  */
+/* ================================================================== */
+
+/**
+ * W24 — the go-live review screen's read.
+ *
+ * `kind=report-candidate` had a WRITER and no READER for nine tickets, and
+ * this route is the first consumer. Two things it must get right, and both
+ * are here because getting them wrong is invisible:
+ *
+ *  1. 🔴 **The trust rule.** A candidate is written from INSIDE a container,
+ *     so `isTrusted` cannot be the rule (every legitimate one has non-empty
+ *     provenance). The rule is W22's `isOwnReport`: the row's provenance
+ *     names THIS hypothesis's researcher worker or its `hyp-<id>` session, or
+ *     it is a `cross_hypothesis_write`. A screen that renders a forged
+ *     candidate for a human to approve is the worst possible place to skip it
+ *     — the human's click LOCKS the template.
+ *  2. 🔴 **`script_srcs` is not the set that reaches `script-src`.** It is the
+ *     raw URL list in document order, and it is not https-only. Labelling it
+ *     "permitted script origins" would be lying to the approving human, so
+ *     the route carries BOTH: the raw list and `code_origins`, derived by
+ *     `frame.ts`'s own `codeOrigins()` rather than by a third mapping.
+ */
+
+const candidateUrl = (id: string): string => `/api/hypotheses/${id}/report-candidate`;
+const CANDIDATE = candidateUrl(ID);
+const CANDIDATE_FRAME = `${CANDIDATE}/frame`;
+
+/** A candidate the interview wrote: one script, one image, one slot. */
+const CANDIDATE_HTML =
+  `${FALLBACK}<script src="https://cdn-a.example/chart.js"></script>` +
+  `<img src="https://img-b.example/logo.png">` +
+  `<section data-wolf-slot="analysis">placeholder</section>`;
+
+/**
+ * A candidate whose only remote URL is an IMAGE — the criterion's own case.
+ * `scriptSrcs` is EMPTY and the host appears only in `remoteOrigins`, so a
+ * screen listing script URLs alone would show the human nothing at all.
+ */
+const CANDIDATE_IMG_ONLY =
+  `${FALLBACK}<img src="https://evil.example/px.gif?d=1">` +
+  `<section data-wolf-slot="analysis">placeholder</section>`;
+
+/**
+ * A candidate whose CSS `@import` names a `data:` URL. It validates clean and
+ * lands in `scriptSrcs`, while `new URL("data:…").origin` is the four
+ * characters `null` — a HOST NAME in a CSP, not the keyword `'none'` — so it
+ * must not reach `code_origins` (R155, measured by W19).
+ */
+const CANDIDATE_DATA_IMPORT =
+  `${FALLBACK}<style>@import url(data:text/css,x);</style>` +
+  `<script src="https://cdn-a.example/chart.js"></script>` +
+  `<section data-wolf-slot="analysis">placeholder</section>`;
+
+/** Adds a candidate to whatever else the seed built. */
+function withCandidate(
+  html: string,
+  opts: { memoryId?: string; worker?: string; session?: string; summary?: string } = {},
+): (orange: FakeOrange) => void {
+  return (orange) => {
+    seeded(orange);
+    orange.candidate(ID, html, opts);
+  };
+}
+
+describe("report_candidate", () => {
+  it("report_candidate: serves the newest candidate's html, summary and provenance", async () => {
+    const h = await harness((orange) => {
+      seeded(orange);
+      orange.candidate(ID, TEMPLATE_B, { memoryId: "cand-old", summary: "the first attempt" });
+      orange.candidate(ID, CANDIDATE_HTML, { memoryId: "cand-new", summary: "a chart of the basket" });
+    });
+
+    const res = await get(h, CANDIDATE);
+
+    expect(res.status).toBe(200);
+    expect(res.json.memory_id).toBe("cand-new");
+    expect(res.json.summary).toBe("a chart of the basket");
+    expect(res.json.html).toBe(CANDIDATE_HTML);
+    expect(res.json.created_by_session).toBe(`sess-hyp-${ID}`);
+    expect(res.json.valid).toBe(true);
+    expect(res.json.tamper).toEqual([]);
+  });
+
+  it("report_candidate: reads the FULL row, not the 500-character snippet", async () => {
+    // Orange's list route returns `substring(content, 1, 500)`. A template
+    // routinely runs to tens of kilobytes, so a route reading `snippet` would
+    // serve a truncated document that still passed every other assertion here
+    // — and the human would approve, and lock, half a template.
+    const padding = "<p>x</p>".repeat(200);
+    const long = `${FALLBACK}${padding}<section data-wolf-slot="analysis">placeholder</section>`;
+    expect(long.length).toBeGreaterThan(500);
+    const h = await harness(withCandidate(long));
+
+    const res = await get(h, CANDIDATE);
+
+    expect(res.status).toBe(200);
+    expect(res.json.html).toBe(long);
+  });
+
+  it("report_candidate: 404 not_found with reason no_report_candidate when the interview wrote none", async () => {
+    const h = await harness();
+
+    const res = await get(h, CANDIDATE);
+
+    expect(res.status).toBe(404);
+    expect(res.json.kind).toBe("not_found");
+    expect(res.json.details.reason).toBe("no_report_candidate");
+    expect(res.json.details.id).toBe(ID);
+    // The empty state, not an attack: nothing was witnessed on the way.
+    expect(res.json.details.tamper).toEqual([]);
+  });
+
+  it("report_candidate: 404 for a hypothesis that is not in the session index", async () => {
+    // 🔴 The provenance here WOULD satisfy `isOwnReport` — `researcher-<ID_B>`
+    // is clause 1 — so the only thing that can refuse this row is the
+    // session-index check. An earlier version of this test used a row the
+    // trust rule rejected anyway and passed with the check deleted (found by
+    // a surviving mutation, A16). The session list is the authoritative index
+    // of hypotheses, never memory.
+    const h = await harness((orange) => {
+      seeded(orange);
+      orange.candidate(ID_B, CANDIDATE_HTML, { worker: `researcher-${ID_B}`, session: "" });
+    });
+
+    const res = await get(h, candidateUrl(ID_B));
+
+    expect(res.status).toBe(404);
+    expect(res.json.kind).toBe("not_found");
+    expect(res.json.message).toBe(`no hypothesis ${ID_B}`);
+    // NOT the "no candidate" 404: this id is not a hypothesis at all.
+    expect(res.json.details.reason).toBeUndefined();
+  });
+
+  it("report_candidate_frame: 404 for a hypothesis that is not in the session index", async () => {
+    // The same guard on the frame route. Two routes, two proofs — a guard
+    // tested on one of a pair is the guard that goes missing from the other.
+    const h = await harness((orange) => {
+      seeded(orange);
+      orange.candidate(ID_B, CANDIDATE_HTML, { worker: `researcher-${ID_B}`, session: "" });
+    });
+
+    const res = await get(h, `${candidateUrl(ID_B)}/frame`);
+
+    expect(res.status).toBe(404);
+    expect(res.json.kind).toBe("not_found");
+    expect(res.json.message).toBe(`no hypothesis ${ID_B}`);
+    // NOT the "no candidate" 404: this id is not a hypothesis at all.
+    expect(res.json.details.reason).toBeUndefined();
+  });
+
+  it("report_candidate: 400 invalid for an id that is not 8 lowercase hex characters", async () => {
+    const h = await harness();
+
+    const res = await get(h, "/api/hypotheses/hyp-1a2b3c4d/report-candidate");
+
+    expect(res.status).toBe(400);
+    expect(res.json.kind).toBe("invalid");
+  });
+
+  it("report_candidate: 401 with no cookie, and NOT ONE upstream request", async () => {
+    const h = await harness(withCandidate(CANDIDATE_HTML));
+
+    const res = await get(h, CANDIDATE, false);
+
+    expect(res.status).toBe(401);
+    expect(h.orange.requests).toHaveLength(0);
+  });
+});
+
+describe("report_candidate_urls", () => {
+  it("report_candidate_urls: script_srcs are the RAW urls in document order, never origins", async () => {
+    const html =
+      `${FALLBACK}<link rel="stylesheet" href="https://cdn-z.example/late.css">` +
+      `<script src="https://cdn-a.example/chart.js?v=2"></script>` +
+      `<section data-wolf-slot="analysis">placeholder</section>`;
+    const h = await harness(withCandidate(html));
+
+    const res = await get(h, CANDIDATE);
+
+    // Document order, full URLs including the query string — an origin list
+    // would have collapsed both to two bare hosts and lost `?v=2`.
+    expect(res.json.script_srcs).toEqual([
+      "https://cdn-z.example/late.css",
+      "https://cdn-a.example/chart.js?v=2",
+    ]);
+  });
+
+  it("report_candidate_urls: a data: url reaches script_srcs and NOT code_origins", async () => {
+    const h = await harness(withCandidate(CANDIDATE_DATA_IMPORT));
+
+    const res = await get(h, CANDIDATE);
+
+    expect(res.json.script_srcs).toContain("data:text/css,x");
+    // `new URL("data:…").origin` is the literal four characters `null`, which
+    // in a CSP is a host name. It must never be presented as an approved
+    // code origin.
+    expect(res.json.code_origins).toEqual(["https://cdn-a.example"]);
+    expect(res.json.code_origins).not.toContain("null");
+  });
+
+  it("report_candidate_urls: an IMG host appears in remote_origins though script_srcs is empty", async () => {
+    // The whole reason revision 5 added `remoteOrigins` to this screen: a
+    // template that exfiltrates through an image URL was approved by a human
+    // who never saw the host.
+    const h = await harness(withCandidate(CANDIDATE_IMG_ONLY));
+
+    const res = await get(h, CANDIDATE);
+
+    expect(res.json.script_srcs).toEqual([]);
+    expect(res.json.code_origins).toEqual([]);
+    expect(res.json.remote_origins).toEqual(["https://evil.example"]);
+  });
+
+  it("report_candidate_urls: code_origins is a SUBSET of remote_origins and may equal it", async () => {
+    // § 6b's "subset", corrected from "strict subset": for a template whose
+    // only remote URL is a `<script src>` the two sets are EQUAL and W24's
+    // "everything else" difference is empty. That is the common case and it
+    // is not an error.
+    const h = await harness(withCandidate(TEMPLATE_A));
+
+    const res = await get(h, CANDIDATE);
+
+    expect(res.json.code_origins).toEqual(["https://cdn-a.example"]);
+    expect(res.json.remote_origins).toEqual(["https://cdn-a.example"]);
+  });
+
+  it("report_candidate_urls: both lists together for a template with code AND an image host", async () => {
+    const h = await harness(withCandidate(CANDIDATE_HTML));
+
+    const res = await get(h, CANDIDATE);
+
+    expect(res.json.script_srcs).toEqual(["https://cdn-a.example/chart.js"]);
+    expect(res.json.code_origins).toEqual(["https://cdn-a.example"]);
+    // Sorted and deduplicated by `parseTemplate`; the image host is here and
+    // in neither of the two lists above.
+    expect(res.json.remote_origins).toEqual(["https://cdn-a.example", "https://img-b.example"]);
+  });
+
+  it("report_candidate_urls: a candidate that does not validate answers valid:false with the errors", async () => {
+    // A missing `[data-wolf-fallback]` is the model's mistake, not the
+    // caller's and not Wolf's stored state: the human is shown what is wrong
+    // rather than an error page, and the accept button has nothing to post.
+    const broken = `<section data-wolf-slot="analysis">placeholder</section>`;
+    const h = await harness(withCandidate(broken));
+
+    const res = await get(h, CANDIDATE);
+
+    expect(res.status).toBe(200);
+    expect(res.json.valid).toBe(false);
+    expect(res.json.errors.length).toBeGreaterThan(0);
+    expect(res.json.errors.every((e: any) => typeof e.path === "string")).toBe(true);
+    expect(res.json.structure_hash).toBeNull();
+    expect(res.json.script_srcs).toEqual([]);
+    expect(res.json.remote_origins).toEqual([]);
+    expect(res.json.code_origins).toEqual([]);
+    // The bytes still come back: the screen shows the human what was proposed.
+    expect(res.json.html).toBe(broken);
+  });
+
+  it("report_candidate_urls: the html round-trips into POST …/report-template unchanged", async () => {
+    // The accept button posts exactly these bytes back. If the read normalised
+    // the HTML in any way the hash the human approved and the hash Wolf locked
+    // would differ, silently.
+    // No locked template in this seed: the accept POST must succeed, which is
+    // the state the review screen is actually in.
+    const h = await harness((orange) => {
+      orange.hypothesis(ID);
+      orange.spec(ID);
+      orange.candidate(ID, CANDIDATE_HTML);
+    });
+
+    const read = await get(h, CANDIDATE);
+    const locked = await post(h, `/api/hypotheses/${ID}/report-template`, {
+      html: read.json.html,
+    });
+
+    expect(locked.status).toBe(201);
+    // The bytes the human approved and the bytes Wolf locked hash the same.
+    expect(locked.json.structure_hash).toBe(read.json.structure_hash);
+    expect(locked.json.structure_hash).toBe(
+      createHash("sha256").update(CANDIDATE_HTML, "utf8").digest("hex"),
+    );
+    expect(locked.json.script_srcs).toEqual(read.json.script_srcs);
+    expect(locked.json.remote_origins).toEqual(read.json.remote_origins);
+  });
+});
+
+describe("report_candidate_trust", () => {
+  it("report_candidate_trust: a candidate from ANOTHER hypothesis's session is not served", async () => {
+    const h = await harness((orange) => {
+      seeded(orange);
+      orange.hypothesis(ID_B);
+      // Labelled `name=<ID>` but written from B's session: a well-formed row
+      // in the right kind with another hypothesis's name on it.
+      orange.candidate(ID, CANDIDATE_IMG_ONLY, {
+        memoryId: "cand-forged",
+        worker: `researcher-${ID_B}`,
+        session: `sess-hyp-${ID_B}`,
+      });
+    });
+
+    const res = await get(h, CANDIDATE);
+
+    expect(res.status).toBe(404);
+    expect(res.json.kind).toBe("not_found");
+    // The SAME 404 shape as the empty state — this is not a different route —
+    // and the tamper is the only thing that distinguishes the two.
+    expect(res.json.details.reason).toBe("no_report_candidate");
+    expect(res.json.details.id).toBe(ID);
+    // 🔴 Named, never silently dropped: the human must be told an attack was
+    // witnessed rather than shown a benign "no candidate yet".
+    expect(res.json.details.tamper).toEqual([
+      {
+        reason: "cross_hypothesis_write",
+        written_by_worker: `researcher-${ID_B}`,
+        written_by_session: `sess-hyp-${ID_B}`,
+        memory_id: "cand-forged",
+      },
+    ]);
+  });
+
+  it("report_candidate_trust: a NEWER forged candidate does not displace this hypothesis's own", async () => {
+    const h = await harness((orange) => {
+      seeded(orange);
+      orange.hypothesis(ID_B);
+      orange.candidate(ID, CANDIDATE_HTML, { memoryId: "cand-mine" });
+      orange.candidate(ID, CANDIDATE_IMG_ONLY, {
+        memoryId: "cand-forged",
+        worker: `researcher-${ID_B}`,
+        session: `sess-hyp-${ID_B}`,
+      });
+    });
+
+    const res = await get(h, CANDIDATE);
+
+    expect(res.status).toBe(200);
+    expect(res.json.memory_id).toBe("cand-mine");
+    expect(res.json.html).toBe(CANDIDATE_HTML);
+    expect(res.json.tamper).toEqual([
+      {
+        reason: "cross_hypothesis_write",
+        written_by_worker: `researcher-${ID_B}`,
+        written_by_session: `sess-hyp-${ID_B}`,
+        memory_id: "cand-forged",
+      },
+    ]);
+  });
+
+  it("report_candidate_trust: this hypothesis's own RESEARCHER worker also owns a candidate", async () => {
+    // Clause 1 of `isOwnReport`. The interviewer normally writes the
+    // candidate from the session; the researcher may propose one too.
+    const h = await harness((orange) => {
+      seeded(orange);
+      orange.candidate(ID, CANDIDATE_HTML, {
+        memoryId: "cand-researcher",
+        worker: `researcher-${ID}`,
+        session: "sess-tick-4f2a",
+      });
+    });
+
+    const res = await get(h, CANDIDATE);
+
+    expect(res.status).toBe(200);
+    expect(res.json.memory_id).toBe("cand-researcher");
+    expect(res.json.tamper).toEqual([]);
+  });
+
+  it("report_candidate_trust: an unattributed candidate is NOT owned", async () => {
+    // `""` is what Orange stamps when there is no worker and no session.
+    // Comparing it to an absent owner value would make an unattributed row
+    // look owned — the failure `isOwnReport` guards against explicitly.
+    const h = await harness((orange) => {
+      seeded(orange);
+      orange.candidate(ID, CANDIDATE_HTML, {
+        memoryId: "cand-nobody",
+        worker: "",
+        session: "",
+      });
+    });
+
+    const res = await get(h, CANDIDATE);
+
+    expect(res.status).toBe(404);
+    expect(res.json.kind).toBe("not_found");
+    expect(res.json.details.reason).toBe("no_report_candidate");
+    expect(res.json.details.id).toBe(ID);
+    expect(res.json.details.tamper).toEqual([
+      {
+        reason: "cross_hypothesis_write",
+        written_by_worker: "",
+        written_by_session: "",
+        memory_id: "cand-nobody",
+      },
+    ]);
+  });
+
+  it("report_candidate_trust: a HOSTILE retraction does not hide the candidate", async () => {
+    const h = await harness((orange) => {
+      seeded(orange);
+      orange.candidate(ID, CANDIDATE_HTML, { memoryId: "cand-mine" });
+      orange.retractHostilely("cand-mine");
+    });
+
+    const res = await get(h, CANDIDATE);
+
+    expect(res.status).toBe(200);
+    expect(res.json.memory_id).toBe("cand-mine");
+    expect(res.json.tamper).toEqual([
+      {
+        reason: "hostile_retraction",
+        written_by_worker: "researcher-attacker",
+        written_by_session: "sess-attacker",
+        memory_id: "cand-mine",
+      },
+    ]);
+  });
+
+  it("report_candidate_trust: a retraction WOLF wrote does hide it, and the older one is served", async () => {
+    const h = await harness((orange) => {
+      seeded(orange);
+      orange.candidate(ID, CANDIDATE_HTML, { memoryId: "cand-old" });
+      orange.candidate(ID, CANDIDATE_IMG_ONLY, { memoryId: "cand-withdrawn" });
+      orange.retractByWolf("cand-withdrawn");
+    });
+
+    const res = await get(h, CANDIDATE);
+
+    expect(res.status).toBe(200);
+    expect(res.json.memory_id).toBe("cand-old");
+    expect(res.json.tamper).toEqual([]);
+  });
+});
+
+describe("report_candidate_frame", () => {
+  it("report_candidate_frame: serves text/html with the DERIVED csp, nosniff and no Set-Cookie", async () => {
+    const h = await harness(withCandidate(TEMPLATE_B));
+
+    const res = await get(h, CANDIDATE_FRAME);
+
+    expect(res.status).toBe(200);
+    expect(res.contentType).toContain("text/html");
+    // 🔴 The whole header, byte for byte, and it is the CSP of the CANDIDATE
+    // — not of the locked template `seeded` also installed. Reviewing a
+    // preview that differs from production defeats the point of the screen.
+    expect(res.csp).toBe(CSP_B);
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("set-cookie")).toBeNull();
+    // A HEADER and only a header: a `<meta http-equiv>` copy silently ignores
+    // `sandbox` and `frame-ancestors`, which is what makes direct navigation
+    // to this URL safe.
+    expect(res.raw).not.toContain("http-equiv");
+  });
+
+  it("report_candidate_frame: composes the CANDIDATE, not the locked template", async () => {
+    const h = await harness(withCandidate(CANDIDATE_IMG_ONLY));
+
+    const res = await get(h, CANDIDATE_FRAME);
+
+    expect(res.raw).toContain("https://evil.example/px.gif?d=1");
+    expect(res.raw).not.toContain("cdn-a.example");
+  });
+
+  it("report_candidate_frame: the preview's slots are EMPTY, never yesterday's report", async () => {
+    const h = await harness((orange) => {
+      seeded(orange);
+      orange.report(ID, "yesterday's headline", { analysis: "<p>SENTINEL-TICK-CONTENT</p>" });
+      orange.candidate(ID, CANDIDATE_HTML);
+    });
+
+    const res = await get(h, CANDIDATE_FRAME);
+
+    expect(res.status).toBe(200);
+    // A candidate has never been filled by a tick. Splicing the locked
+    // template's slot content into it would show the human data the proposed
+    // template did not produce.
+    expect(res.raw).not.toContain("SENTINEL-TICK-CONTENT");
+  });
+
+  it("report_candidate_frame: 404 not_found when there is no candidate", async () => {
+    const h = await harness();
+
+    const res = await get(h, CANDIDATE_FRAME);
+
+    expect(res.status).toBe(404);
+    expect(res.json.kind).toBe("not_found");
+    expect(res.json.details.reason).toBe("no_report_candidate");
+    expect(res.json.details.id).toBe(ID);
+    expect(res.json.details.tamper).toEqual([]);
+  });
+
+  it("report_candidate_frame: 422 invalid when the candidate does not validate", async () => {
+    const broken = `<section data-wolf-slot="analysis">placeholder</section>`;
+    const h = await harness(withCandidate(broken));
+
+    const res = await get(h, CANDIDATE_FRAME);
+
+    // The caller asked to preview a document that cannot be composed. `422`
+    // is `invalid` in § "Shared error taxonomy" — never `internal`, which
+    // would claim WOLF has the bug when a model wrote a bad template.
+    expect(res.status).toBe(422);
+    expect(res.json.kind).toBe("invalid");
+    expect(res.json.details.errors.length).toBeGreaterThan(0);
+  });
+
+  it("report_candidate_frame: 401 with no cookie, and NOT ONE upstream request", async () => {
+    const h = await harness(withCandidate(CANDIDATE_HTML));
+
+    const res = await get(h, CANDIDATE_FRAME, false);
+
+    expect(res.status).toBe(401);
+    expect(h.orange.requests).toHaveLength(0);
+  });
+
+  it("report_candidate_frame: NO credential of any kind reaches the document", async () => {
+    // The same claim the locked frame makes, through the REAL app: this
+    // document is composed from model-authored bytes and rendered in an
+    // opaque origin, and a credential in it would be readable by the script
+    // the template carries.
+    const h = await realHarness(withCandidate(CANDIDATE_HTML), {
+      WOLF_API_KEY: SENTINEL_API_KEY,
+      WOLF_MCP_TOKEN: SENTINEL_MCP_TOKEN,
+      WOLF_SESSION_SECRET: SENTINEL_SESSION_SECRET,
+    });
+
+    const res = await get(h, CANDIDATE_FRAME);
+
+    expect(res.status).toBe(200);
+    expect(res.raw).not.toContain(SENTINEL_API_KEY);
+    expect(res.raw).not.toContain(SENTINEL_MCP_TOKEN);
+    expect(res.raw).not.toContain(SENTINEL_SESSION_SECRET);
+    expect(res.raw).not.toContain(EMBED_TOKEN);
+    expect(res.headers.get("set-cookie")).toBeNull();
   });
 });

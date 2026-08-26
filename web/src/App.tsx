@@ -5,10 +5,11 @@
  * /                       Board — the attention queue
  * /new                    New hypothesis (title only) → interview
  * /hypotheses/:id         Detail — two columns (W14 fills the left column)
+ * /hypotheses/:id/golive  Go live review — approve the candidate report (W24)
  * /archive                Archive — terminal states, with restated_from lineage
  * ```
  *
- * W24 adds `/hypotheses/:id/golive` to the table below. There must not be a
+ * W24 added `/hypotheses/:id/golive` to the table below. There must not be a
  * second router or a second table: React Router 7 resolves the most specific
  * match, and two tables would race to render two pages for one URL.
  *
@@ -37,10 +38,11 @@ import HypothesisList from "./pages/HypothesisList.js";
 import NewHypothesis from "./pages/NewHypothesis.js";
 import Archive from "./pages/Archive.js";
 import HypothesisDetail from "./pages/HypothesisDetail.js";
+import GoLiveReview from "./pages/GoLiveReview.js";
 import SignIn from "./pages/SignIn.js";
 import { ApiError, fetchMe, logout } from "./api/client.js";
 
-/** The one route table. W24 adds `/hypotheses/:id/golive` HERE. */
+/** The one route table. Every page in the app is registered HERE. */
 export function AppRoutes() {
   return (
     <Routes>
@@ -48,6 +50,9 @@ export function AppRoutes() {
       <Route path="/new" element={<NewHypothesis />} />
       <Route path="/archive" element={<Archive />} />
       <Route path="/hypotheses/:id" element={<HypothesisDetail />} />
+      {/* More specific than `/hypotheses/:id`, and React Router 7 resolves the
+          more specific match — so the detail page does not swallow it. */}
+      <Route path="/hypotheses/:id/golive" element={<GoLiveReview />} />
       <Route
         path="*"
         element={

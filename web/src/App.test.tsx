@@ -80,6 +80,45 @@ describe("the route table", () => {
     expect(screen.getByTestId("chat-rail")).toBeInTheDocument();
   });
 
+  it("renders the go-live review at /hypotheses/:id/golive, NOT the detail page", async () => {
+    // The more specific route must win. Without it `/hypotheses/:id` does not
+    // match this path at all and the human lands on "No such page"; with a
+    // wrongly-ordered table the detail page would swallow it and the review
+    // screen would be unreachable.
+    renderAt("/hypotheses/1a2b3c4d/golive", {
+      "GET /api/hypotheses/1a2b3c4d": {
+        json: {
+          hypothesis: {
+            id: "1a2b3c4d",
+            session_name: "hyp-1a2b3c4d",
+            session_id: "s",
+            title: "a thesis",
+            title_truncated: false,
+            owner: "kai",
+            status: "draft",
+            status_memory_id: "m",
+            updated_at_ms: 1_780_000_000_000,
+            restated_from: null,
+          },
+          spec_source: null,
+          spec_validation: { valid: false, errors: [] },
+        },
+      },
+      "GET /api/hypotheses/1a2b3c4d/report-candidate": {
+        status: 404,
+        json: {
+          kind: "not_found",
+          message: "no candidate",
+          details: { id: "1a2b3c4d", reason: "no_report_candidate", tamper: [] },
+        },
+      },
+    });
+    await settle();
+    expect(screen.getByTestId("golive-review")).toBeInTheDocument();
+    expect(screen.queryByTestId("detail-column")).toBeNull();
+    expect(screen.queryByTestId("not-found")).toBeNull();
+  });
+
   it("answers an unknown path rather than rendering nothing", async () => {
     renderAt("/nope", {});
     await settle();
