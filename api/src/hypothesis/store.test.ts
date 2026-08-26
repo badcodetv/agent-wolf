@@ -633,12 +633,17 @@ describe("store_session_index_budget", () => {
     const { store, stub } = harness({ sessions: manySessions(2000), sessionsIgnoreOffset: true });
     const err = await failureOf(store.readSessionIndex({ sessionPageSize: 2000 }));
     expect(err.kind).toBe("internal");
+    expect(err.status).toBe(500);
     expect(err.message).toContain("GET /agent/sessions");
     expect(err.message).toContain("did not converge");
     expect(err.message).toContain("20000 rows over 10 pages of limit=2000");
     // The ROW budget fired, not the page budget.
     expect(err.message).not.toContain("50 pages");
     expect(stub.sessionRequests).toHaveLength(10);
+    // As above: it really was walking, so the ten are ten distinct pages asked
+    // for rather than ten retries of one.
+    expect(offsetsOf(stub)[0]).toBe("0");
+    expect(offsetsOf(stub)[1]).toBe("2000");
     // Rows are counted as RECEIVED, not as indexed. This server returns the
     // same 2000 rows every time, so the de-duplicated index never exceeds 2000
     // and a budget counted off `index.size` would never fire here — the page
