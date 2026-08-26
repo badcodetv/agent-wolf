@@ -49,6 +49,7 @@ import {
   HYPOTHESIS_ID_PATTERN,
   isTrusted,
   hasEmptyProvenance,
+  parseHypothesisContent,
   sessionNameForHypothesis,
   type EvaluationSummary,
   type HypothesisRecord,
@@ -93,6 +94,95 @@ export const DEFAULT_SESSION_POLL_TIMEOUT_MS = 30_000;
 // and a `report` block to the detail payload, from this same file, once a
 // `kind=report` memory can exist. Nothing here should have to move for that.
 
+/**
+ * The board's four sections, in the order § 4 prints them (W27).
+ *
+ * 🔴 These four strings are a WIRE VOCABULARY `web/`'s fixtures already
+ * consume. Renaming one does not break a build: it makes every board row
+ * render as unclassified, in NEEDS A HUMAN, with a caption — which is the
+ * right behaviour for an unrecognised tier and the wrong behaviour for all of
+ * them at once.
+ */
+export const ATTENTION_TIERS = ["needs_human", "watch", "in_interview", "holding"] as const;
+export type AttentionTier = (typeof ATTENTION_TIERS)[number];
+
+/**
+ * What the tier rules actually read. `BoardRow` satisfies it structurally;
+ * declaring it separately is what lets the table test drive every rule
+ * without building a whole row.
+ */
+export interface AttentionInputs {
+  status: HypothesisStatus | null;
+  tamper?: Tamper[];
+  attention_count?: number;
+  stale_count?: number;
+  headline: string | null;
+}
+
+/**
+ * § 4's membership table, in order. The first rule that matches wins, which
+ * is what makes a `draft` row carrying tamper NEEDS A HUMAN rather than IN
+ * INTERVIEW.
+ *
+ * 🔴 **This side does NOT filter terminal statuses.** `confirmed`,
+ * `invalidated` and `archived` fall through to `holding` here and are dropped
+ * from the board by `web/`'s client-side status filter (UI design § 3), which
+ * owns that decision and is where `/archive` picks them up. Filtering here
+ * too would be two sides each assuming the other did it — and it would make
+ * `/archive`, which reads the same rows, unable to see them (R138 hand-off 1).
+ *
+ * `attentionRequested` is the third clause of rule 1 and is passed in rather
+ * than read here: it comes from ONE project-wide attention read for the whole
+ * board, not one per hypothesis.
+ */
+export function attentionTierFor(row: AttentionInputs, attentionRequested: boolean): AttentionTier {
+  if (row.status === "challenged" || (row.tamper?.length ?? 0) > 0 || attentionRequested) {
+    return "needs_human";
+  }
+  // `?? 0` here is a COMPARISON default, not a wire default: an absent count
+  // is not > 0, which is the same answer an explicit zero gives. The wire
+  // field stays absent either way — see `BoardRow.attention_count`.
+  if (
+    row.status === "live" &&
+    ((row.attention_count ?? 0) > 0 || (row.stale_count ?? 0) > 0 || row.headline === null)
+  ) {
+    return "watch";
+  }
+  if (row.status === "draft") return "in_interview";
+  return "holding";
+}
+
+/**
+ * Does this open attention request name this hypothesis?
+ *
+ * ONE rule, shared by the board's tier computation and the detail page's
+ * list: the row carries both a worker and a session (`go/agentdb/attention.go`
+ * :55-57), a researcher's ask is attributable by worker, and an interviewer's
+ * ask carries `worker: "interviewer"` and is attributable only by session. A
+ * second copy of this drifts the first time one surface gains a clause.
+ *
+ * ⚠️ **`sessionId !== null` is TYPE NARROWING, not a behavioural defence, and
+ * that rests on an invariant elsewhere.** `mapAttentionRequest` builds
+ * `sessionId` with `strField` (`orange/client.ts:337-340`), which coerces to
+ * `""` at the wire boundary — so `request.sessionId` is a `string` at runtime
+ * whatever Orange sends, and `"" === null` is false. Deleting the clause
+ * changes no answer today, which a mutation confirmed.
+ *
+ * 🔴 It is documented here rather than only in the test because **the day
+ * `strField` stops coercing, this guard becomes load-bearing overnight** and
+ * nothing else would point at it.
+ */
+export function attentionRequestNames(
+  request: { worker: string; sessionId: string },
+  id: string,
+  sessionId: string | null,
+): boolean {
+  return (
+    request.worker === researcherWorkerFor(id) ||
+    (sessionId !== null && request.sessionId === sessionId)
+  );
+}
+
 export interface ConditionsSummary {
   tripped: number;
   holding: number;
@@ -121,6 +211,44 @@ export interface BoardRow {
    */
   headline: string | null;
   tamper?: Tamper[];
+  /**
+   * Optional label carried forward across a re-roll (W27).
+   *
+   * It is on the DETAIL row already; putting it here too is what LETS
+   * `/archive` stop paying one full detail read per terminal row just to draw
+   * the "restated from" lineage (R138 hand-off 2). It costs nothing —
+   * `readBoard` has already resolved it.
+   *
+   * ⚠️ **Present tense would be false today.** `web/src/api/types.ts` does not
+   * yet declare this field on its `BoardRow`, and `web/src/pages/Archive.tsx`
+   * still calls `fetchHypothesis` per terminal row. The server half is what
+   * ships here; the client half is a separate ticket. (R211 class — a
+   * sentence that is behaviourally true of the future and mechanically false
+   * of the present is what a reader debugs against.)
+   */
+  restated_from: string | null;
+  /**
+   * W27. Which section of the board this row belongs to, computed SERVER-SIDE
+   * from the rules pinned in `design/2026-08-24-agent-wolf-ui.md` § 4.
+   *
+   * 🔴 The tier lives in exactly one place, and this is it. `web/`'s
+   * `board/tiers.ts` groups and sorts by this value and never recomputes it —
+   * a second copy in the browser is the same defect class as putting the
+   * go-live validator there.
+   */
+  attention_tier: AttentionTier;
+  /**
+   * How many conditions W10 raised for a human, off `attention=<n>` on the
+   * evaluation memory's line 1.
+   *
+   * 🔴 **ABSENT STAYS ABSENT.** The key is omitted when the evaluation line
+   * carried no token — which is every memory written before the token
+   * existed, and every hypothesis that has never been evaluated. `0` means
+   * "the evaluator looked and raised nothing" and is a different fact.
+   */
+  attention_count?: number;
+  /** How many metrics W4 marked stale, off `stale=<n>`. Same absence rule. */
+  stale_count?: number;
 }
 
 export interface HypothesisDetailRow {
@@ -153,6 +281,19 @@ export interface AttentionRequestRow {
   created_at_sec: UnixSec;
   session_id: string;
   worker: string;
+}
+
+/**
+ * One state change, for W14's timeline (W27, closing R143's second half).
+ *
+ * `id` is the MEMORY id, not the hypothesis id — it is what makes each row
+ * addressable and what stops two transitions at the same millisecond
+ * collapsing into one.
+ */
+export interface StateChangeRow {
+  id: string;
+  status: HypothesisStatus | null;
+  created_at_ms: UnixMs;
 }
 
 export interface HypothesisAtoms {
@@ -241,6 +382,39 @@ export interface HypothesisDetail {
   attention_requests: AttentionRequestRow[];
   atoms: HypothesisAtoms;
   report: ReportBlock;
+  /**
+   * Why W10's poller moved this hypothesis to `challenged` — the `rationale`
+   * it wrote into the state transition, verbatim (R143).
+   *
+   * 🔴 `null` on every non-`challenged` hypothesis, and that is deliberate
+   * rather than incidental. A `confirmed` row's `rationale` is the free text
+   * a HUMAN typed with their verdict; serving it under this name would put a
+   * person's words where the UI renders a machine's reason. That text is on
+   * the `verdict` block already.
+   *
+   * An unrecognised value is passed through verbatim rather than blanked: a
+   * silently empty reason is how a poller change stays invisible.
+   */
+  challenge_reason: string | null;
+  /**
+   * Every trusted `kind=hypothesis` row, newest first — the *plural* W14's
+   * timeline criterion asks for and could not get (R143).
+   *
+   * Forged rows and rows Wolf itself retracted are NOT here; they are on
+   * `hypothesis.tamper`, from the same read.
+   */
+  state_history: StateChangeRow[];
+  /**
+   * `state_history` came back at the store's per-name cap, so there may be
+   * older state rows it does not contain (W27, S3).
+   *
+   * 🔴 Always on the wire, `false` included. An absent flag and "we know this
+   * timeline is complete" are different facts, and W13's fix round already
+   * proved a page renders an absent field as whatever its default happens to
+   * be (R140). A silently short timeline on the page carrying the verdict
+   * controls is a dropped anomaly, which the doctrine forbids.
+   */
+  state_history_truncated: boolean;
 }
 
 // ── Options ─────────────────────────────────────────────────────────────
@@ -658,26 +832,64 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
       const sessions: SessionLookup = new Map(
         records.map((record) => [record.id, record.sessionId]),
       );
-      const [summaries, reports] = await Promise.all([
+      const [summaries, reports, attention] = await Promise.all([
         store.readEvaluationSummaries(sessions),
         store.readReportSummaries(sessions),
+        // ONE project-wide read for the whole board, not one per hypothesis
+        // (UI design § 4 point 3). It is NOT a `latest_per` request — it is
+        // not a memory read at all — so the board's budget is now: three
+        // `latest_per` requests, plus this one attention read, plus one
+        // per-name read per ATTACKED hypothesis (R187).
+        openAttentionRequests(),
       ]);
+      // 🔴 Report DRIFT is deliberately absent from this list. Drift compares
+      // a template's structure hash against a report's slot ids, and both need
+      // FULL-CONTENT reads — two per hypothesis, which is exactly the O(N)
+      // the board's fast path exists to avoid. It stays on the detail page;
+      // `headline === null` on a `live` row is the cheap board-level proxy
+      // (§ 4 point 4).
+      const named = new Set<string>();
+      for (const record of records) {
+        if (attention.some((request) => attentionRequestNames(request, record.id, record.sessionId))) {
+          named.add(record.id);
+        }
+      }
       res
         .status(200)
         .json(
           records.map((record) =>
-            boardRow(record, summaries.get(record.id), reports.get(record.id)),
+            boardRow(record, summaries.get(record.id), reports.get(record.id), named.has(record.id)),
           ),
         );
     })().catch(next);
   });
 
+  /**
+   * Every OPEN attention request in the project, once per board read.
+   *
+   * A board that cannot list attention requests is still a board: the read
+   * degrades to "nobody asked" and is logged, exactly as the detail page's
+   * does. It costs the third clause of rule 1 — a hypothesis whose only
+   * signal was an unanswered question drops out of NEEDS A HUMAN — and it
+   * costs nothing else: `challenged` and tamper are read from memory and are
+   * unaffected.
+   */
+  async function openAttentionRequests(): Promise<AttentionRequestRecord[]> {
+    try {
+      return await client.listAttentionRequests({ state: "open" });
+    } catch (err) {
+      logger.warn({ err }, "board: could not list attention requests — no row is tiered by one");
+      return [];
+    }
+  }
+
   function boardRow(
     record: HypothesisRecord,
     summary: EvaluationSummary | undefined,
     report: ReportSummary | undefined,
+    attentionRequested: boolean,
   ): BoardRow {
-    const row: BoardRow = {
+    const row: Omit<BoardRow, "attention_tier"> = {
       id: record.id,
       // A hypothesis in the session index whose state row is missing (or
       // forged, or hostilely retracted) keeps its place with nulls and its
@@ -701,7 +913,18 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
       // is `null`. A row whose line 1 was blank comes back as `""` and stays
       // `""`.
       headline: report?.headline ?? null,
+      // Already resolved by `readBoard`; serving it here is what LETS
+      // `/archive` stop paying a detail read per terminal row (R138). It has
+      // not stopped yet — `web/` does not read this field. See the field's
+      // docstring above.
+      restated_from: record.restatedFrom,
     };
+    // 🔴 ABSENT STAYS ABSENT. `summary?.attention ?? 0` here would make "this
+    // memory predates the token" indistinguishable from "the evaluator raised
+    // nothing", and W13 renders a zero count as no chip at all — so the bug
+    // would be invisible on the page as well as on the wire.
+    if (summary?.attention !== undefined) row.attention_count = summary.attention;
+    if (summary?.stale !== undefined) row.stale_count = summary.stale;
     // The report read's anomalies join the state row's on the SAME array: a
     // cross-hypothesis report write puts the hypothesis in NEEDS A HUMAN,
     // which is where an attack on what it says belongs, and the detail page
@@ -718,7 +941,10 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
     // it.
     const tamper = mergeTamper(record.tamper, report?.tamper);
     if (tamper !== null) row.tamper = tamper;
-    return row;
+    // Computed LAST, over the assembled row: rule 1 reads the merged tamper
+    // array, so a cross-hypothesis report write has to be on the row before
+    // the tier is decided.
+    return { ...row, attention_tier: attentionTierFor(row, attentionRequested) };
   }
 
   // ── POST /api/hypotheses ──────────────────────────────────────────────
@@ -766,7 +992,10 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
       const id = requireHypothesisId(idParam(req));
       // 404s when the id is not in the session index — the authoritative
       // index of hypotheses is the SESSION LIST, never memory.
-      const record = await store.readHypothesis(id);
+      //
+      // The history rides the SAME per-name read the record comes from: the
+      // older rows were already being fetched and thrown away (W27/R143).
+      const { record, history, historyTruncated } = await store.readHypothesisWithHistory(id);
       const sessions = lookupFor(record);
 
       const [specRows, candidateRows, evaluationRows, verdictRows, noteRows, amendmentRows] =
@@ -829,6 +1058,13 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
         verdict,
         attention_requests: await attentionRequestsFor(id, record.sessionId),
         report: await reportBlockFor(id, sessions),
+        challenge_reason: await challengeReasonFor(record),
+        state_history: history.map((change) => ({
+          id: change.memoryId,
+          status: change.status,
+          created_at_ms: change.createdAtMs,
+        })),
+        state_history_truncated: historyTruncated,
         atoms: {
           session_id: record.sessionId,
           worker: researcherWorkerFor(id),
@@ -1061,6 +1297,42 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
     );
   }
 
+  /**
+   * The `challenged` state row's `rationale`, read in full.
+   *
+   * It cannot come off the snippet: a challenged row's content carries the
+   * whole evaluation snapshot as fenced JSON, so the rationale is far past
+   * the 500 characters the list route returns. The read is paid ONLY for a
+   * challenged hypothesis — see `HypothesisDetail.challenge_reason` for why
+   * the field is gated on the status rather than served for every state.
+   *
+   * 🔴 **It degrades to `null` rather than failing the page**, like every
+   * other read on this handler — the attention list, the schedule list, the
+   * report block. This is the LEAST important field on the page and it sits
+   * on the page carrying the human's verdict controls: letting a transient
+   * Orange failure here take down the spec, the scoreboard, the verdict and
+   * the tamper warnings would trade the whole decision surface for one
+   * sentence. `error` rather than `warn` because, unlike a missing schedule,
+   * a state row Wolf itself wrote and cannot read back is a real fault.
+   *
+   * The UI cannot tell this apart from "the poller recorded no rationale",
+   * and that is the accepted cost: both render the pinned absent-reason
+   * sentence W14 already ships, which is true either way.
+   */
+  async function challengeReasonFor(record: HypothesisRecord): Promise<string | null> {
+    if (record.status !== "challenged" || record.statusMemoryId === null) return null;
+    try {
+      const full = await client.getMemory(record.statusMemoryId);
+      return parseHypothesisContent(full.content).rationale;
+    } catch (err) {
+      logger.error(
+        { id: record.id, memory_id: record.statusMemoryId, err },
+        "detail: could not read the challenged state row — challenge_reason omitted",
+      );
+      return null;
+    }
+  }
+
   function detailRow(record: HypothesisRecord): HypothesisDetailRow {
     const row: HypothesisDetailRow = {
       id: record.id,
@@ -1134,9 +1406,8 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
       logger.warn({ id, err }, "could not list attention requests");
       return [];
     }
-    const worker = researcherWorkerFor(id);
     return rows
-      .filter((row) => row.worker === worker || (sessionId !== null && row.sessionId === sessionId))
+      .filter((row) => attentionRequestNames(row, id, sessionId))
       .map((row) => ({
         id: row.id,
         message: row.message,

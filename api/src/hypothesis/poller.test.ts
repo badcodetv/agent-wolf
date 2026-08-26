@@ -12,7 +12,12 @@ import {
 import { createLogger } from "../logger.js";
 import { loadConfig } from "../config.js";
 import { createOrangeClient, type OrangeClient } from "../orange/client.js";
-import { createHypothesisStore, slugifyOwner, type HypothesisStore } from "./store.js";
+import {
+  createHypothesisStore,
+  evaluationLineWithoutTimestamp,
+  slugifyOwner,
+  type HypothesisStore,
+} from "./store.js";
 import { researcherWorkerFor } from "./provision.js";
 import {
   ATTENTION_RUN_LENGTH,
@@ -703,6 +708,120 @@ describe("poller_evaluation_memory", () => {
   });
 });
 
+// ── Staleness on line 1 (W27) ───────────────────────────────────────────
+
+/**
+ * `SPEC` plus a SECOND metric, `hedge`, that no condition mentions.
+ *
+ * 🔴 That is the point of the fixture. With one metric and one condition on
+ * it, a stale series also makes its condition `indeterminate` (`evaluate.ts`
+ * :396), so `stale=<n>` would carry nothing `indeterminate=<n>` does not
+ * already say. A metric NOTHING is conditioned on can go stale while every
+ * condition stays determinate — the board learns "half the evidence stopped
+ * arriving" from a line that otherwise reads as perfectly healthy.
+ */
+const SPEC_TWO_METRICS = {
+  ...SPEC,
+  metrics: [
+    // 0.9 / 0.1, not 1.0 / 1.0: V13 requires the weights to sum to 1.0, and
+    // V27 requires any metric weighing >= 0.25 to be named by a condition —
+    // so "a metric no condition mentions" is only a legal spec below that
+    // floor. That is the shape this test needs, and it is a real one.
+    { ...SPEC.metrics[0]!, weight: 0.9 },
+    { slug: "hedge", source: "stooq", series_id: "gld.us", direction: "up", weight: 0.1, unit: "USD" },
+  ],
+};
+const HEDGE_DATASET = `${ID}-hedge`;
+/** Two observations 10% up, both older than `staleness_days: 5` at NOW_MS. */
+const CSV_STALE = "timestamp,value\n2026-08-01T00:00:00Z,100\n2026-08-05T00:00:00Z,110\n";
+
+function twoMetricHypothesis(hedgeCsv: string): StubConfig {
+  return {
+    memories: [stateRow(ID, "live", LIVE_AT_MS), lockedSpec(ID, SPEC_TWO_METRICS)],
+    sessions: [hypSession(ID)],
+    datasets: {
+      [DATASET]: { version: 1, csv: CSV_HOLDING },
+      [HEDGE_DATASET]: { version: 1, csv: hedgeCsv },
+    },
+  };
+}
+
+describe("poller_stale_token", () => {
+  it("poller_stale_token: a stale metric NO condition mentions still puts ` stale=<n>` on line 1", async () => {
+    // Staleness lives in `metrics[].stale`, inside the JSON BODY, and the
+    // board reads only the 500-byte snippet — so without this token the board
+    // cannot see it at all. And it has to be on LINE 1 specifically: the
+    // memory is written only when line 1 changes, so a signal put anywhere
+    // else has its own write suppressed.
+    const h = harness(twoMetricHypothesis(CSV_STALE));
+    await h.poller.tick();
+
+    const { line, snapshot } = appendedEvaluation(h.stub);
+    expect(line).toBe(
+      "score=1.00 tripped=0 holding=1 indeterminate=0 evaluated=2026-08-20T00:00:00Z stale=1",
+    );
+    // 🔴 The condition tally says nothing is wrong. `stale=1` is the only
+    // token on this line carrying the fact that a series stopped updating.
+    expect(line).toContain("indeterminate=0");
+    // The token reports what W4 decided — it is not a second staleness rule.
+    const metrics = snapshot["metrics"] as { slug: string; stale: boolean }[];
+    expect(metrics.find((m) => m.slug === "hedge")?.stale).toBe(true);
+    expect(metrics.find((m) => m.slug === "basket")?.stale).toBe(false);
+    expect(line).not.toContain("attention=");
+    expect(snapshot["attention"]).toBeUndefined();
+  });
+
+  it("poller_stale_token: a FRESH second metric puts no stale token on line 1 at all", async () => {
+    // The twin of the case above — same spec, same conditions, same basket
+    // series — differing only in the hedge series' observation dates, so the
+    // assertion lists match line for line and staleness is the only thing
+    // that can move the result.
+    const h = harness(twoMetricHypothesis(CSV_HOLDING));
+    await h.poller.tick();
+
+    const { line, snapshot } = appendedEvaluation(h.stub);
+    expect(line).toBe(
+      "score=1.00 tripped=0 holding=1 indeterminate=0 evaluated=2026-08-20T00:00:00Z",
+    );
+    expect(line).toContain("indeterminate=0");
+    const metrics = snapshot["metrics"] as { slug: string; stale: boolean }[];
+    expect(metrics.find((m) => m.slug === "hedge")?.stale).toBe(false);
+    expect(metrics.find((m) => m.slug === "basket")?.stale).toBe(false);
+    expect(line).not.toContain("attention=");
+    expect(snapshot["attention"]).toBeUndefined();
+  });
+
+  it("poller_stale_token: a metric GOING stale is a change to line 1, so the write LANDS", async () => {
+    // The justification for putting the token on line 1, executed rather than
+    // asserted in prose: the append rule compares line 1 minus the clock, so a
+    // signal that is not on it has the write that carries it suppressed as
+    // "nothing changed" — and the board would never learn.
+    const stub = twoMetricHypothesis(CSV_HOLDING);
+    const h = harness(stub);
+    await h.poller.tick();
+    expect(h.stub.appendedWith("evaluation")).toHaveLength(1);
+
+    stub.datasets![HEDGE_DATASET] = { version: 2, csv: CSV_STALE };
+    h.setNow(NOW_MS + HOUR_MS);
+    await h.poller.tick();
+
+    expect(h.stub.appendedWith("evaluation")).toHaveLength(2);
+    const first = appendedEvaluation(h.stub, 0).line;
+    const second = appendedEvaluation(h.stub, 1).line;
+    expect(first).toBe(
+      "score=1.00 tripped=0 holding=1 indeterminate=0 evaluated=2026-08-20T00:00:00Z",
+    );
+    expect(second).toBe(
+      "score=1.00 tripped=0 holding=1 indeterminate=0 evaluated=2026-08-20T01:00:00Z stale=1",
+    );
+    // Every token but the clock and `stale=` is byte-identical, which is what
+    // makes this a test of the token rather than of the score moving.
+    expect(evaluationLineWithoutTimestamp(second)).toBe(
+      `${evaluationLineWithoutTimestamp(first)} stale=1`,
+    );
+  });
+});
+
 // ── Attention ───────────────────────────────────────────────────────────
 
 /** A stored `kind=evaluation` row whose condition `inv-1` is indeterminate. */
@@ -768,7 +887,14 @@ describe("poller_attention", () => {
     // would be suppressed by the very rule that keeps a quiet hypothesis to
     // one row a day.
     expect(line).toContain("indeterminate=1");
-    expect(line.endsWith(" attention=1")).toBe(true);
+    // 🔴 The whole line, not `endsWith(" attention=1")` — W27 appends a
+    // SECOND optional token after it, and an `endsWith` assertion on the
+    // first one would have to be rewritten by every future extension. This
+    // metric has no observations at all, so W4 marks it stale and both
+    // tokens ride the same line, in the order the formatter pins.
+    expect(line).toBe(
+      "score=0.00 tripped=0 holding=0 indeterminate=1 evaluated=2026-08-20T00:00:00Z attention=1 stale=1",
+    );
     expect(snapshot["attention"]).toEqual([
       { condition_id: "inv-1", reason: "no_observations", since_ms: NOW_MS - 48 * HOUR_MS },
     ]);

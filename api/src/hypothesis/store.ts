@@ -434,6 +434,18 @@ export interface EvaluationSummaryLine {
   indeterminate: number;
   /** `evaluated=<RFC3339>` converted to unix ms. */
   evaluatedAtMs: UnixMs;
+  /**
+   * `attention=<n>` — how many conditions W10 raised for a human (W27).
+   *
+   * 🔴 **ABSENT STAYS ABSENT.** The key is not set at all when the token is
+   * missing, and is NEVER defaulted to `0`: `0` is "the evaluator looked and
+   * raised nothing", absence is "this memory was written before the token
+   * existed and nobody looked". The board renders those differently, so the
+   * parser keeps them different.
+   */
+  attention?: number;
+  /** `stale=<n>` — how many metrics W4 marked stale. Same absence rule (W27). */
+  stale?: number;
 }
 
 /** One board row's evaluation, with the memory it was read from. */
@@ -487,13 +499,25 @@ export function parseEvaluationSummaryLine(line: string): EvaluationSummaryLine 
   if (tripped === null || holding === null || indeterminate === null) return null;
   const evaluatedAtMs = Date.parse(found.get("evaluated") ?? "");
   if (!Number.isFinite(evaluatedAtMs)) return null;
-  return {
+  const parsed: EvaluationSummaryLine = {
     supportScore: score,
     tripped,
     holding,
     indeterminate,
     evaluatedAtMs: evaluatedAtMs as UnixMs,
   };
+  // W27's two optional readings. A malformed value is treated exactly as an
+  // unrecognised token is — ignored — rather than failing the whole line: one
+  // bad write must not blank a board row that has five good numbers on it.
+  //
+  // 🔴 The key is set only when a count was actually read. Writing
+  // `attention: parseCount(...) ?? 0` here is the defect this whole field
+  // exists to avoid.
+  const attention = parseCount(found.get("attention"));
+  if (attention !== null) parsed.attention = attention;
+  const stale = parseCount(found.get("stale"));
+  if (stale !== null) parsed.stale = stale;
+  return parsed;
 }
 
 // ── Writing the evaluation memory (W10) ─────────────────────────────────
@@ -582,6 +606,17 @@ export function formatEvaluationSummaryLine(input: {
   evaluatedAtMs: UnixMs;
   /** Omitted, or 0, when nothing is raised: no token is emitted. */
   attention?: number;
+  /**
+   * How many metrics W4 marked stale. Omitted, or 0, when none are: no token
+   * is emitted (W27).
+   *
+   * Emitting `stale=0` would be worse than emitting nothing — every one of
+   * the ~1600 evaluation memories written before this token existed would
+   * then read as a DIFFERENT line from an identical evaluation written after
+   * it, and the "append only when line 1 changes" rule would fire one extra
+   * row per hypothesis on the first tick after deploy.
+   */
+  stale?: number;
 }): string {
   // `-0` prints as "0.00" through toFixed, which is what we want: a score of
   // negative zero is zero, and the JSON body carries the exact value anyway.
@@ -596,7 +631,27 @@ export function formatEvaluationSummaryLine(input: {
   if (input.attention !== undefined && input.attention > 0) {
     parts.push(`attention=${input.attention}`);
   }
+  // Independent of `attention`: a hypothesis can be stale with every
+  // condition determinate, and that is exactly the case the board's WATCH
+  // tier exists to show.
+  if (input.stale !== undefined && input.stale > 0) {
+    parts.push(`stale=${input.stale}`);
+  }
   return parts.join(" ");
+}
+
+/**
+ * How many of an evaluation's metrics W4 marked stale (W27).
+ *
+ * 🔴 W4's `metrics[].stale` is the ONE authority on staleness (UI design § 5,
+ * "One source of truth for staleness — a defect this design surfaces"). This
+ * does not recompute it from `last_observation_ms` and a clock; it counts
+ * what the evaluator already decided. A second definition disagrees with the
+ * first the moment the series route returns points newer than the last
+ * evaluation.
+ */
+export function countStaleMetrics(evaluation: EvaluationResult): number {
+  return evaluation.metrics.filter((metric) => metric.stale).length;
 }
 
 /** The summary line for a whole snapshot — the one call site both the writer
@@ -608,6 +663,10 @@ export function evaluationSummaryLine(snapshot: EvaluationSnapshot): string {
     ...tally,
     evaluatedAtMs: toMs(snapshot.evaluated_at_ms),
     attention: snapshot.attention?.length ?? 0,
+    // Derived HERE rather than at the poller's call site, so the writer and
+    // its tests cannot disagree about the count — the same argument that put
+    // `tallyConditions` on this line.
+    stale: countStaleMetrics(snapshot),
   });
 }
 
@@ -1007,6 +1066,49 @@ export interface HypothesisRecord {
   tamper?: Tamper[];
 }
 
+/**
+ * One `kind=hypothesis` state row, reduced to what a timeline needs (W27,
+ * closing half of **R143**).
+ *
+ * The detail projection has always served the CURRENT state row — one
+ * `status`, one `status_memory_id`, one `updated_at_ms` — so W14's criterion
+ * *"`Timeline` renders **state changes** from the `hypothesis` memories"*,
+ * plural, had nothing to render. These are those rows.
+ *
+ * Untrusted rows and rows Wolf itself retracted are NOT here: a timeline is a
+ * record of what happened, and a forgery is not a state change. Both are
+ * already reported as `tamper` on the same read, so nothing is hidden — it is
+ * reported on the channel that says "attack" rather than on the one that says
+ * "history".
+ */
+export interface StateChange {
+  memoryId: string;
+  /** `null` when the row's `status` label is not one of the six. */
+  status: HypothesisStatus | null;
+  createdAtMs: UnixMs;
+}
+
+/** One hypothesis and its state-change history, from ONE per-name read. */
+export interface HypothesisRead {
+  record: HypothesisRecord;
+  /** Newest first, the same order Orange returns and the timeline renders. */
+  history: StateChange[];
+  /**
+   * The per-name read came back FULL, so there may be older state rows this
+   * history does not contain (W27, S3).
+   *
+   * 🔴 Measured on the rows READ, never on the rows that survived: Wolf
+   * rejects forged and self-retracted rows after the read, so a page that
+   * came back short was not capped however few rows are left.
+   *
+   * It over-reports at the exact boundary — a full page is not proof there is
+   * a next one, and only Orange knows — which is the same rule W32's session
+   * walk applies, and the right way round: claiming a complete timeline we
+   * cannot verify is the worse error on a page a human decides from.
+   */
+  historyTruncated: boolean;
+}
+
 // ── The report layer's reads (W15) ──────────────────────────────────────
 
 /**
@@ -1137,6 +1239,14 @@ export interface HypothesisStore {
   /** One hypothesis, always with `include_retracted=1`. */
   readHypothesis(id: string, options?: ReadOptions): Promise<HypothesisRecord>;
   /**
+   * The same read, plus every trusted state row underneath the current one
+   * (W27). It costs NO extra request: `readHypothesis` already pulls the
+   * per-name page and then throws the older rows away.
+   *
+   * Bounded by `DETAIL_LIMIT`, and says so — see `historyTruncated`.
+   */
+  readHypothesisWithHistory(id: string, options?: ReadOptions): Promise<HypothesisRead>;
+  /**
    * The board's SECOND `latest_per` request: the newest trusted
    * `kind=evaluation` row per hypothesis, reduced to its summary line. One
    * request for the whole board, whatever the hypothesis count.
@@ -1217,7 +1327,23 @@ export interface CreateHypothesisStoreOptions {
 
 /** The board's one-request fast path. `limit=100` is the plan's number. */
 const BOARD_LIMIT = 100;
-/** The per-name follow-up. */
+/**
+ * The per-name follow-up.
+ *
+ * 🔴 **Since W27 this is also the timeline's depth**, and that is a change in
+ * what the number means rather than in the number. It was harmless while only
+ * the NEWEST surviving row mattered — every row past the first was read and
+ * discarded — but `readHypothesisWithHistory` now serves the whole page, so 50
+ * is a cap on how much of a hypothesis's history the detail page can show.
+ *
+ * It is kept at 50 and **REPORTED** (`HypothesisRead.historyTruncated`) rather
+ * than raised. Raising it would move the cliff without removing it, and would
+ * also enlarge every board anomaly follow-up, which reads through the same
+ * function and needs only the newest row. Reporting it is what satisfies the
+ * standing doctrine that an anomaly is RENDERED, never dropped — the same
+ * reasoning that keeps `BOARD_LIMIT` from being raised in place of being
+ * exercised (R190).
+ */
 const DETAIL_LIMIT = 50;
 
 /**
@@ -1401,8 +1527,9 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
     entry: SessionIndexEntry,
     rows: readonly MemorySearchResultRow[],
     sessions: SessionLookup,
-  ): { record: MutableRecord; settled: boolean } {
+  ): { record: MutableRecord; settled: boolean; history: StateChange[] } {
     const record = blankRecord(entry);
+    const history: StateChange[] = [];
     let settled = false;
     for (const row of rows) {
       if (row.labels["name"] !== entry.id) continue; // not this hypothesis
@@ -1420,12 +1547,21 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
         }
       }
       if (withdrawnByWolf) continue; // Wolf took this back; keep looking older
+      // Every row that SURVIVED the two rules above is a state change, not
+      // only the newest one. The board calls this with a single row and
+      // discards the history; the detail read is what serves it (R143).
+      const status = row.labels["status"];
+      history.push({
+        memoryId: row.id,
+        status: isHypothesisStatus(status) ? status : null,
+        createdAtMs: row.createdAtMs,
+      });
       if (!settled) {
         applyRow(record, row);
         settled = true;
       }
     }
-    return { record, settled };
+    return { record, settled, history };
   }
 
   async function readDetailRows(id: string): Promise<MemorySearchResultRow[]> {
@@ -1516,14 +1652,27 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
     return records;
   }
 
-  async function readHypothesis(id: string, opts?: ReadOptions): Promise<HypothesisRecord> {
+  async function readHypothesisWithHistory(id: string, opts?: ReadOptions): Promise<HypothesisRead> {
     const index = await readSessionIndex(opts);
     const entry = index.get(id);
     if (entry === undefined) {
       throw new WolfError("not_found", `no hypothesis ${id}`, { details: { id } });
     }
     const rows = await readDetailRows(id);
-    return resolveFromRows(entry, rows, index).record;
+    const resolved = resolveFromRows(entry, rows, index);
+    return {
+      record: resolved.record,
+      history: resolved.history,
+      // Off `rows`, the page Orange returned — NOT off `resolved.history`,
+      // which is what is left after the forged and self-retracted rows are
+      // dropped. Testing the survivors would report truncation whenever an
+      // attack happened to remove enough rows.
+      historyTruncated: rows.length >= DETAIL_LIMIT,
+    };
+  }
+
+  async function readHypothesis(id: string, opts?: ReadOptions): Promise<HypothesisRecord> {
+    return (await readHypothesisWithHistory(id, opts)).record;
   }
 
   async function readEvaluationSummaries(
@@ -1926,6 +2075,7 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
     readSessionIndex,
     readBoard,
     readHypothesis,
+    readHypothesisWithHistory,
     readEvaluationSummaries,
     readReportSummaries,
     readTemplate,
