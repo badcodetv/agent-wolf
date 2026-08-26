@@ -160,6 +160,17 @@ export function attentionTierFor(row: AttentionInputs, attentionRequested: boole
  * :55-57), a researcher's ask is attributable by worker, and an interviewer's
  * ask carries `worker: "interviewer"` and is attributable only by session. A
  * second copy of this drifts the first time one surface gains a clause.
+ *
+ * ⚠️ **`sessionId !== null` is TYPE NARROWING, not a behavioural defence, and
+ * that rests on an invariant elsewhere.** `mapAttentionRequest` builds
+ * `sessionId` with `strField` (`orange/client.ts:337-340`), which coerces to
+ * `""` at the wire boundary — so `request.sessionId` is a `string` at runtime
+ * whatever Orange sends, and `"" === null` is false. Deleting the clause
+ * changes no answer today, which a mutation confirmed.
+ *
+ * 🔴 It is documented here rather than only in the test because **the day
+ * `strField` stops coercing, this guard becomes load-bearing overnight** and
+ * nothing else would point at it.
  */
 export function attentionRequestNames(
   request: { worker: string; sessionId: string },
@@ -393,6 +404,17 @@ export interface HypothesisDetail {
    * `hypothesis.tamper`, from the same read.
    */
   state_history: StateChangeRow[];
+  /**
+   * `state_history` came back at the store's per-name cap, so there may be
+   * older state rows it does not contain (W27, S3).
+   *
+   * 🔴 Always on the wire, `false` included. An absent flag and "we know this
+   * timeline is complete" are different facts, and W13's fix round already
+   * proved a page renders an absent field as whatever its default happens to
+   * be (R140). A silently short timeline on the page carrying the verdict
+   * controls is a dropped anomaly, which the doctrine forbids.
+   */
+  state_history_truncated: boolean;
 }
 
 // ── Options ─────────────────────────────────────────────────────────────
@@ -973,7 +995,7 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
       //
       // The history rides the SAME per-name read the record comes from: the
       // older rows were already being fetched and thrown away (W27/R143).
-      const { record, history } = await store.readHypothesisWithHistory(id);
+      const { record, history, historyTruncated } = await store.readHypothesisWithHistory(id);
       const sessions = lookupFor(record);
 
       const [specRows, candidateRows, evaluationRows, verdictRows, noteRows, amendmentRows] =
@@ -1042,6 +1064,7 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
           status: change.status,
           created_at_ms: change.createdAtMs,
         })),
+        state_history_truncated: historyTruncated,
         atoms: {
           session_id: record.sessionId,
           worker: researcherWorkerFor(id),

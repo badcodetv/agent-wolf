@@ -939,6 +939,131 @@ describe("store_state_history", () => {
     expect(record.tamper).toBeUndefined();
   });
 
+  // ── The cap the timeline inherited (S3) ──────────────────────────────
+  //
+  // 🔴 `readDetailRows` has always read `limit: DETAIL_LIMIT`. That was
+  // harmless while only the NEWEST surviving row mattered — every row past the
+  // first was read and thrown away. W27 changed what the read is FOR: the same
+  // rows are now the whole timeline, so the cap became a silent truncation of
+  // history on the page carrying the verdict controls, against the standing
+  // doctrine that an anomaly is RENDERED, never dropped.
+  //
+  // The cap is kept and REPORTED rather than raised — see `historyTruncated`.
+
+  function manyStateRows(n: number): string {
+    // Newest first, exactly as Orange returns them.
+    return JSON.stringify({
+      memories: Array.from({ length: n }, (_, i) => ({
+        id: `state-${String(n - i).padStart(3, "0")}`,
+        labels: { kind: "hypothesis", name: "1a2b3c4d", owner: "kai-at-badcode.dev", status: i === 0 ? "live" : "draft" },
+        snippet: "The petrodollar is ending because of drone warfare\n\nthe thesis",
+        score: 0,
+        created_by_worker: "",
+        created_by_session: "",
+        created_at: 1787334046842 - i,
+      })),
+    });
+  }
+
+  it("store_state_history: a hypothesis with MORE state rows than the cap reports the truncation", async () => {
+    // 60 rows, a cap of 50: ten transitions are not on the timeline and the
+    // reader has to be told, because "no rows before June" and "we stopped
+    // looking at June" are different facts and only one of them is history.
+    const { store } = harness({ ...TAMPERED, details: { ...TAMPERED.details, "1a2b3c4d": manyStateRows(60) } });
+    const { history, historyTruncated } = await store.readHypothesisWithHistory("1a2b3c4d");
+
+    expect(history).toHaveLength(50);
+    expect(historyTruncated).toBe(true);
+    // Named, not counted: the newest 50 by the order Orange returned, so the
+    // truncation is at the OLD end where it belongs.
+    expect(history[0]?.memoryId).toBe("state-060");
+    expect(history[49]?.memoryId).toBe("state-011");
+    expect(history[0]?.status).toBe("live");
+  });
+
+  it("store_state_history: a hypothesis with FEWER state rows than the cap reports no truncation", async () => {
+    // The twin, assertion for assertion, one row under the boundary.
+    const { store } = harness({ ...TAMPERED, details: { ...TAMPERED.details, "1a2b3c4d": manyStateRows(49) } });
+    const { history, historyTruncated } = await store.readHypothesisWithHistory("1a2b3c4d");
+
+    expect(history).toHaveLength(49);
+    expect(historyTruncated).toBe(false);
+    expect(history[0]?.memoryId).toBe("state-049");
+    expect(history[48]?.memoryId).toBe("state-001");
+    expect(history[0]?.status).toBe("live");
+  });
+
+  it("store_state_history: EXACTLY the cap reports truncation, because a full page is not proof there is no next one", async () => {
+    // 🔴 The boundary, and it over-reports deliberately — the same rule W32's
+    // session walk applies: a full page is not evidence that nothing follows,
+    // and only Orange knows. Claiming a complete timeline we cannot verify is
+    // the worse of the two errors on a page a human decides from.
+    const { store } = harness({ ...TAMPERED, details: { ...TAMPERED.details, "1a2b3c4d": manyStateRows(50) } });
+    const { history, historyTruncated } = await store.readHypothesisWithHistory("1a2b3c4d");
+
+    expect(history).toHaveLength(50);
+    expect(historyTruncated).toBe(true);
+    expect(history[0]?.memoryId).toBe("state-050");
+    expect(history[49]?.memoryId).toBe("state-001");
+    expect(history[0]?.status).toBe("live");
+  });
+
+  it("store_state_history: truncation is reported off the ROWS READ, not off the rows that SURVIVED", async () => {
+    // 🔴 The distinction that makes the flag honest, and an ATTACK on it.
+    //
+    // A mutation caught this test passing for the wrong reason: my first
+    // version used fixtures where every row read also survived, so
+    // `rows.length` and `history.length` were the same number and
+    // `history.length >= DETAIL_LIMIT` passed identically. The case that
+    // discriminates is a page that came back FULL while enough of it was
+    // rejected to put the survivors under the cap.
+    //
+    // It is also the case an attacker would build: padding a hypothesis's
+    // per-name page with forged rows pushes real history off the end AND, on
+    // the survivor-counting implementation, hides the fact that it did.
+    const rows = JSON.parse(manyStateRows(50)) as {
+      memories: Record<string, unknown>[];
+    };
+    for (let i = 10; i < 50; i += 1) {
+      // Written inside a container: untrusted, dropped, and NOT history.
+      rows.memories[i]!["created_by_worker"] = "researcher-1a2b3c4d";
+      rows.memories[i]!["created_by_session"] = "sess-tick";
+    }
+    const { store } = harness({
+      ...TAMPERED,
+      details: { ...TAMPERED.details, "1a2b3c4d": JSON.stringify(rows) },
+    });
+    const { record, history, historyTruncated } = await store.readHypothesisWithHistory("1a2b3c4d");
+
+    // Ten survivors out of a FULL page of fifty.
+    expect(history).toHaveLength(10);
+    // 🔴 Still truncated. `history.length >= DETAIL_LIMIT` would say false.
+    expect(historyTruncated).toBe(true);
+    // NAMED, not counted — the sibling assertions the three boundary cases
+    // above carry and this pair did not. `toHaveLength(10)` alone is
+    // satisfied by the wrong ten, and the wrong ten is exactly what a
+    // padding attack produces.
+    expect(history[0]?.memoryId).toBe("state-050");
+    expect(history[9]?.memoryId).toBe("state-041");
+    expect(history[0]?.status).toBe("live");
+    // And the rejects are on the tamper channel, not silently gone.
+    expect(tamperOf(record, "forged_row").length).toBeGreaterThan(0);
+  });
+
+  it("store_state_history: a SHORT page is not truncated however many rows Wolf rejected", async () => {
+    // The twin, and the other direction: `TAMPERED`'s `2b3c4d5e` has a forged
+    // row filtered out, so the survivors are fewer than the rows read — but
+    // the page came back short, so nothing was capped.
+    const { store } = harness(TAMPERED);
+    const { record, history, historyTruncated } = await store.readHypothesisWithHistory("2b3c4d5e");
+
+    expect(history).toHaveLength(1);
+    expect(historyTruncated).toBe(false);
+    expect(history[0]?.memoryId).toBe("26df4f21-b826-499c-90c3-81e9c7e89988");
+    expect(history[0]?.status).toBe("live");
+    expect(tamperOf(record, "forged_row").length).toBeGreaterThan(0);
+  });
+
   it("store_state_history: `readHypothesis` still answers with the record alone, unchanged", async () => {
     // The narrow read is what the transition machine and the poller call, and
     // it must not have grown a shape.

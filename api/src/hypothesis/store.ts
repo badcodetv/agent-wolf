@@ -1093,6 +1093,20 @@ export interface HypothesisRead {
   record: HypothesisRecord;
   /** Newest first, the same order Orange returns and the timeline renders. */
   history: StateChange[];
+  /**
+   * The per-name read came back FULL, so there may be older state rows this
+   * history does not contain (W27, S3).
+   *
+   * 🔴 Measured on the rows READ, never on the rows that survived: Wolf
+   * rejects forged and self-retracted rows after the read, so a page that
+   * came back short was not capped however few rows are left.
+   *
+   * It over-reports at the exact boundary — a full page is not proof there is
+   * a next one, and only Orange knows — which is the same rule W32's session
+   * walk applies, and the right way round: claiming a complete timeline we
+   * cannot verify is the worse error on a page a human decides from.
+   */
+  historyTruncated: boolean;
 }
 
 // ── The report layer's reads (W15) ──────────────────────────────────────
@@ -1228,6 +1242,8 @@ export interface HypothesisStore {
    * The same read, plus every trusted state row underneath the current one
    * (W27). It costs NO extra request: `readHypothesis` already pulls the
    * per-name page and then throws the older rows away.
+   *
+   * Bounded by `DETAIL_LIMIT`, and says so — see `historyTruncated`.
    */
   readHypothesisWithHistory(id: string, options?: ReadOptions): Promise<HypothesisRead>;
   /**
@@ -1311,7 +1327,23 @@ export interface CreateHypothesisStoreOptions {
 
 /** The board's one-request fast path. `limit=100` is the plan's number. */
 const BOARD_LIMIT = 100;
-/** The per-name follow-up. */
+/**
+ * The per-name follow-up.
+ *
+ * 🔴 **Since W27 this is also the timeline's depth**, and that is a change in
+ * what the number means rather than in the number. It was harmless while only
+ * the NEWEST surviving row mattered — every row past the first was read and
+ * discarded — but `readHypothesisWithHistory` now serves the whole page, so 50
+ * is a cap on how much of a hypothesis's history the detail page can show.
+ *
+ * It is kept at 50 and **REPORTED** (`HypothesisRead.historyTruncated`) rather
+ * than raised. Raising it would move the cliff without removing it, and would
+ * also enlarge every board anomaly follow-up, which reads through the same
+ * function and needs only the newest row. Reporting it is what satisfies the
+ * standing doctrine that an anomaly is RENDERED, never dropped — the same
+ * reasoning that keeps `BOARD_LIMIT` from being raised in place of being
+ * exercised (R190).
+ */
 const DETAIL_LIMIT = 50;
 
 /**
@@ -1628,7 +1660,15 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
     }
     const rows = await readDetailRows(id);
     const resolved = resolveFromRows(entry, rows, index);
-    return { record: resolved.record, history: resolved.history };
+    return {
+      record: resolved.record,
+      history: resolved.history,
+      // Off `rows`, the page Orange returned — NOT off `resolved.history`,
+      // which is what is left after the forged and self-retracted rows are
+      // dropped. Testing the survivors would report truncation whenever an
+      // attack happened to remove enough rows.
+      historyTruncated: rows.length >= DETAIL_LIMIT,
+    };
   }
 
   async function readHypothesis(id: string, opts?: ReadOptions): Promise<HypothesisRecord> {

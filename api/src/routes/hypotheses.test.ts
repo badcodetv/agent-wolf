@@ -378,9 +378,6 @@ function perNameSelectors(stub: Stub): string[] {
     .filter((r) => r.path.startsWith("/agent/memories?") && !r.path.includes("latest_per="))
     .map((r) => new URL(r.path, ORANGE).searchParams.get("selector") ?? "");
 }
-function perNameReads(stub: Stub): string[] {
-  return perNameSelectors(stub);
-}
 /** Every `GET /agent/memories/{id}` — the FULL-CONTENT read drift would need. */
 function fullContentReads(stub: Stub): string[] {
   return stub.requests
@@ -903,7 +900,7 @@ describe("hypotheses_board", () => {
     expect(attentionReads).toHaveLength(1);
     expect(attentionReads[0]!.path).toContain("state=open");
     // And nothing attacked, so no per-name memory read at all.
-    expect(perNameReads(h.stub)).toEqual([]);
+    expect(perNameSelectors(h.stub)).toEqual([]);
   });
 
   it("hypotheses_board: the per-name reads are one per ATTACKED hypothesis, and nothing else grows with the count", async () => {
@@ -1134,6 +1131,10 @@ describe("hypotheses_board", () => {
     expect(res.status).toBe(200);
     expect(res.json).toHaveLength(12);
     const byId = new Map<string, any>(res.json.map((r: any) => [r.id, r]));
+    // One read attempted, and it failed — so the degradation is what is
+    // being observed, not a read that never happened. (Levelled against the
+    // working-read twin below, which asserts the same count.)
+    expect(h.stub.requests.filter((r) => r.path.startsWith("/agent/attention-requests"))).toHaveLength(1);
     // The cost: the row whose ONLY signal was that question drops out of
     // NEEDS A HUMAN.
     expect(byId.get(ids[1]!)!.attention_tier).toBe("holding");
@@ -1164,6 +1165,7 @@ describe("hypotheses_board", () => {
 
     expect(res.status).toBe(200);
     expect(res.json).toHaveLength(12);
+    expect(h.stub.requests.filter((r) => r.path.startsWith("/agent/attention-requests"))).toHaveLength(1);
     const byId = new Map<string, any>(res.json.map((r: any) => [r.id, r]));
     expect(byId.get(ids[1]!)!.attention_tier).toBe("needs_human");
     expect(byId.get(ids[0]!)!.attention_tier).toBe("needs_human");
@@ -1749,6 +1751,7 @@ describe("hypotheses_detail", () => {
         // a block from the payload.
         "challenge_reason",
         "state_history",
+        "state_history_truncated",
       ].sort(),
     );
   });
@@ -1785,6 +1788,13 @@ describe("hypotheses_detail", () => {
     // conditions, which is actively wrong for a horizon-challenged hypothesis
     // whose conditions trip afterwards.
     expect(res.json.hypothesis.status).toBe("challenged");
+    // The sibling assertion its two twins below carry, and the one this case
+    // — the FIRST of the three — was missing. ⚠️ Worth noting which half was
+    // thin: the rule says look at the case written SECOND, and here the gap
+    // was in the case written first, which is why my own diff walked past it.
+    // A group sweep has to compare every member against every other, not the
+    // newest against the oldest (R222).
+    expect(fullContentReads(h.stub)).toContain(`/agent/memories/state-${ID}`);
   });
 
   /**
@@ -1978,6 +1988,66 @@ describe("hypotheses_detail", () => {
     // It costs no extra request: the per-name page was already read, and the
     // older rows were being thrown away.
     expect(perNameSelectors(h.stub).filter((sel) => sel === `kind=hypothesis,name=${ID}`)).toHaveLength(1);
+  });
+
+  it("hypotheses_detail: a CAPPED state history says so on the wire, so the truncation can be rendered", async () => {
+    // 🔴 S3. A truncation nobody can see is still a dropped anomaly. The store
+    // detects it; this is the half that gets it to the page.
+    const stub = baseStub();
+    const rows = Array.from({ length: 60 }, (_, i) => ({
+      ...stateRow(ID, i === 0 ? "challenged" : "draft", "Copper is the new oil", 1787334047000 - i),
+      id: `state-${String(60 - i).padStart(3, "0")}`,
+    }));
+    stub.board = page([rows[0]!]);
+    stub.details![`hypothesis:${ID}`] = page(rows);
+    stub.memoriesById = {
+      "state-060": JSON.stringify({
+        id: "state-060", labels: { kind: "hypothesis", name: ID, status: "challenged" },
+        content: "Copper is the new oil\n\nthe thesis",
+        created_by_worker: "", created_by_session: "", created_at: 1787334047000,
+      }),
+    };
+    const h = await harness(stub);
+    const res = await get(h, `/api/hypotheses/${ID}`);
+
+    expect(res.status).toBe(200);
+    expect(res.json.state_history_truncated).toBe(true);
+    expect(res.json.state_history).toHaveLength(50);
+    // Named, so the cut is at the OLD end: the newest survives, the oldest is
+    // what went.
+    expect(res.json.state_history[0].id).toBe("state-060");
+    expect(res.json.state_history[49].id).toBe("state-011");
+    expect(res.json.hypothesis.status).toBe("challenged");
+  });
+
+  it("hypotheses_detail: an UNCAPPED state history says so too — the flag is always on the wire", async () => {
+    // The twin, assertion for assertion. `false` has to be served, not
+    // omitted: an absent flag and "we know it is complete" are different
+    // facts, and W13's fix round already proved a page will render an absent
+    // field as whatever its default happens to be (R140).
+    const stub = baseStub();
+    const rows = [
+      { ...stateRow(ID, "challenged", "Copper is the new oil", 1787334049000), id: "state-002" },
+      { ...stateRow(ID, "draft", "Copper is the new oil", 1787334047000), id: "state-001" },
+    ];
+    stub.board = page([rows[0]!]);
+    stub.details![`hypothesis:${ID}`] = page(rows);
+    stub.memoriesById = {
+      "state-002": JSON.stringify({
+        id: "state-002", labels: { kind: "hypothesis", name: ID, status: "challenged" },
+        content: "Copper is the new oil\n\nthe thesis",
+        created_by_worker: "", created_by_session: "", created_at: 1787334049000,
+      }),
+    };
+    const h = await harness(stub);
+    const res = await get(h, `/api/hypotheses/${ID}`);
+
+    expect(res.status).toBe(200);
+    expect(res.json.state_history_truncated).toBe(false);
+    expect(res.json.state_history).toHaveLength(2);
+    expect(res.json.state_history[0].id).toBe("state-002");
+    expect(res.json.state_history[1].id).toBe("state-001");
+    expect(res.json.hypothesis.status).toBe("challenged");
   });
 
   it("hypotheses_detail: a FORGED state row is absent from state_history and present as tamper", async () => {
