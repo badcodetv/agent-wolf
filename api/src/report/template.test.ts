@@ -1680,3 +1680,83 @@ describe("W30 / R118(1): image-set() is a URL channel like any other", () => {
     expect(parseOk(html).remoteOrigins).toEqual([]);
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* Ruling 2 — a slot may not be declared on a raw-text element         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * ⚠️ **These cases were written by W19 and landed here by orchestrator
+ * ruling**, which suspended `api/src/report/*`'s ownership row for W19's
+ * additive edit to `template.ts` and then for this file. They are recorded
+ * as W19's rather than W16's/W30's so the provenance of the rule is not lost:
+ * the ruling is W19's Ruling 2, closing **R150(3)**.
+ *
+ * This is the LOAD-BEARING half of that ruling. Refusing at validation time
+ * stops the template ever being locked; `composeFrame`'s matching guard
+ * (`frame.test.ts`) only fires on a template that already is, and a template
+ * that is already locked can be changed only through an amendment.
+ *
+ * MEASURED before the fix, 2026-08-26: every row below parsed **VALID**, with
+ * a real slot range spanning the element's raw text.
+ */
+describe("parseTemplate — refuses a slot on an element whose children are text (Ruling 2)", () => {
+  const UNFILLABLE = [
+    "script",
+    "style",
+    "textarea",
+    "title",
+    "xmp",
+    "iframe",
+    "noembed",
+    "noframes",
+    "plaintext",
+  ];
+
+  it.each(UNFILLABLE)("rejects a slot declared on <%s>, with its own message", (tagName) => {
+    const result = parseTemplate(
+      withFallback(`<${tagName} data-wolf-slot="a">old</${tagName}>`),
+      BIG,
+    );
+    expect(result.valid).toBe(false);
+    if (result.valid) return;
+    // R146: assert WHICH rule refused it. A row that died at an earlier rule
+    // — an unclosed element, a URL, the fallback — would cover nothing.
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]?.path).toBe('[data-wolf-slot="a"]');
+    expect(result.errors[0]?.message).toContain(`is declared on \`<${tagName}>\``);
+    expect(result.errors[0]?.message).toContain("TEXT and not markup");
+  });
+
+  it("leaves `noscript` and `template` to the inert rule, which already refuses them", () => {
+    // They are absent from `UNFILLABLE_SLOT_ELEMENTS` on purpose: the inert
+    // rule already refuses both, so an entry there would change only the
+    // message. This pins the split in both directions — deleting the inert
+    // rule opens a hole, and adding them to the raw-text set reddens this
+    // case rather than silently taking the rule over. Both mutations were run.
+    for (const tagName of ["noscript", "template"]) {
+      const result = parseTemplate(
+        withFallback(`<${tagName} data-wolf-slot="a">old</${tagName}>`),
+        BIG,
+      );
+      expect(result.valid).toBe(false);
+      if (result.valid) return;
+      expect(result.errors[0]?.message).toContain("renders nothing");
+    }
+  });
+
+  it("still accepts a slot on an ordinary container", () => {
+    expect(parseOk(withFallback('<div data-wolf-slot="a">x</div>')).slotIds).toEqual(["a"]);
+  });
+
+  it("records the tag name each slot is declared on", () => {
+    // `composeFrame` re-checks the rule above on a `ParsedTemplate` it did not
+    // necessarily get from here, and the tag name cannot be recovered from the
+    // byte offsets — scanning back from `contentStart` for the opening `<`
+    // finds the wrong one whenever an attribute value contains a `<`.
+    const template = parseOk(
+      withFallback('<SECTION data-wolf-slot="a">x</SECTION><li data-wolf-slot="b">y</li>'),
+    );
+    expect(template.slots.map((slot) => slot.tagName)).toEqual(["section", "li"]);
+  });
+});

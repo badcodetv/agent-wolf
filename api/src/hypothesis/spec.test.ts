@@ -1,7 +1,14 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { WolfError } from "../errors.js";
-import { specValidationError, validateSpec, type Spec, type SpecError } from "./spec.js";
+import {
+  LABEL_VALUE_PATTERN,
+  present,
+  specValidationError,
+  validateSpec,
+  type Spec,
+  type SpecError,
+} from "./spec.js";
 
 // design/2026-08-20-agent-wolf.md § W3, "The graded rule set". Every rule in
 // the numbered list gets one accepting case and one rejecting case, and each
@@ -759,5 +766,67 @@ describe("the worked-spec fixture", () => {
     const second = accept(roundTripped);
     expect(second).toStrictEqual(first);
     expect(JSON.stringify(second)).toBe(JSON.stringify(first));
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* present() — own keys only                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * ⚠️ **Added by W19's fix round, by orchestrator ruling** — the ownership row
+ * for this file was suspended for it. The rule is W3's ("explicit `null`
+ * means ABSENT"), the defect was in how it was read, and the consequence was
+ * in W18's `buildSeriesPayload`, which is the only caller whose key comes
+ * from a model rather than from a string literal.
+ *
+ * MEASURED before the fix, 2026-08-26: `present()` read the property straight
+ * off the record, so it walked the prototype chain and answered `true` for
+ * SEVEN slug-legal keys against an EMPTY record. The list is not "just
+ * `constructor`" — that is true of the slot-id pattern, which is
+ * lowercase-only, but a metric slug is constrained by
+ * `LABEL_VALUE_PATTERN`, which accepts `[A-Za-z0-9]` and therefore also lets
+ * `hasOwnProperty`, `isPrototypeOf`, `propertyIsEnumerable`, `toString`,
+ * `valueOf` and `toLocaleString` through.
+ *
+ * The list is DERIVED here rather than hard-coded, so the assertion cannot
+ * quietly stop covering a key that a future runtime adds to
+ * `Object.prototype`.
+ */
+describe("present — inherited keys are ABSENT, not present", () => {
+  const inheritedSlugLegalKeys = Object.getOwnPropertyNames(Object.prototype).filter((key) =>
+    LABEL_VALUE_PATTERN.test(key),
+  );
+
+  it("finds seven inherited keys that a metric slug is allowed to be named", () => {
+    // Guards the case below against becoming vacuous: if this ever yields an
+    // empty list, the loop under it proves nothing at all.
+    expect(inheritedSlugLegalKeys).toEqual([
+      "constructor",
+      "hasOwnProperty",
+      "isPrototypeOf",
+      "propertyIsEnumerable",
+      "toString",
+      "valueOf",
+      "toLocaleString",
+    ]);
+  });
+
+  it.each(inheritedSlugLegalKeys)("answers false for the inherited key %s", (key) => {
+    expect(present({}, key)).toBe(false);
+    expect(present({ other: 1 }, key)).toBe(false);
+  });
+
+  it("still answers true for an own key holding a real value", () => {
+    expect(present({ slug: "gold" }, "slug")).toBe(true);
+    expect(present({ constructor: "gold" }, "constructor")).toBe(true);
+  });
+
+  it("still answers false for an own key that is undefined or explicitly null", () => {
+    // The § Vocabulary convention this function exists for: an explicit
+    // `null` and an omitted key are the same thing.
+    expect(present({ slug: null }, "slug")).toBe(false);
+    expect(present({ slug: undefined }, "slug")).toBe(false);
+    expect(present({ constructor: null }, "constructor")).toBe(false);
   });
 });
