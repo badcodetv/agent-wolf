@@ -762,12 +762,23 @@ function cssUrls(css: string): Array<{ value: string; isImport: boolean }> {
  * screen can only show what the inventory holds, and there must be no second
  * walker to fix it in.
  *
- * A `url(…)` written INSIDE an image-set is already matched by the main
- * pattern, so it is removed before the strings are read — otherwise one URL
- * would be reported, and refused, twice.
+ * ⚠️ **Only the BARE strings are URLs. Every nested function call is removed
+ * first**, and both halves of that matter:
+ *
+ *  - a `url(…)` inside an image-set is already matched by the main pattern,
+ *    so leaving it would report — and refuse — one URL twice;
+ *  - `type("image/avif")` is a MIME type, not a URL, and it is the CANONICAL
+ *    modern spelling (CSS Images 4, and MDN's own example). Reading its
+ *    string as a candidate refuses a correct template with a message pointing
+ *    at `"image/avif"`, which is fail-closed but baffling — and W25 writes the
+ *    authoring contract against this scanner, so a rule that rejects the
+ *    spec's own example is a trap laid in an author's path.
  *
  * The opener is matched as a SUBSTRING, which is what covers the vendor
- * prefixes for free: `-webkit-image-set(` contains `image-set(`. An explicit
+ * prefixes for free: `-webkit-image-set(` contains `image-set(`. It is
+ * broader than just the prefixes — `my-image-set(` is scanned too — and that
+ * is accepted: over-scanning CSS can only surface a URL for a rule to judge,
+ * and every candidate is judged by the same `classifyCssUrl`. An explicit
  * `(?:-webkit-)?` group was written here first and a mutation proved it
  * changed nothing — dead alternation reads like coverage while covering
  * nothing, so it is gone. The `i` flag is NOT dead: CSS function names are
@@ -790,7 +801,14 @@ function imageSetUrls(css: string): string[] {
       }
       i += 1;
     }
-    const inner = css.slice(start, depth === 0 ? i - 1 : css.length).replace(/url\([^)]*\)/gi, "");
+    const inner = css
+      .slice(start, depth === 0 ? i - 1 : css.length)
+      // Every nested `ident(…)` — `url()`, `type()`, and whatever CSS adds
+      // next. A bracket inside one of their strings defeats this and leaves
+      // the call standing; that is the same `)`-in-a-string limit the reader
+      // above has, it can only over-report, and it is logged rather than
+      // guessed at.
+      .replace(/[a-zA-Z-]+\([^()]*\)/g, "");
     for (const candidate of inner.matchAll(/"([^"]*)"|'([^']*)'/g)) {
       values.push(candidate[1] ?? candidate[2] ?? "");
     }

@@ -1256,6 +1256,16 @@ describe("W30 / R118(2): iframe[srcdoc] — a whole nested document", () => {
     expect(parseOk(html).remoteOrigins).toEqual([]);
   });
 
+  it("closes an <object> scope INSIDE a nested document, like any other", () => {
+    // The third direction: not a leak across the boundary, but the nested
+    // document's own `</object>`. A `<param>` after it is as inert there as
+    // it is at the top level.
+    const html = withFallback(
+      `<iframe srcdoc='<object></object><param name="movie" value="https://after.example/x.swf">'></iframe>`,
+    );
+    expect(parseOk(html).remoteOrigins).toEqual([]);
+  });
+
   it("does not let the PARENT's open <object> reach into a nested document", () => {
     // …and the same in the other direction: the nested walk starts at depth
     // zero, so a loose `<param>` inside the srcdoc is as inert as one at the
@@ -1406,6 +1416,17 @@ describe("W30 / R118(2): meta[http-equiv=refresh] — a navigation is a fetch", 
       expect(parseOk(html).remoteOrigins).toEqual(["https://evil.example"]);
     });
   }
+
+  it("skips LEADING whitespace before the time", () => {
+    // Step 1 of the grammar, and the last line in this channel whose
+    // regression direction is fail-OPEN: drop the leading strip and
+    // `content="  0;url=…"` reports no host at all, which is the same shape
+    // as the separator defect that failed this ticket once.
+    const html = withFallback(
+      '<meta http-equiv="refresh" content="  0;url=https://evil.example/x">',
+    );
+    expect(parseOk(html).remoteOrigins).toEqual(["https://evil.example"]);
+  });
 
   it("refuses an http: refresh reached through a WHITESPACE separator too", () => {
     // The channel is policed wherever it is found, not only in the spelling
@@ -1604,6 +1625,31 @@ describe("W30 / R118(1): image-set() is a URL channel like any other", () => {
       `<div style='background:image-set("https://attr.example/x.png" 1x)'>y</div>`,
     );
     expect(parseOk(html).remoteOrigins).toEqual(["https://attr.example"]);
+  });
+
+  it("does not read `type()`'s MIME string as a URL — the spec's own spelling", () => {
+    // `image-set("…" type("image/avif"))` is the canonical CSS Images 4 form
+    // and MDN's worked example. Reading the MIME string as a candidate
+    // refused a correct template, pointing the author at `"image/avif"`.
+    // Fail-closed, and exactly the kind of baffling rule W25's authoring
+    // contract would inherit.
+    const html = withFallback(
+      '<style>.a{background:image-set("https://t.example/x.avif" type("image/avif"))}</style>',
+    );
+    expect(parseTemplate(html, BIG).valid).toBe(true);
+    expect(parseOk(html).remoteOrigins).toEqual(["https://t.example"]);
+  });
+
+  it("still reads every candidate in a set that mixes url(), type() and bare strings", () => {
+    const html = withFallback(
+      "<style>.a{background:image-set(" +
+        'url("https://u.example/x.png") type("image/png"), ' +
+        '"https://s.example/x.avif" type("image/avif"))}</style>',
+    );
+    expect(parseOk(html).remoteOrigins).toEqual([
+      "https://s.example",
+      "https://u.example",
+    ]);
   });
 
   it("does not report a url() inside an image-set TWICE", () => {
