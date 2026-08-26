@@ -225,7 +225,14 @@ class FakeOrange {
   candidate(
     id: string,
     html: string,
-    opts: { memoryId?: string; worker?: string; session?: string; summary?: string } = {},
+    opts: {
+      memoryId?: string;
+      worker?: string;
+      session?: string;
+      summary?: string;
+      /** Unix MILLISECONDS, so a test can pin `created_at_ms` exactly. */
+      atMs?: number;
+    } = {},
   ): MemRow {
     return this.memory({
       id: opts.memoryId ?? `cand-${id}`,
@@ -233,6 +240,7 @@ class FakeOrange {
       content: `${opts.summary ?? "a proposed report template"}\n${html}`,
       worker: opts.worker ?? "",
       session: opts.session ?? `sess-hyp-${id}`,
+      ...(opts.atMs !== undefined ? { atMs: opts.atMs } : {}),
     });
   }
 
@@ -2299,7 +2307,13 @@ const CANDIDATE_DATA_IMPORT =
 /** Adds a candidate to whatever else the seed built. */
 function withCandidate(
   html: string,
-  opts: { memoryId?: string; worker?: string; session?: string; summary?: string } = {},
+  opts: {
+    memoryId?: string;
+    worker?: string;
+    session?: string;
+    summary?: string;
+    atMs?: number;
+  } = {},
 ): (orange: FakeOrange) => void {
   return (orange) => {
     seeded(orange);
@@ -2324,6 +2338,37 @@ describe("report_candidate", () => {
     expect(res.json.created_by_session).toBe(`sess-hyp-${ID}`);
     expect(res.json.valid).toBe(true);
     expect(res.json.tamper).toEqual([]);
+  });
+
+  it("report_candidate: carries created_at_ms — unix MILLISECONDS, from the row", async () => {
+    // N7: the field was on the wire and asserted nowhere, so zeroing it
+    // survived. It is the memory table's unit (milliseconds), NOT the
+    // `agent_*` tables' seconds, and the screen renders it as the "when" of
+    // the § 2 provenance stamp.
+    const h = await harness(withCandidate(CANDIDATE_HTML, { atMs: 1_787_334_047_123 }));
+
+    const res = await get(h, CANDIDATE);
+
+    expect(res.json.created_at_ms).toBe(1_787_334_047_123);
+  });
+
+  it("report_candidate: carries BOTH provenance fields, distinctly", async () => {
+    // 🔴 A DISCRIMINATING fixture (R146, N6). Every other candidate fixture
+    // leaves the worker empty, so the two fields could be swapped, or one
+    // copied into the other, with nothing failing — and the UI's stamp is
+    // `worker || session`, so a swap silently changes who a human is told
+    // wrote the template they are about to lock.
+    const h = await harness(
+      withCandidate(CANDIDATE_HTML, {
+        worker: `researcher-${ID}`,
+        session: "sess-tick-4f2a",
+      }),
+    );
+
+    const res = await get(h, CANDIDATE);
+
+    expect(res.json.created_by_worker).toBe(`researcher-${ID}`);
+    expect(res.json.created_by_session).toBe("sess-tick-4f2a");
   });
 
   it("report_candidate: reads the FULL row, not the 500-character snippet", async () => {
@@ -2731,6 +2776,102 @@ describe("report_candidate_frame", () => {
     expect(res.json.details.reason).toBe("no_report_candidate");
     expect(res.json.details.id).toBe(ID);
     expect(res.json.details.tamper).toEqual([]);
+  });
+
+  it("report_candidate_frame: a FORGED candidate is never previewed", async () => {
+    // 🔴 D2 — the trust rule, proved ON THIS ROUTE and not only on the read.
+    // The check is shared today, but a route that lost `isOwnReport` while
+    // the read kept it stayed green: this is the route serving the document
+    // a human LOOKS AT before locking a template, so a forgery reaching it is
+    // the worst version of the failure, not a lesser one.
+    //
+    // This is the "two routes, two proofs" rule this file already applies to
+    // the session-index guard — applied, in round 1, to the weaker guard of
+    // the two and not to this one.
+    const h = await harness((orange) => {
+      seeded(orange);
+      orange.hypothesis(ID_B);
+      orange.candidate(ID, CANDIDATE_IMG_ONLY, {
+        memoryId: "cand-forged",
+        worker: `researcher-${ID_B}`,
+        session: `sess-hyp-${ID_B}`,
+      });
+    });
+
+    const res = await get(h, CANDIDATE_FRAME);
+
+    expect(res.status).toBe(404);
+    expect(res.json.kind).toBe("not_found");
+    expect(res.json.details.reason).toBe("no_report_candidate");
+    expect(res.json.details.id).toBe(ID);
+    expect(res.json.details.tamper).toEqual([
+      {
+        reason: "cross_hypothesis_write",
+        written_by_worker: `researcher-${ID_B}`,
+        written_by_session: `sess-hyp-${ID_B}`,
+        memory_id: "cand-forged",
+      },
+    ]);
+    // 🔴 Not one byte of the forged template was composed.
+    expect(res.raw).not.toContain("evil.example");
+  });
+
+  it("report_candidate_frame: a NEWER forged candidate does not displace the previewed one", async () => {
+    // The other direction, and the reason the rule is a skip rather than a
+    // refusal: this hypothesis's own candidate is still previewed, and the
+    // attack is named rather than merely suppressed.
+    const h = await harness((orange) => {
+      seeded(orange);
+      orange.hypothesis(ID_B);
+      orange.candidate(ID, CANDIDATE_HTML, { memoryId: "cand-mine" });
+      orange.candidate(ID, CANDIDATE_IMG_ONLY, {
+        memoryId: "cand-forged",
+        worker: `researcher-${ID_B}`,
+        session: `sess-hyp-${ID_B}`,
+      });
+    });
+
+    const res = await get(h, CANDIDATE_FRAME);
+
+    expect(res.status).toBe(200);
+    expect(res.raw).toContain("cdn-a.example");
+    expect(res.raw).not.toContain("evil.example");
+    // ⚠️ Deliberately SHORTER than the read's twin above, which also asserts
+    // the `tamper` list. This route answers with a DOCUMENT — there is
+    // nowhere in `text/html` to carry an anomaly, and putting one there would
+    // mean model-authored bytes and Wolf's own warning sharing a body. The
+    // screen gets its tamper from the read, which it always performs, and
+    // `report_candidate_trust` above is where that list is pinned.
+  });
+
+  it("report_candidate_frame: a HOSTILE retraction does not hide the preview either", async () => {
+    // The frame must not OVER-refuse: a retraction written from inside a
+    // container cannot withdraw the candidate, or an attacker blanks the
+    // review screen and the human approves nothing at all.
+    const h = await harness((orange) => {
+      seeded(orange);
+      orange.candidate(ID, CANDIDATE_HTML, { memoryId: "cand-mine" });
+      orange.retractHostilely("cand-mine");
+    });
+
+    const res = await get(h, CANDIDATE_FRAME);
+
+    expect(res.status).toBe(200);
+    expect(res.csp).toBe(
+      "sandbox allow-scripts; default-src 'none'; " +
+        "script-src 'unsafe-inline' https://cdn-a.example; " +
+        "style-src 'unsafe-inline' https://cdn-a.example; " +
+        "img-src https://cdn-a.example https://img-b.example data:; " +
+        "font-src https://cdn-a.example https://img-b.example data:; " +
+        "connect-src 'none'; form-action 'none'; frame-ancestors 'self'; frame-src 'none'; " +
+        "child-src 'none'; object-src 'none'; base-uri 'none'; manifest-src 'none'; " +
+        "media-src 'none'; worker-src 'none'",
+    );
+    // The whole header proves the CANDIDATE was composed — it is
+    // `CANDIDATE_HTML`'s policy, with both of its hosts — so a retraction
+    // written inside a container changed nothing about what is previewed.
+    // Same reason as above for carrying no `tamper` assertion: the read is
+    // where that list lives.
   });
 
   it("report_candidate_frame: 422 invalid when the candidate does not validate", async () => {

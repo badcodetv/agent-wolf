@@ -167,6 +167,7 @@ export function otherOrigins(candidate: {
 /** A label, not a card. § 2b principle 4: density over air. */
 function ListSection({
   heading,
+  sectionTestId,
   headingTestId,
   itemTestId,
   emptyTestId,
@@ -174,6 +175,14 @@ function ListSection({
   values,
 }: {
   heading: string;
+  /**
+   * 🔴 The section wrapper exists so a test can scope a list to the WORDS
+   * above it. Every value on this screen was pinned before the headings were,
+   * and a heading constant carrying the wrong sentence puts the
+   * non-executable host list under the executable label — the exact
+   * distinction the three lists exist to draw.
+   */
+  sectionTestId: string;
   headingTestId: string;
   itemTestId: string;
   emptyTestId: string;
@@ -181,7 +190,7 @@ function ListSection({
   values: string[];
 }) {
   return (
-    <Box component="section" sx={{ mb: 1.5 }}>
+    <Box component="section" data-testid={sectionTestId} sx={{ mb: 1.5 }}>
       <Typography
         data-testid={headingTestId}
         sx={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", mb: 0.5 }}
@@ -417,7 +426,11 @@ export default function GoLiveReview() {
           <Typography data-testid="candidate-summary" sx={{ fontSize: 13, mb: 0.5 }}>
             {candidate.summary}
           </Typography>
-          <Typography variant="mono" sx={{ display: "block", fontSize: 11, color: "text.secondary", mb: 1.5 }}>
+          <Typography
+            data-testid="candidate-written-at"
+            variant="mono"
+            sx={{ display: "block", fontSize: 11, color: "text.secondary", mb: 1.5 }}
+          >
             {`${candidate.memory_id} · ${formatUtcDateTime(candidate.created_at_ms)}`}
           </Typography>
 
@@ -425,6 +438,7 @@ export default function GoLiveReview() {
               from the thing they describe. */}
           <ListSection
             heading={SCRIPT_SRCS_HEADING}
+            sectionTestId="section-script-srcs"
             headingTestId="script-srcs-heading"
             itemTestId="script-src"
             emptyTestId="script-srcs-empty"
@@ -433,6 +447,7 @@ export default function GoLiveReview() {
           />
           <ListSection
             heading={CODE_ORIGINS_HEADING}
+            sectionTestId="section-code-origins"
             headingTestId="code-origins-heading"
             itemTestId="code-origin"
             emptyTestId="code-origins-empty"
@@ -441,6 +456,7 @@ export default function GoLiveReview() {
           />
           <ListSection
             heading={OTHER_ORIGINS_HEADING}
+            sectionTestId="section-other-origins"
             headingTestId="other-origins-heading"
             itemTestId="other-origin"
             emptyTestId="other-origins-empty"

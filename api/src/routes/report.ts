@@ -865,8 +865,15 @@ export function createReportRouter(options: CreateReportRouterOptions): ReportRo
    * store to call. Every rule it applies comes from the SHARED exported
    * primitives — `isOwnReport`, `reportOwnerFor`, `crossHypothesisTamper`,
    * `hostileRetractionTamper`, `hasEmptyProvenance` — so the trust boundary
-   * itself is not duplicated, only the three-line walk over rows. The same
-   * shape `readLockedSpec` above already has, for the same reason.
+   * itself is not duplicated, only the walk over rows.
+   *
+   * ⚠️ An earlier version of this comment said `readLockedSpec` above "already
+   * has the same shape, for the same reason". It does not: that function
+   * re-implements no loop at all, because the read it needs — the newest
+   * TRUSTED row — is already exported as `newestTrustedRow`. There is no
+   * exported equivalent for "the newest row this hypothesis OWNS", and that
+   * absence is the whole reason this loop exists. Adding one means editing
+   * `store.ts`.
    */
   async function readCandidate(
     id: string,

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, screen } from "@testing-library/react";
+import { act, screen, within } from "@testing-library/react";
 import { Route, Routes } from "react-router";
 import GoLiveReview, { otherOrigins } from "./GoLiveReview.js";
 import {
@@ -138,6 +138,39 @@ describe("GoLiveReview: the remote-host lists", () => {
     ]);
   });
 
+  it("pins ALL THREE headings as literals — the words say which list is which", async () => {
+    // 🔴 Every VALUE on this screen was pinned before the WORDS were, and the
+    // words are what tell a human whether a host executes code. Measured:
+    // giving `OTHER_ORIGINS_HEADING` the code heading's sentence left the
+    // whole suite green, so the non-executable list rendered under the
+    // executable label — the exact distinction the three lists exist to draw.
+    // (D1, verification round 1; the fourth ticket in a row to ship three
+    // side-by-side cases with the assertion on only the first.)
+    await renderReview(OK);
+
+    expect(screen.getByTestId("script-srcs-heading").textContent).toBe(
+      "Remote code this template references",
+    );
+    expect(screen.getByTestId("code-origins-heading").textContent).toBe(
+      "Origins allowed to execute code",
+    );
+    expect(screen.getByTestId("other-origins-heading").textContent).toBe(
+      "Everything else it will contact",
+    );
+  });
+
+  it("gives the three headings three DIFFERENT sentences", async () => {
+    // Three literals above cannot catch a duplicate on their own only if one
+    // of them is also changed; this catches the collapse directly, and it is
+    // the failure that reads as harmless in a diff.
+    await renderReview(OK);
+
+    const headings = ["script-srcs-heading", "code-origins-heading", "other-origins-heading"].map(
+      (id) => screen.getByTestId(id).textContent,
+    );
+    expect(new Set(headings).size).toBe(3);
+  });
+
   it("does NOT call the raw script_srcs list a set of permitted script origins", async () => {
     // 🔴 W21's hand-off: `script_srcs` is not https-only and is not what
     // reaches `script-src` (R155). A heading claiming otherwise would be
@@ -145,8 +178,57 @@ describe("GoLiveReview: the remote-host lists", () => {
     await renderReview(OK);
 
     const heading = screen.getByTestId("script-srcs-heading").textContent ?? "";
-    expect(heading).toBe("Remote code this template references");
     expect(heading.toLowerCase()).not.toContain("permitted");
+    expect(heading.toLowerCase()).not.toContain("origin");
+  });
+
+  it("puts each list UNDER ITS OWN heading, not merely somewhere on the page", async () => {
+    // 🔴 The bond, asserted structurally. A screen that renders the right
+    // three lists and the right three headings can still pair them wrongly,
+    // and a human reading "origins allowed to execute code" above an image
+    // host approves remote code they were never shown.
+    await renderReview({
+      ...OK,
+      [CANDIDATE]: {
+        json: candidateBody({
+          script_srcs: ["https://cdn-a.example/chart.js"],
+          code_origins: ["https://cdn-a.example"],
+          remote_origins: ["https://cdn-a.example", "https://img-b.example"],
+        }),
+      },
+    });
+
+    const code = within(screen.getByTestId("section-code-origins"));
+    const other = within(screen.getByTestId("section-other-origins"));
+    const raw = within(screen.getByTestId("section-script-srcs"));
+
+    expect(raw.getByTestId("script-srcs-heading").textContent).toBe(
+      "Remote code this template references",
+    );
+    expect(raw.getAllByTestId("script-src").map((n) => n.textContent)).toEqual([
+      "https://cdn-a.example/chart.js",
+    ]);
+    expect(raw.queryAllByText("https://img-b.example")).toEqual([]);
+
+    expect(code.getByTestId("code-origins-heading").textContent).toBe(
+      "Origins allowed to execute code",
+    );
+    expect(code.getAllByTestId("code-origin").map((n) => n.textContent)).toEqual([
+      "https://cdn-a.example",
+    ]);
+    // The image host is NOT under the executable label.
+    expect(code.queryAllByText("https://img-b.example")).toEqual([]);
+
+    expect(other.getByTestId("other-origins-heading").textContent).toBe(
+      "Everything else it will contact",
+    );
+    expect(other.getAllByTestId("other-origin").map((n) => n.textContent)).toEqual([
+      "https://img-b.example",
+    ]);
+    // And the code host is NOT under "everything else": it is already
+    // approved as code above, and listing it twice would tell a human they
+    // are approving two hosts where there is one.
+    expect(other.queryAllByText("https://cdn-a.example")).toEqual([]);
   });
 
   it("shows the CSP's code origins separately from the raw urls, server-derived", async () => {
@@ -357,6 +439,38 @@ describe("GoLiveReview: the preview", () => {
     await renderReview(OK);
     expect(screen.getByTestId("provenance")).toHaveAttribute("data-provenance", "model");
     expect(screen.getByTestId("provenance-stamp")).toHaveTextContent("sess-hyp-1a2b3c4d");
+  });
+
+  it("prefers the WORKER over the session in the stamp when both are present", async () => {
+    // 🔴 A DISCRIMINATING fixture (R146, N6). `provenanceStamp` is
+    // `worker || session`, and every other fixture on this screen leaves the
+    // worker empty — so swapping the two `Provenance` props survived, and no
+    // test could tell "who wrote this candidate" from "which session wrote
+    // it". Both fields are non-empty here and they are different strings.
+    await renderReview({
+      ...OK,
+      [CANDIDATE]: {
+        json: candidateBody({
+          created_by_worker: "researcher-1a2b3c4d",
+          created_by_session: "sess-hyp-1a2b3c4d",
+        }),
+      },
+    });
+
+    const stamp = screen.getByTestId("provenance-stamp").textContent ?? "";
+    expect(stamp).toContain("researcher-1a2b3c4d");
+    expect(stamp).not.toContain("sess-hyp-1a2b3c4d");
+  });
+
+  it("shows WHEN the candidate was written, in UTC", async () => {
+    // N7: `created_at_ms` was carried on the wire and asserted nowhere, so
+    // zeroing it server-side survived. Every date this product renders is
+    // UTC (`format.ts`) — a reader's local zone moves a proposal across a day
+    // boundary.
+    await renderReview(OK);
+    expect(screen.getByTestId("candidate-written-at")).toHaveTextContent(
+      "cand-7f3a · 28 May 2026 20:26 UTC",
+    );
   });
 });
 
