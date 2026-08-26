@@ -15,7 +15,9 @@ import { createOrangeClient, type OrangeClient } from "../orange/client.js";
 import { toMs, toSec, type DeliveryRecord } from "../orange/types.js";
 import {
   IN_FLIGHT_DELIVERY_STATUSES,
+  countStaleMetrics,
   evaluationLineWithoutTimestamp,
+  evaluationSummaryLine,
   formatEvaluationSummaryLine,
   inFlightSessionIds,
   parseEvaluationContent,
@@ -797,6 +799,152 @@ describe("store_board", () => {
   });
 });
 
+// ── The state-change history (W27, closing R143) ────────────────────────
+//
+// `detailRow()` has always projected the CURRENT state row and nothing else,
+// so W14's criterion "`Timeline` renders STATE CHANGES from the `hypothesis`
+// memories" — plural — had nothing to render and W14 correctly refused to
+// invent it. The rows were being read and thrown away.
+
+describe("store_state_history", () => {
+  it("store_state_history: every trusted row, newest first, named and dated", async () => {
+    const { store } = harness(TAMPERED);
+    const { record, history } = await store.readHypothesisWithHistory("1a2b3c4d");
+
+    // Named and ordered — a length assertion alone is satisfied by the same
+    // row twice.
+    expect(history).toEqual([
+      {
+        memoryId: "9d253a61-79f6-46b1-ad25-a552761b0a6d",
+        status: "live",
+        createdAtMs: 1787334046842,
+      },
+      {
+        memoryId: "69c74ab0-b98a-4048-a21d-60f81221c454",
+        status: "draft",
+        createdAtMs: 1787334046786,
+      },
+    ]);
+    // The current record still answers exactly as it did before.
+    expect(record.status).toBe("live");
+    expect(record.statusMemoryId).toBe("9d253a61-79f6-46b1-ad25-a552761b0a6d");
+  });
+
+  it("store_state_history: it costs NO extra request — the older rows were already being read", async () => {
+    const { store, stub } = harness(TAMPERED);
+    await store.readHypothesisWithHistory("1a2b3c4d");
+    const perName = stub.memoryRequests.filter(
+      (r) => new URL(r.path, BASE_URL).searchParams.get("latest_per") === null,
+    );
+    expect(perName).toHaveLength(1);
+    expect(new URL(perName[0]!.path, BASE_URL).searchParams.get("selector")).toBe(
+      "kind=hypothesis,name=1a2b3c4d",
+    );
+  });
+
+  it("store_state_history: a FORGED row is absent from the history and present as tamper", async () => {
+    // RECORDED: `2b3c4d5e`'s newest row was written by `researcher-2b3c4d5e`
+    // inside a container and claims `status: confirmed`. A timeline is a
+    // record of what happened; a forgery is not a state change — and nothing
+    // is hidden, because the same read reports it on the channel that means
+    // "attack".
+    const { store } = harness(TAMPERED);
+    const { record, history } = await store.readHypothesisWithHistory("2b3c4d5e");
+
+    expect(history).toEqual([
+      {
+        memoryId: "26df4f21-b826-499c-90c3-81e9c7e89988",
+        status: "live",
+        createdAtMs: 1787334046897,
+      },
+    ]);
+    expect(record.status).toBe("live");
+    expect(tamperOf(record, "forged_row").map((t) => t.memory_id)).toEqual([
+      "754cf456-20f9-45a0-876e-8a8fa6f7cfe7",
+    ]);
+  });
+
+  it("store_state_history: a row WOLF retracted is absent from the history; the hypothesis falls back to what is under it", async () => {
+    // `4d5e6f70`'s only row carries two retractions, one of them Wolf's own
+    // (empty provenance). Wolf took its word back, so that transition did not
+    // stand and is not history. There is nothing underneath, so the record
+    // has no status at all — an anomaly, rendered.
+    const { store } = harness(TAMPERED);
+    const { record, history } = await store.readHypothesisWithHistory("4d5e6f70");
+
+    expect(history).toEqual([]);
+    expect(record.status).toBeNull();
+    // And the HOSTILE retraction on the same row is still reported.
+    expect(tamperOf(record, "hostile_retraction").map((t) => t.memory_id)).toEqual([
+      "b56e4328-6923-417c-8345-305166fd8e46",
+    ]);
+  });
+
+  it("store_state_history: a HOSTILE retraction cannot erase a state change from the history", async () => {
+    // `3c4d5e6f`'s `live` row is retracted by a row written inside a
+    // container. An untrusted actor cannot withdraw Wolf's word — so the
+    // transition stands, on the timeline as well as on the record.
+    const { store } = harness(TAMPERED);
+    const { record, history } = await store.readHypothesisWithHistory("3c4d5e6f");
+
+    expect(history).toEqual([
+      {
+        memoryId: "4ce49f7d-5132-4bbe-8d10-be353729af84",
+        status: "live",
+        createdAtMs: 1787334047015,
+      },
+    ]);
+    expect(record.status).toBe("live");
+    // ...and the attack is still named, on the tamper channel — the sibling
+    // assertion the other two cases in this block carry.
+    expect(tamperOf(record, "hostile_retraction")).toHaveLength(1);
+    expect(tamperOf(record, "forged_row")).toEqual([]);
+  });
+
+  it("store_state_history: a status label outside the six renders as null, never passed through", async () => {
+    // Closes a mutation that ESCAPED the first sweep: `isHypothesisStatus`
+    // on the history row was untested, because every recorded fixture
+    // carries a legal status. It is the same guard `applyRow` puts on the
+    // record, and it has to be here too — the timeline must not be the one
+    // surface that renders a state Wolf's own state machine does not have.
+    const rows = JSON.parse(fixture("detail-1a2b3c4d-include-retracted.json")) as {
+      memories: { id: string; labels: Record<string, string>; created_at: number }[];
+    };
+    rows.memories[0]!.labels["status"] = "quantum";
+    const { store } = harness({ ...TAMPERED, details: { ...TAMPERED.details, "1a2b3c4d": JSON.stringify(rows) } });
+    const { record, history } = await store.readHypothesisWithHistory("1a2b3c4d");
+
+    expect(history[0]).toEqual({
+      memoryId: "9d253a61-79f6-46b1-ad25-a552761b0a6d",
+      status: null,
+      createdAtMs: 1787334046842,
+    });
+    // The row is still ON the timeline — an unreadable state is an anomaly to
+    // render, not a row to drop.
+    expect(history).toHaveLength(2);
+    expect(history[1]?.status).toBe("draft");
+    // And the record agrees, because both read the same guard.
+    expect(record.status).toBeNull();
+    expect(record.statusMemoryId).toBe("9d253a61-79f6-46b1-ad25-a552761b0a6d");
+  });
+
+  it("store_state_history: `readHypothesis` still answers with the record alone, unchanged", async () => {
+    // The narrow read is what the transition machine and the poller call, and
+    // it must not have grown a shape.
+    const { store } = harness(TAMPERED);
+    const record = await store.readHypothesis("1a2b3c4d");
+    expect(record.status).toBe("live");
+    expect("history" in record).toBe(false);
+  });
+
+  it("store_state_history: an unknown id is not_found, not an empty history", async () => {
+    const { store } = harness(TAMPERED);
+    await expect(store.readHypothesisWithHistory("deadbeef")).rejects.toMatchObject({
+      kind: "not_found",
+    });
+  });
+});
+
 // ── The resurrection: a hostile retraction rolling the BOARD back ────────
 //
 // This block is the fix round's reason for existing. The board's fast path
@@ -1439,6 +1587,76 @@ describe("store_evaluation_summary_line", () => {
   it("store_evaluation_summary_line: the FIRST occurrence of a key wins", () => {
     expect(parseEvaluationSummaryLine(`${LINE} score=1`)?.supportScore).toBe(-0.42);
   });
+
+  // ── W27: `attention` and `stale`, ABSENT STAYS ABSENT ─────────────────
+  //
+  // Both are optional and neither is ever defaulted to `0` on the parsed
+  // shape. `0` is a real reading — "the evaluator looked and raised nothing";
+  // absence is "this memory was written before the token existed, and nobody
+  // looked". The board renders those differently, so the parser must keep
+  // them different, and `toEqual` cannot see the difference between a missing
+  // key and one set to `undefined` — hence `Object.keys` below.
+
+  it("store_evaluation_summary_line: reads `attention=<n>`, which W10 has been writing and the board threw away", () => {
+    const parsed = parseEvaluationSummaryLine(`${LINE} attention=2`);
+    expect(parsed?.attention).toBe(2);
+    // The five it already read are untouched by the sixth.
+    expect(parsed?.supportScore).toBe(-0.42);
+    expect(parsed?.tripped).toBe(1);
+    expect(parsed?.holding).toBe(3);
+    expect(parsed?.indeterminate).toBe(0);
+    expect(parsed?.evaluatedAtMs).toBe(Date.parse("2026-08-20T06:05:00Z"));
+  });
+
+  it("store_evaluation_summary_line: reads `stale=<n>`", () => {
+    const parsed = parseEvaluationSummaryLine(`${LINE} stale=3`);
+    expect(parsed?.stale).toBe(3);
+    expect(parsed?.supportScore).toBe(-0.42);
+    expect(parsed?.tripped).toBe(1);
+    expect(parsed?.holding).toBe(3);
+    expect(parsed?.indeterminate).toBe(0);
+    expect(parsed?.evaluatedAtMs).toBe(Date.parse("2026-08-20T06:05:00Z"));
+  });
+
+  it("store_evaluation_summary_line: an evaluation memory written BEFORE these tokens existed still parses, and carries NEITHER key", () => {
+    // The backward-compatibility claim, asserted rather than assumed: this is
+    // the exact byte string W10 has been writing since it shipped.
+    const parsed = parseEvaluationSummaryLine(LINE);
+    expect(parsed).not.toBeNull();
+    expect(parsed?.supportScore).toBe(-0.42);
+    // 🔴 Absent, not zero. `parsed!.attention === undefined` would ALSO be
+    // true of `{attention: undefined}`, which is what a `?? 0` sibling would
+    // produce, so the key set is what is asserted.
+    expect(Object.keys(parsed!).sort()).toEqual([
+      "evaluatedAtMs",
+      "holding",
+      "indeterminate",
+      "supportScore",
+      "tripped",
+    ]);
+  });
+
+  it("store_evaluation_summary_line: `attention=0` and `stale=0` are READ AS ZERO, not dropped", () => {
+    // The other side of absent-stays-absent: a zero the writer actually wrote
+    // is a reading, and collapsing it into absence would lose "we looked and
+    // found nothing". (The WRITER omits the token at zero — that is
+    // `store_evaluation_line` below — but the parser must not assume its only
+    // input came from that writer.)
+    const parsed = parseEvaluationSummaryLine(`${LINE} attention=0 stale=0`);
+    expect(parsed?.attention).toBe(0);
+    expect(parsed?.stale).toBe(0);
+  });
+
+  it("store_evaluation_summary_line: a MALFORMED attention or stale token is ignored, and the line still parses", () => {
+    // Unrecognised tokens are ignored (the rule that makes the line
+    // extensible); a recognised token with rubbish in it must not become a
+    // stricter rule than that, or one bad write blanks a whole board row.
+    for (const bad of ["attention=lots", "attention=-1", "stale=", "stale=2.5"]) {
+      const parsed = parseEvaluationSummaryLine(`${LINE} ${bad}`);
+      expect(parsed?.supportScore).toBe(-0.42);
+      expect(Object.keys(parsed!)).not.toContain(bad.split("=")[0]);
+    }
+  });
 });
 
 describe("store_read_evaluation_summaries", () => {
@@ -1975,6 +2193,7 @@ describe("store_evaluation_line", () => {
       holding: 2,
       indeterminate: 1,
       evaluatedAtMs: AT,
+      attention: 2,
     });
   });
 
@@ -1988,6 +2207,10 @@ describe("store_evaluation_line", () => {
       attention: 0,
     });
     expect(line).not.toContain("attention");
+    // The sibling assertion its `stale` twin below carries: the line is still
+    // the pinned five-token one, not merely attention-free — a formatter that
+    // dropped a DIFFERENT token would also satisfy the line above (R182).
+    expect(line).toBe("score=0.00 tripped=0 holding=1 indeterminate=0 evaluated=2026-08-20T06:05:00Z");
   });
 
   it("store_evaluation_line: `evaluationLineWithoutTimestamp` strips ONLY the clock", () => {
@@ -2016,6 +2239,136 @@ describe("store_evaluation_line", () => {
     });
     expect(evaluationLineWithoutTimestamp(without)).not.toBe(
       evaluationLineWithoutTimestamp(with1),
+    );
+  });
+
+  // ── W27: the `stale=<n>` token ────────────────────────────────────────
+  //
+  // Same mechanism as `attention=` and for the same stated reason: the memory
+  // is written only when line 1 CHANGES, so a signal that is not on line 1
+  // has its own write suppressed by the rule that keeps a quiet hypothesis to
+  // one row a day.
+
+  it("store_evaluation_line: appends ` stale=<n>` after the attention token, byte for byte", () => {
+    expect(
+      formatEvaluationSummaryLine({
+        supportScore: -0.42,
+        tripped: 1,
+        holding: 3,
+        indeterminate: 0,
+        evaluatedAtMs: AT,
+        attention: 2,
+        stale: 3,
+      }),
+    ).toBe(
+      "score=-0.42 tripped=1 holding=3 indeterminate=0 evaluated=2026-08-20T06:05:00Z attention=2 stale=3",
+    );
+  });
+
+  it("store_evaluation_line: emits ` stale=<n>` with NO attention token when only staleness is raised", () => {
+    // The two tokens are independent. Emitting stale only alongside attention
+    // would make a stale-but-determinate hypothesis invisible on the board.
+    expect(
+      formatEvaluationSummaryLine({
+        supportScore: 0, tripped: 0, holding: 1, indeterminate: 0, evaluatedAtMs: AT, stale: 1,
+      }),
+    ).toBe("score=0.00 tripped=0 holding=1 indeterminate=0 evaluated=2026-08-20T06:05:00Z stale=1");
+  });
+
+  it("store_evaluation_line: emits NO stale token when nothing is stale, and none when it is omitted", () => {
+    for (const input of [
+      { supportScore: 0, tripped: 0, holding: 1, indeterminate: 0, evaluatedAtMs: AT, stale: 0 },
+      { supportScore: 0, tripped: 0, holding: 1, indeterminate: 0, evaluatedAtMs: AT },
+    ]) {
+      const line = formatEvaluationSummaryLine(input);
+      expect(line).not.toContain("stale");
+      // And the line is still the pinned five-token one, not merely
+      // stale-free — a formatter that dropped a different token would also
+      // satisfy the assertion above.
+      expect(line).toBe("score=0.00 tripped=0 holding=1 indeterminate=0 evaluated=2026-08-20T06:05:00Z");
+    }
+  });
+
+  it("store_evaluation_line: a changed STALE count IS a change to the line", () => {
+    // The twin of the attention case above: if it were not, the append rule
+    // would suppress the write that carries the new staleness.
+    const without = formatEvaluationSummaryLine({
+      supportScore: 0, tripped: 0, holding: 1, indeterminate: 0, evaluatedAtMs: AT,
+    });
+    const with1 = formatEvaluationSummaryLine({
+      supportScore: 0, tripped: 0, holding: 1, indeterminate: 0, evaluatedAtMs: AT, stale: 1,
+    });
+    expect(evaluationLineWithoutTimestamp(without)).not.toBe(
+      evaluationLineWithoutTimestamp(with1),
+    );
+  });
+
+  it("store_evaluation_line: round-trips ` stale=<n>` through the ONE parser the board reads it with", () => {
+    const line = formatEvaluationSummaryLine({
+      supportScore: 0.5, tripped: 0, holding: 2, indeterminate: 1, evaluatedAtMs: AT, stale: 4,
+    });
+    expect(parseEvaluationSummaryLine(line)).toEqual({
+      supportScore: 0.5,
+      tripped: 0,
+      holding: 2,
+      indeterminate: 1,
+      evaluatedAtMs: AT,
+      stale: 4,
+    });
+  });
+});
+
+describe("store_stale_count", () => {
+  const AT = toMs(Date.UTC(2026, 7, 20, 6, 5, 0));
+
+  function metric(slug: string, stale: boolean): EvaluationSnapshot["metrics"][number] {
+    return {
+      slug,
+      direction: "up",
+      realised_change_pct: 1,
+      last_observation_ms: toMs(Date.UTC(2026, 7, 19)),
+      stale,
+      stale_reason: stale ? "stale_data" : null,
+    };
+  }
+
+  function snap(metrics: EvaluationSnapshot["metrics"]): EvaluationSnapshot {
+    return { evaluated_at_ms: AT, support_score: 0.5, conditions: [], metrics };
+  }
+
+  it("store_stale_count: counts the metrics W4 marked stale, and nothing else", () => {
+    // 🔴 W4's `metrics[].stale` is the ONE authority on staleness (UI design
+    // § 5, "One source of truth for staleness"). This function does not
+    // recompute it from timestamps; it counts it.
+    expect(countStaleMetrics(snap([metric("a", true), metric("b", false), metric("c", true)]))).toBe(2);
+    expect(countStaleMetrics(snap([metric("a", false), metric("b", false)]))).toBe(0);
+    expect(countStaleMetrics(snap([]))).toBe(0);
+  });
+
+  it("store_stale_count: `evaluationSummaryLine` puts that count on line 1 — the ONE call site the writer uses", () => {
+    // The whole point of the token: staleness lives in the JSON body, and the
+    // board reads only the 500-byte snippet, so line 1 is the only place it
+    // can be seen from the board.
+    const line = evaluationSummaryLine(snap([metric("a", true), metric("b", true)]));
+    expect(line).toBe(
+      "score=0.50 tripped=0 holding=0 indeterminate=0 evaluated=2026-08-20T06:05:00Z stale=2",
+    );
+    expect(parseEvaluationSummaryLine(line)?.stale).toBe(2);
+  });
+
+  it("store_stale_count: an evaluation with nothing stale gets a line with no stale token", () => {
+    const line = evaluationSummaryLine(snap([metric("a", false)]));
+    expect(line).toBe("score=0.50 tripped=0 holding=0 indeterminate=0 evaluated=2026-08-20T06:05:00Z");
+    expect(parseEvaluationSummaryLine(line)?.stale).toBeUndefined();
+  });
+
+  it("store_stale_count: attention and stale ride the SAME line, in that order", () => {
+    const line = evaluationSummaryLine({
+      ...snap([metric("a", true)]),
+      attention: [{ condition_id: "c1", reason: "no_observations", since_ms: AT }],
+    });
+    expect(line).toBe(
+      "score=0.50 tripped=0 holding=0 indeterminate=0 evaluated=2026-08-20T06:05:00Z attention=1 stale=1",
     );
   });
 });
