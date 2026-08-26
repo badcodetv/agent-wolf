@@ -659,10 +659,15 @@ describe("store_session_index_budget", () => {
     for (const bad of [0, -1, -200, 2.5, Number.NaN, Number.POSITIVE_INFINITY]) {
       const err = await failureOf(store.readSessionIndex({ sessionPageSize: bad }));
       expect(err.kind, `sessionPageSize=${bad}`).toBe("internal");
+      expect(err.status, `sessionPageSize=${bad}`).toBe(500);
       expect(err.message, `sessionPageSize=${bad}`).toContain(
         "sessionPageSize must be a positive integer",
       );
       expect(err.message, `sessionPageSize=${bad}`).toContain(String(bad));
+      // The route, as both budget throws carry it. This is the third case of
+      // one rule and it was the thin one: it asserted the rule sentence and the
+      // offending value, and neither the route nor the status.
+      expect(err.message, `sessionPageSize=${bad}`).toContain("GET /agent/sessions");
     }
     expect(stub.sessionRequests).toHaveLength(0);
     // The positive control for the line above: the same stub, still installed,

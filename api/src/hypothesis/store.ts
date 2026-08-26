@@ -1245,6 +1245,14 @@ const DETAIL_LIMIT = 50;
  * past anything Wolf can produce (Orange's host port pool caps concurrent
  * sessions at 100 by default). Reaching either budget is therefore OUR
  * invariant breaking, which is why it is `internal` rather than `invalid`.
+ *
+ * 🔴 **No `details` bag on any of the three throws, deliberately.** An
+ * `internal` error's `details` reaches NOTHING: `app.ts:78` answers the client
+ * with `{kind, message}` only, and `app.ts:68` logs `{kind, path, msg}` — not
+ * `details`. The only readers in this file (`reportTamperFrom`,
+ * `withReportTamper`) look for one `tamper` key and nothing else. A payload
+ * that cannot be observed is a comment written as code (R148), and it invites a
+ * later reader to trust it. Everything a log line needs is in the `message`.
  */
 const SESSION_INDEX_MAX_PAGES = 50;
 const SESSION_INDEX_MAX_ROWS = 20_000;
@@ -1281,7 +1289,6 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
         "internal",
         `readSessionIndex: sessionPageSize must be a positive integer, got ${String(limit)} — ` +
           `a non-positive page size makes the GET /agent/sessions walk unable to reach a short page`,
-        { details: { route: "GET /agent/sessions", sessionPageSize: limit } },
       );
     }
     const index = new Map<string, SessionIndexEntry>();
@@ -1325,7 +1332,6 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
           `readSessionIndex: the GET /agent/sessions page walk did not converge — ` +
             `${pages} pages of limit=${limit} (${rows} rows) and never a short page. ` +
             `A server that ignores "offset" returns page zero forever.`,
-          { details: { route: "GET /agent/sessions", pages, rows, limit } },
         );
       }
       if (rows >= SESSION_INDEX_MAX_ROWS) {
@@ -1334,7 +1340,6 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
           `readSessionIndex: the GET /agent/sessions page walk did not converge — ` +
             `${rows} rows over ${pages} pages of limit=${limit} and never a short page. ` +
             `A server that ignores "offset" returns page zero forever.`,
-          { details: { route: "GET /agent/sessions", pages, rows, limit } },
         );
       }
       offset += limit;
