@@ -78,6 +78,54 @@ describe("🔴 the frame's sandbox", () => {
   });
 });
 
+// ── The postMessage prohibition, enforced against the child that ships ──
+
+describe("🔴 the panel registers no `message` listener either", () => {
+  it("adds none on mount", () => {
+    // The RULE is W14's — `ReportFrameHost` owns the height and proves it
+    // ignores a posted one — but that proof renders the host's own fixture
+    // child, not this component. An `allow-scripts` frame can still
+    // `postMessage` its parent, so a listener added HERE would let
+    // model-authored content reach Wolf's layout with every one of W14's
+    // tests still green. An unenforced prohibition is a comment, and this
+    // is the file a later edit to `ReportPanel` will be read against.
+    //
+    // Asserted through the same mechanism as `ReportFrameHost.test.tsx`, so
+    // the two read alike.
+    const spy = vi.spyOn(window, "addEventListener");
+    try {
+      const messageCalls = (): unknown[] => spy.mock.calls.filter(([type]) => type === "message");
+      renderPanel(block());
+      expect(screen.getByTestId("report-frame")).toBeInTheDocument();
+      expect(messageCalls()).toEqual([]);
+
+      // …and prove the spy would have SEEN one, so the assertion above is
+      // not green merely because the spy was installed wrong.
+      const probe = (): void => {};
+      window.addEventListener("message", probe);
+      expect(messageCalls().length).toBe(1);
+      window.removeEventListener("message", probe);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("adds none in the states that render no frame either", () => {
+    // A listener parked in the empty or withheld branch would be just as
+    // reachable: the frame arrives on the next render, the listener is
+    // already there.
+    const spy = vi.spyOn(window, "addEventListener");
+    try {
+      renderPanel(block({ drift: null }));
+      renderPanel(block({ drift: null, unreadable: true }));
+      renderPanel(block({ has_template: false, drift: null }));
+      expect(spy.mock.calls.filter(([type]) => type === "message")).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
 // ── The document is a URL, never data ───────────────────────────────────
 
 describe("🔴 the composed document never reaches this application as data", () => {
@@ -164,6 +212,10 @@ describe("the empty states name why, and never show a blank frame", () => {
   it("says no template has been locked when there is none", () => {
     renderPanel(block({ has_template: false, structure_hash: null, drift: null }));
     expect(screen.queryByTestId("report-frame")).toBeNull();
+    // Its sibling (the withheld state) asserts it is not this one; this
+    // asserts it is not that one. R182: the two halves of a rule get the
+    // same assertion list, or the second half is the one with the hole.
+    expect(screen.queryByTestId("report-withheld")).toBeNull();
     // A DIFFERENT sentence from the one above: "nobody authored a template"
     // and "a template exists and no tick has filled it" are different states
     // of the product, and a reader who cannot tell them apart does not know
@@ -206,11 +258,16 @@ describe("the empty states name why, and never show a blank frame", () => {
   });
 
   it("degrades to the same explicit state when the payload carries no report block at all", () => {
-    // R140: a missing block costs the panel, never the page.
-    renderPanel(undefined);
-    expect(screen.getByTestId("report-empty")).toBeInTheDocument();
-    renderPanel(null);
-    expect(screen.getAllByTestId("report-empty").length).toBe(2);
+    // R140: a missing block costs the panel, never the page. `undefined` and
+    // `null` get the IDENTICAL assertion list — the first cut checked the
+    // first for content and merely counted the second.
+    for (const absent of [undefined, null] as const) {
+      const { unmount } = renderPanel(absent);
+      expect(screen.queryByTestId("report-frame")).toBeNull();
+      expect(screen.getByTestId("report-empty")).toHaveTextContent(NO_REPORT_TEMPLATE);
+      expect((screen.getByTestId("report-empty").textContent ?? "").trim().length).toBeGreaterThan(20);
+      unmount();
+    }
   });
 });
 
@@ -274,6 +331,11 @@ describe("the frame is mounted when there is a readable report", () => {
   it("mounts it for a drifted tick — drift degrades the report, it does not withhold it", () => {
     renderPanel(block({ drift: { orphan_slots: ["gone"], unfilled_slots: ["missing"] } }));
     expect(screen.getByTestId("report-frame")).toBeInTheDocument();
+    // Same list as its sibling above. The negatives are the point of THIS
+    // case: drift is the one degraded condition that does NOT withhold the
+    // frame, and only the absence of the withheld state says so.
+    expect(screen.queryByTestId("report-empty")).toBeNull();
+    expect(screen.queryByTestId("report-withheld")).toBeNull();
   });
 
   it("fills the height its host gave it and negotiates nothing", () => {

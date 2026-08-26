@@ -188,9 +188,16 @@ describe("🔴 indeterminate is visually distinct from holding", () => {
     const indeterminate = rgba(
       getComputedStyle(screen.getByTestId("verdict-band-count-indeterminate")).color,
     );
+    const tripped = rgba(getComputedStyle(screen.getByTestId("verdict-band-count-tripped")).color);
     expect(indeterminate).toBe(rgba(theme.palette.warning.main));
     expect(holding).toBe(rgba(theme.palette.text.secondary));
+    // The third state had no POSITIVE colour pin — only the error-red sweep,
+    // which says what it is not. `tripped` is the ACCENT: the system working
+    // correctly and consequentially, which is why it is not red.
+    expect(tripped).toBe(rgba(theme.palette.primary.main));
     expect(indeterminate).not.toBe(holding);
+    expect(tripped).not.toBe(holding);
+    expect(tripped).not.toBe(indeterminate);
     // `holding` is deliberately not green: a hypothesis holding on every
     // condition can still be a bad thesis.
     expect(holding).not.toBe(rgba(theme.palette.success.main));

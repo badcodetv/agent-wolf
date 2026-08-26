@@ -171,7 +171,14 @@ describe("🔴 unreadable and tamper do not swallow each other", () => {
         tamper: [tamper, { ...tamper, reason: "forged_row", memory_id: "mem_100" }],
       }),
     );
-    expect(screen.getAllByTestId("report-notice-tamper").length).toBe(2);
+    const rows = screen.getAllByTestId("report-notice-tamper");
+    expect(rows.length).toBe(2);
+    // Counting two is not the same as rendering two DIFFERENT ones: § 2
+    // requires the three reasons be distinguished in words, and a component
+    // that rendered the first row twice would pass a bare count.
+    expect(rows[0]).toHaveTextContent(/cross-hypothesis write/i);
+    expect(rows[1]).toHaveTextContent(/forged row/i);
+    expect(rows[1]).toHaveTextContent("mem_100");
   });
 
   it("renders tamper on an otherwise healthy report", () => {
@@ -195,7 +202,13 @@ describe("drift is degraded and names the slots", () => {
 
   it("names the unfilled slots", () => {
     renderNotices(block({ drift: { orphan_slots: [], unfilled_slots: ["conclusion"] } }));
-    expect(screen.getByTestId("report-notice-drift")).toHaveTextContent("conclusion");
+    // The same assertion list as the orphan case above — that one checked the
+    // severity level and the sentence, this one checked only the slot name.
+    const notice = within(screen.getByTestId("report-notice-drift")).getByTestId("severity");
+    expect(notice).toHaveAttribute("data-severity", "degraded");
+    expect(notice).toHaveTextContent("conclusion");
+    expect(notice).toHaveTextContent(/does not match its template/);
+    expect(notice).toHaveTextContent(/declared by the template but not filled/);
   });
 
   it("names both kinds, distinguishably, in one sentence", () => {
