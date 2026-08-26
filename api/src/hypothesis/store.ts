@@ -102,8 +102,21 @@ import {
   parseReportContent,
   parseTemplateContent,
   reportSelector,
+  truncateHeadline,
   type ParsedReport,
 } from "../report/kinds.js";
+// ⚠️ The SECOND deliberate cycle, on exactly the same terms (W22).
+// `./provision.ts` imports the trust primitives from this file; this file
+// imports one pure string function back. `researcherWorkerFor` is an
+// `export function`, so it is HOISTED and available even when provision.ts is
+// the module that loaded first and this one is still evaluating — a
+// `const` would be in its temporal dead zone there and crash. It is called
+// only inside function bodies below, never at module evaluation.
+//
+// The alternative was a second `"researcher-"` literal here, and the worker
+// name is the first clause of the cross-hypothesis rule: two copies that
+// drift make every report look forged, or none.
+import { researcherWorkerFor } from "./provision.js";
 
 // ── The trusted-kind set ────────────────────────────────────────────────
 
@@ -812,6 +825,163 @@ export function newestTrustedRow(
   return undefined;
 }
 
+// ── Cross-hypothesis defence (W22) ──────────────────────────────────────
+
+/**
+ * `kind=report` is UNTRUSTED BY CONSTRUCTION — a researcher inside a container
+ * is what writes it — so `isTrusted` cannot be the rule for it: every
+ * legitimate report has non-empty provenance and would fail clause 1.
+ *
+ * The rule that CAN be applied is a different one, and it is the whole reason
+ * W22 exists. **Labels are chosen entirely by the caller.** A prompt-injected
+ * researcher session running for hypothesis A may append
+ * `kind=report, name=B` — a perfectly well-formed row, in the right kind, with
+ * another hypothesis's name on it — and own B's headline and B's report panel.
+ * Nothing in the trust model as W5 left it says otherwise, because the trust
+ * model is about rows Wolf itself writes and this is not one.
+ *
+ * So a report is *this* hypothesis's own when its provenance names one of the
+ * two things that only this hypothesis has:
+ *
+ *   1. its own daily researcher worker, `researcher-<id>`; or
+ *   2. its own `hyp-<id>` interview session, by Orange session id.
+ *
+ * Both are stamped by the server from the caller's credential (O7) and neither
+ * is settable from a request body, so neither is forgeable from inside a
+ * container. Anything else is IGNORED for state and reported as
+ * `cross_hypothesis_write` — never rendered, never silently dropped.
+ */
+export interface ReportOwner {
+  /** `researcher-<id>` — the worker this hypothesis's daily tick runs as. */
+  worker: string;
+  /**
+   * The `hyp-<id>` session's Orange id, or `null` when the lookup in hand
+   * cannot say. `null` does not weaken clause 1; it removes clause 2, which
+   * is why every caller here passes a lookup that can answer.
+   */
+  sessionId: string | null;
+}
+
+/**
+ * The `hyp-<id>` session's Orange id, out of whatever session lookup the
+ * caller supplied.
+ *
+ * Three shapes legitimately reach the report reads and all three are handled
+ * here rather than at three call sites:
+ *
+ *   - a full `SessionIndex` (`Map<string, SessionIndexEntry>`) — what
+ *     `readSessionIndex` returns and what `routes/report.ts` passes;
+ *   - a `Map<string, string | null>` of session ids — what the board and the
+ *     detail route build, since a `HypothesisRecord` already carries
+ *     `sessionId` and re-walking the session list for it would be a second
+ *     index read per request;
+ *   - a bare `Set<string>` — which knows only that the hypothesis exists.
+ *
+ * `null` means "this lookup cannot say", never "there is no session".
+ * `Set.prototype` has no `get`, which is what makes the duck-type safe.
+ */
+export function sessionIdFrom(sessions: SessionLookup, id: string): string | null {
+  const get = (sessions as { get?: (key: string) => unknown }).get;
+  if (typeof get !== "function") return null;
+  const value: unknown = get.call(sessions, id);
+  if (typeof value === "string") return value === "" ? null : value;
+  if (typeof value === "object" && value !== null && "sessionId" in value) {
+    const sessionId = (value as { sessionId?: unknown }).sessionId;
+    return typeof sessionId === "string" && sessionId !== "" ? sessionId : null;
+  }
+  return null;
+}
+
+/** The two clauses, resolved once per hypothesis rather than once per row. */
+export function reportOwnerFor(id: string, sessions: SessionLookup): ReportOwner {
+  return { worker: researcherWorkerFor(id), sessionId: sessionIdFrom(sessions, id) };
+}
+
+/**
+ * Clause 1 OR clause 2. An empty provenance field never matches: `""` is what
+ * Orange stamps when there is no worker or no session, so comparing it to a
+ * `null`/absent owner value would make an unattributed row look owned.
+ */
+export function isOwnReport(memory: ProvenancedMemory, owner: ReportOwner): boolean {
+  if (memory.createdByWorker !== "" && memory.createdByWorker === owner.worker) return true;
+  if (
+    owner.sessionId !== null &&
+    memory.createdBySession !== "" &&
+    memory.createdBySession === owner.sessionId
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * The key under which a failed report-body parse carries the anomalies that
+ * were witnessed BEFORE the body was read. See `reportTamperFrom`.
+ */
+const TAMPER_DETAIL_KEY = "tamper";
+
+/**
+ * The anomalies a `readLatestReport` failure witnessed on its way to failing.
+ *
+ * 🔴 This exists because of a real defect, and the defect was invisible from
+ * either side alone. `readLatestReport` picks the surviving row FIRST —
+ * reporting every forged, foreign or hostilely-retracted row it stepped over
+ * — and only then fetches and parses the winner's body. A body a model wrote
+ * badly throws `invalid`. A caller that degrades on that throw (the detail
+ * route must, or untrusted content takes the verdict buttons away) would
+ * otherwise discard a `cross_hypothesis_write` it had ALREADY found: the
+ * board would warn and the detail page would show a benign empty state, and
+ * the two surfaces would disagree in the direction that hides an attack.
+ *
+ * Defensive on every step because it reads a `details` bag: `[]` for an error
+ * that carries none, for a non-`WolfError`, and for anything whose `tamper`
+ * is not an array.
+ */
+export function reportTamperFrom(err: unknown): Tamper[] {
+  if (!(err instanceof WolfError)) return [];
+  const details = err.details;
+  if (typeof details !== "object" || details === null) return [];
+  const carried = (details as Record<string, unknown>)[TAMPER_DETAIL_KEY];
+  return Array.isArray(carried) ? (carried as Tamper[]) : [];
+}
+
+/**
+ * Re-throws `err` with `tamper` attached, preserving its kind, status,
+ * message and existing details.
+ *
+ * A new error rather than a mutation: `WolfError`'s fields are `readonly`,
+ * and an error object that grew a property between two catch sites is exactly
+ * the kind of action at a distance this file exists to avoid.
+ */
+function withReportTamper(err: unknown, tamper: readonly Tamper[]): unknown {
+  if (!(err instanceof WolfError) || tamper.length === 0) return err;
+  const existing = typeof err.details === "object" && err.details !== null ? err.details : {};
+  return new WolfError(err.kind, err.message, {
+    status: err.status,
+    details: { ...existing, [TAMPER_DETAIL_KEY]: [...tamper] },
+    cause: err,
+  });
+}
+
+/**
+ * The `Tamper` for a report row belonging to some other hypothesis — or to
+ * nothing at all, which is the same answer: its provenance does not name this
+ * hypothesis's researcher or its session, so it is not evidence about this
+ * hypothesis and must not be rendered as if it were.
+ */
+export function crossHypothesisTamper(row: {
+  id: string;
+  createdByWorker: string;
+  createdBySession: string;
+}): Tamper {
+  return {
+    reason: "cross_hypothesis_write",
+    written_by_worker: row.createdByWorker,
+    written_by_session: row.createdBySession,
+    memory_id: row.id,
+  };
+}
+
 // ── The hypothesis record ───────────────────────────────────────────────
 
 export interface HypothesisRecord {
@@ -893,6 +1063,31 @@ export interface ReportRead {
   tamper: Tamper[];
 }
 
+/**
+ * The board's THIRD `latest_per` read, reduced to what a board row renders:
+ * one hypothesis's newest OWN `kind=report`, by headline alone.
+ *
+ * It is a snippet read, never a full one — the board must stay O(1) in the
+ * hypothesis count, and line 1 is all it draws.
+ */
+export interface ReportSummary {
+  /**
+   * Line 1 of the newest own `kind=report` snippet.
+   *
+   * 🔴 `null` means **no report exists**; `""` means **the report's line 1 was
+   * empty**. The two must stay distinguishable — "nothing yet" and "said
+   * nothing" are different facts and `web/src/api/types.ts` pins the same
+   * distinction — so neither is ever defaulted into the other.
+   */
+  headline: string | null;
+  /** That row's memory id; `null` when no own report survived. */
+  memoryId: string | null;
+  /** That row's `created_at`, unix MILLISECONDS (the memory table's unit). */
+  createdAtMs: UnixMs | null;
+  /** Cross-hypothesis writes and hostile retractions found while reading. */
+  tamper: Tamper[];
+}
+
 // ── The store ───────────────────────────────────────────────────────────
 
 export interface AppendStateParams {
@@ -950,6 +1145,25 @@ export interface HypothesisStore {
    * set (a `Set<string>` satisfies `SessionLookup`), not a fresh index read.
    */
   readEvaluationSummaries(sessions: SessionLookup): Promise<Map<string, EvaluationSummary>>;
+  /**
+   * The board's THIRD `latest_per` request: the newest OWN `kind=report` row
+   * per hypothesis, reduced to its headline. One request for the whole board,
+   * whatever the hypothesis count — twelve hypotheses cost the same three
+   * `latest_per` reads as one.
+   *
+   * A row whose provenance names neither this hypothesis's researcher worker
+   * nor its `hyp-<id>` session is IGNORED and reported as
+   * `cross_hypothesis_write` (see `isOwnReport`). Because `latest_per` hands
+   * back only the newest row per name, a rejected newest row costs ONE
+   * per-name follow-up for that hypothesis alone — the same audit path
+   * `readBoard` uses — so an attacker who appends a forged report to B does
+   * not erase B's real headline, which is exactly what the criterion "B's
+   * headline is unchanged" means.
+   *
+   * `sessions` must be able to answer clause 2 (`sessionIdFrom`); the board
+   * passes a `Map<id, sessionId>` built from the records it already holds.
+   */
+  readReportSummaries(sessions: SessionLookup): Promise<Map<string, ReportSummary>>;
   /**
    * The locked `kind=report-template` for one hypothesis, in full — the ONLY
    * path by which any later ticket obtains one.
@@ -1302,17 +1516,19 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
    * frame simply 404s — an erasure indistinguishable from "nobody authored
    * one". With it, the template is still served and the attack is named.
    *
-   * `trust` is `null` for a kind that is UNTRUSTED BY CONSTRUCTION. `report` is
-   * written from inside a container on every tick; flagging each one
-   * `forged_row` would fill the board with tamper warnings for the system
-   * working exactly as designed. The check that belongs to those rows — that
-   * the writer is *this* hypothesis's own researcher or session — is
-   * cross-hypothesis defence and belongs to W22.
+   * `reject` decides rule 2 AND names the anomaly, because the two kinds fail
+   * it for different reasons and a reader must be able to tell them apart. A
+   * `report-template` fails `isTrusted` and is a `forged_row`. A `report` is
+   * untrusted BY CONSTRUCTION — a researcher inside a container writes one on
+   * every tick, and flagging each `forged_row` would fill the board with
+   * warnings for the system working exactly as designed — so its rule is
+   * `isOwnReport` and its anomaly is `cross_hypothesis_write` (W22). Passing
+   * `null` keeps every row, which no caller does any more.
    */
   function pickSurvivingRow(
     id: string,
     rows: readonly MemorySearchResultRow[],
-    trust: ((row: MemorySearchResultRow) => boolean) | null,
+    reject: ((row: MemorySearchResultRow) => Tamper | null) | null,
   ): { row: MemorySearchResultRow | null; tamper: Tamper[] } {
     const tamper: Tamper[] = [];
     const add = (t: Tamper): void => {
@@ -1322,8 +1538,9 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
     let winner: MemorySearchResultRow | null = null;
     for (const row of rows) {
       if (row.labels["name"] !== id) continue;
-      if (trust !== null && !trust(row)) {
-        add(forgedRowTamper(row));
+      const rejected = reject === null ? null : reject(row);
+      if (rejected !== null) {
+        add(rejected);
         continue;
       }
       let withdrawnByWolf = false;
@@ -1350,6 +1567,92 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
     }
   }
 
+  /** One board row's report facts, off the 500-character snippet alone. */
+  function reportSummaryOf(row: MemorySearchResultRow, tamper: Tamper[]): ReportSummary {
+    // The SAME reduction the full read applies (`parseReportContent` trims
+    // line 1 and truncates it at HEADLINE_MAX_CHARS), so the board and the
+    // detail page cannot disagree about what the headline says. `""` survives
+    // as `""`: a report whose line 1 was blank said nothing, which is not the
+    // same fact as there being no report.
+    const line = parseTitleFromSnippet(row.snippet).title.trim();
+    return {
+      headline: truncateHeadline(line).text,
+      memoryId: row.id,
+      createdAtMs: row.createdAtMs,
+      tamper,
+    };
+  }
+
+  async function readReportSummaries(
+    sessions: SessionLookup,
+  ): Promise<Map<string, ReportSummary>> {
+    // `include_retracted=1` for the same reason every other read here carries
+    // it (see readBoard): without it Orange applies `notRetractedSQL` BEFORE
+    // the `latest_per` reduction, so a hostile retraction of the newest report
+    // hands back an older one with no sign that anything happened.
+    const rows = await client.listMemories({
+      selector: `kind=${KIND_REPORT}`,
+      latestPer: "name",
+      limit: BOARD_LIMIT,
+      includeRetracted: true,
+    });
+
+    const newest = new Map<string, MemorySearchResultRow>();
+    for (const row of rows) {
+      const name = row.labels["name"];
+      if (name === undefined) continue;
+      if (!sessions.has(name)) {
+        // A `kind=report` naming something that is not a hypothesis. There is
+        // no board row to hang an anomaly on, so it is logged rather than
+        // rendered — exactly as `readBoard` treats the same shape.
+        logger?.warn(
+          { memory_id: row.id, name },
+          "kind=report memory names no session in the index — ignored",
+        );
+        continue;
+      }
+      if (!newest.has(name)) newest.set(name, row);
+    }
+
+    const out = new Map<string, ReportSummary>();
+    const anomalies: string[] = [];
+    for (const [name, row] of newest) {
+      const owner = reportOwnerFor(name, sessions);
+      const picked = pickSurvivingRow(name, [row], (candidate) =>
+        isOwnReport(candidate, owner) ? null : crossHypothesisTamper(candidate),
+      );
+      if (picked.row !== null) {
+        out.set(name, reportSummaryOf(picked.row, picked.tamper));
+        continue;
+      }
+      // The newest row was written by something that is not this hypothesis,
+      // or Wolf itself withdrew it. `latest_per` cannot see underneath, so
+      // this one hypothesis pays for the per-name audit view — and its real
+      // headline survives the attack.
+      anomalies.push(name);
+    }
+
+    for (const name of anomalies) {
+      const owner = reportOwnerFor(name, sessions);
+      const rowsForId = await client.listMemories({
+        selector: reportSelector(KIND_REPORT, name),
+        limit: DETAIL_LIMIT,
+        includeRetracted: true,
+      });
+      const picked = pickSurvivingRow(name, rowsForId, (candidate) =>
+        isOwnReport(candidate, owner) ? null : crossHypothesisTamper(candidate),
+      );
+      out.set(
+        name,
+        picked.row === null
+          ? { headline: null, memoryId: null, createdAtMs: null, tamper: picked.tamper }
+          : reportSummaryOf(picked.row, picked.tamper),
+      );
+    }
+
+    return out;
+  }
+
   async function readTemplate(id: string, opts?: ReportReadOptions): Promise<TemplateRead> {
     const sessions = await reportSessions(opts);
     requireKnownHypothesis(id, sessions);
@@ -1362,7 +1665,9 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
     // provenance, the kind, and a `name` matching an existing `hyp-<id>`
     // session. A template written from inside a container is a forgery — the
     // frame route must serve 404 rather than render it.
-    const picked = pickSurvivingRow(id, rows, (row) => isTrusted(row, sessions));
+    const picked = pickSurvivingRow(id, rows, (row) =>
+      isTrusted(row, sessions) ? null : forgedRowTamper(row),
+    );
     if (picked.row === null) return { template: null, tamper: picked.tamper };
     // The template HTML is far past the 500-character snippet, so the full row
     // is a second request. `GET /agent/memories/{id}` is deliberately NOT
@@ -1390,7 +1695,16 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
       limit: DETAIL_LIMIT,
       includeRetracted: true,
     });
-    const picked = pickSurvivingRow(id, rows, null);
+    // W22's cross-hypothesis defence, at the ONE read every renderer of a
+    // report goes through: the detail payload's `report` block AND W21's
+    // frame. A `kind=report, name=B` row written from hypothesis A's session
+    // is not evidence about B, so it is skipped and the read keeps looking at
+    // older rows — B's own last report is still served, and the attack is
+    // named rather than merely suppressed.
+    const owner = reportOwnerFor(id, sessions);
+    const picked = pickSurvivingRow(id, rows, (row) =>
+      isOwnReport(row, owner) ? null : crossHypothesisTamper(row),
+    );
     if (picked.row === null) return { report: null, tamper: picked.tamper };
     const full = await client.getMemoryById(picked.row.id);
     // `parseReportContent` THROWS `invalid` naming the offending slot key. It
@@ -1398,7 +1712,15 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
     // cannot be rendered, and the writer is a model, so the failure has to be
     // legible to whoever reads the log rather than silently becoming "no
     // report yet".
-    const parsed = parseReportContent(full.content);
+    let parsed: ParsedReport;
+    try {
+      parsed = parseReportContent(full.content);
+    } catch (err) {
+      // The anomalies above were witnessed on OTHER rows and are still true.
+      // Losing them here is what made a forged report vanish from the detail
+      // page whenever the victim's own body happened not to parse.
+      throw withReportTamper(err, picked.tamper);
+    }
     return {
       report: {
         ...parsed,
@@ -1532,6 +1854,7 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
     readBoard,
     readHypothesis,
     readEvaluationSummaries,
+    readReportSummaries,
     readTemplate,
     readLatestReport,
     appendState,

@@ -32,12 +32,19 @@ import {
   hypothesisIdFromSessionName,
   parseEvaluationSummaryLine,
   isTrusted,
+  isOwnReport,
+  crossHypothesisTamper,
+  reportTamperFrom,
+  reportOwnerFor,
+  sessionIdFrom,
   newHypothesisId,
   parseHypothesisContent,
   parseTitleFromSnippet,
   sessionNameForHypothesis,
   slugifyOwner,
   type HypothesisStore,
+  type ProvenancedMemory,
+  type SessionLookup,
   type Tamper,
 } from "./store.js";
 
@@ -118,6 +125,18 @@ interface StubConfig {
   evaluations?: string;
   /** Raw bodies for the per-name follow-up, keyed by bare id. */
   details?: Record<string, string>;
+  /**
+   * Raw body for the `kind=report` `latest_per=name` read — the board's THIRD
+   * request (W22).
+   *
+   * ⚠️ It has its own slot for the reason `evaluations` has one, and the
+   * reason is not tidiness: until W22 this stub dispatched `latest_per` on
+   * `selector.startsWith("kind=evaluation")` and answered EVERYTHING else with
+   * the `board` body, so a `kind=report` board read would have been served the
+   * `kind=hypothesis` rows and a test asserting a headline would have passed
+   * against the wrong query (R180).
+   */
+  reportsLatest?: string;
   /** Raw bodies for the `kind=report-template,name=<id>` read (W15), keyed by bare id. */
   templates?: Record<string, string>;
   /** Raw bodies for the `kind=report,name=<id>` read (W15), keyed by bare id. */
@@ -129,6 +148,31 @@ interface StubConfig {
 }
 
 const EMPTY_MEMORIES = '{"memories":[]}';
+
+/**
+ * `limit` and `include_retracted` on a per-name memory read, HONOURED rather
+ * than ignored (W22, R180).
+ *
+ * Orange applies `notRetractedSQL` unless `include_retracted=1`, and it does
+ * so BEFORE any reduction — that is the whole reason every read in
+ * `hypothesis/store.ts` carries the flag. A stub that ignores it turns that
+ * defence into decoration: the read could drop the flag and every test here
+ * would still pass, while production silently handed back an older row.
+ */
+function applyListParams(body: string, url: URL): string {
+  const parsed = JSON.parse(body) as { memories?: Record<string, unknown>[] };
+  let rows = parsed.memories ?? [];
+  if (url.searchParams.get("include_retracted") !== "1") {
+    // Orange's filter does not care WHO wrote the retraction; that judgement
+    // is Wolf's, and it can only be made on rows the flag let through.
+    rows = rows.filter((row) => {
+      const retractions = row["retracted_by"];
+      return !Array.isArray(retractions) || retractions.length === 0;
+    });
+  }
+  const limit = Number(url.searchParams.get("limit") ?? "50");
+  return JSON.stringify({ memories: rows.slice(0, limit) });
+}
 
 class Stub {
   readonly requests: Recorded[] = [];
@@ -183,6 +227,13 @@ class Stub {
       };
     }
     if (url.pathname === "/agent/sessions") {
+      // `?user_email=*` is LOAD-BEARING against the real Orange: an API key's
+      // synthetic email (`api-key:<project>`) matches no session row, so a
+      // list without it comes back empty and the authoritative index of
+      // hypotheses is silently empty with it. Honoured here (W22, R180) —
+      // ignoring it would let a client that stopped sending it keep every
+      // test in this file green while production returned nothing.
+      if (url.searchParams.get("user_email") !== "*") return { status: 200, data: "[]" };
       const rows = this.config.sessions ?? [];
       const limit = Number(url.searchParams.get("limit") ?? "200");
       const offset = Number(url.searchParams.get("offset") ?? "0");
@@ -197,18 +248,7 @@ class Stub {
       return { status: 200, data: found };
     }
     if (url.pathname === "/agent/memories") {
-      if (url.searchParams.get("latest_per") !== null) {
-        if ((url.searchParams.get("selector") ?? "").startsWith("kind=evaluation")) {
-          return { status: 200, data: this.config.evaluations ?? EMPTY_MEMORIES };
-        }
-        if (url.searchParams.get("include_retracted") === "1") {
-          return { status: 200, data: this.config.board ?? EMPTY_MEMORIES };
-        }
-        return { status: 200, data: this.config.boardDefault ?? EMPTY_MEMORIES };
-      }
       const selector = url.searchParams.get("selector") ?? "";
-      const match = /name=([0-9a-f]{8})/.exec(selector);
-      const id = match?.[1];
       // Dispatch on the selector's OWN `kind=` term, not on a prefix test:
       // "kind=report" is a prefix of "kind=report-template", and answering one
       // query with the other's body is exactly the kind of stub bug that makes
@@ -217,6 +257,26 @@ class Stub {
         .split(",")
         .find((term) => term.startsWith("kind="))
         ?.slice("kind=".length);
+      if (url.searchParams.get("latest_per") !== null) {
+        if (kind === "evaluation") {
+          return { status: 200, data: this.config.evaluations ?? EMPTY_MEMORIES };
+        }
+        if (kind === "report") {
+          // Honest about the flag, exactly as the `board` / `boardDefault`
+          // pair is: Orange answers the two DIFFERENTLY, so a read that drops
+          // `include_retracted=1` gets the empty page and every headline test
+          // in this file fails loudly rather than passing by accident.
+          return url.searchParams.get("include_retracted") === "1"
+            ? { status: 200, data: this.config.reportsLatest ?? EMPTY_MEMORIES }
+            : { status: 200, data: EMPTY_MEMORIES };
+        }
+        if (url.searchParams.get("include_retracted") === "1") {
+          return { status: 200, data: this.config.board ?? EMPTY_MEMORIES };
+        }
+        return { status: 200, data: this.config.boardDefault ?? EMPTY_MEMORIES };
+      }
+      const match = /name=([0-9a-f]{8})/.exec(selector);
+      const id = match?.[1];
       const bucket =
         kind === "report-template"
           ? this.config.templates
@@ -224,7 +284,7 @@ class Stub {
             ? this.config.reports
             : this.config.details;
       const found = id === undefined ? undefined : bucket?.[id];
-      return { status: 200, data: found ?? EMPTY_MEMORIES };
+      return { status: 200, data: applyListParams(found ?? EMPTY_MEMORIES, url) };
     }
     return { status: 404, data: "unrouted in the stub: " + url.pathname };
   }
@@ -2091,5 +2151,517 @@ describe("store_shared_transition_mutex", () => {
       .map(({ i }) => i);
     expect(posts).toHaveLength(2);
     expect((posts[1] ?? 0) - (posts[0] ?? 0)).toBeGreaterThan(1);
+  });
+});
+
+// ── W22: the cross-hypothesis defence and the board's third read ────────
+//
+// The threat this block exists for: labels are chosen entirely by the caller,
+// so a researcher session running for hypothesis A may append
+// `kind=report, name=B` — a well-formed row, in the right kind, wearing
+// another hypothesis's name — and own B's headline and B's report panel.
+// `isTrusted` cannot refuse it, because `report` is untrusted BY
+// CONSTRUCTION: every legitimate report has non-empty provenance.
+
+describe("store_report_ownership", () => {
+  const ID = "1a2b3c4d";
+  const SESSION_ID = "53f93cd909691c94e52da75bfb4ca9e2";
+  const index: SessionLookup = new Map([[ID, SESSION_ID]]);
+
+  function row(worker: string, session: string): ProvenancedMemory {
+    return { labels: { kind: "report", name: ID }, createdByWorker: worker, createdBySession: session };
+  }
+
+  it("store_report_ownership: the owner is this hypothesis's researcher worker and its hyp- session id", () => {
+    // Both clauses pinned as LITERALS. Deriving either from the same helper
+    // the code uses would make this test pass with that helper deleted.
+    expect(reportOwnerFor(ID, index)).toEqual({
+      worker: "researcher-1a2b3c4d",
+      sessionId: "53f93cd909691c94e52da75bfb4ca9e2",
+    });
+  });
+
+  it("store_report_ownership: either clause alone makes a report this hypothesis's own", () => {
+    const owner = reportOwnerFor(ID, index);
+    // Clause 1 alone: the daily tick, whose session id is a fresh container's.
+    expect(isOwnReport(row("researcher-1a2b3c4d", "sess-a-fresh-tick"), owner)).toBe(true);
+    // Clause 2 alone: the interview session, whose worker is `interviewer`.
+    expect(isOwnReport(row("interviewer", "53f93cd909691c94e52da75bfb4ca9e2"), owner)).toBe(true);
+  });
+
+  it("store_report_ownership: ANOTHER hypothesis's researcher or session owns nothing here", () => {
+    const owner = reportOwnerFor(ID, index);
+    // This is the attack, in one line: hypothesis A's researcher, hypothesis
+    // A's session, and B's name on the label.
+    expect(isOwnReport(row("researcher-2b3c4d5e", "b02d5443ca30d9b068dac0dc64e45f0d"), owner)).toBe(
+      false,
+    );
+    expect(isOwnReport(row("critic-1a2b3c4d", "sess-9"), owner)).toBe(false);
+  });
+
+  it("store_report_ownership: EMPTY provenance owns nothing, even against an EMPTY owner", () => {
+    const owner = reportOwnerFor(ID, index);
+    // A row with neither field set is not this hypothesis's researcher.
+    expect(isOwnReport(row("", ""), owner)).toBe(false);
+    // A row with only a session still matches on that session.
+    expect(isOwnReport(row("", "53f93cd909691c94e52da75bfb4ca9e2"), owner)).toBe(true);
+    // 🔴 The case the `!== ""` guards exist for, and the only one that can
+    // tell them apart from the clauses around them: a DEGENERATE owner. If
+    // `""` were allowed to match `""`, an owner with no worker and no session
+    // would own every unattributed row in the project — which is what a
+    // future caller passing a hand-built owner would hit, silently.
+    expect(isOwnReport(row("", ""), { worker: "", sessionId: null })).toBe(false);
+    expect(isOwnReport(row("", ""), { worker: "", sessionId: "" })).toBe(false);
+  });
+
+  it("store_report_ownership: with no session id in the lookup, clause 2 is UNAVAILABLE, not permissive", () => {
+    // A bare Set knows only that the hypothesis exists.
+    const owner = reportOwnerFor(ID, new Set([ID]));
+    expect(owner.sessionId).toBeNull();
+    expect(isOwnReport(row("researcher-1a2b3c4d", "anything"), owner)).toBe(true);
+    expect(isOwnReport(row("interviewer", "53f93cd909691c94e52da75bfb4ca9e2"), owner)).toBe(false);
+  });
+
+  it("store_report_ownership: sessionIdFrom reads all three lookup shapes, and invents nothing", () => {
+    // The full SessionIndex (entry objects) — what readSessionIndex returns.
+    const entries = new Map([
+      [ID, { id: ID, sessionId: SESSION_ID, sessionName: `hyp-${ID}`, status: "running", createdAtSec: 1, updatedAtSec: 2 }],
+    ]);
+    expect(sessionIdFrom(entries, ID)).toBe(SESSION_ID);
+    // The board's id map.
+    expect(sessionIdFrom(new Map([[ID, SESSION_ID]]), ID)).toBe(SESSION_ID);
+    // A hypothesis whose session id is not known: null, never "".
+    expect(sessionIdFrom(new Map([[ID, null]]), ID)).toBeNull();
+    expect(sessionIdFrom(new Map([[ID, ""]]), ID)).toBeNull();
+    // A Set has no `get` at all.
+    expect(sessionIdFrom(new Set([ID]), ID)).toBeNull();
+    // Absent from the lookup.
+    expect(sessionIdFrom(entries, "2b3c4d5e")).toBeNull();
+  });
+
+  it("store_report_ownership: the tamper names the WRITER and the offending row", () => {
+    expect(
+      crossHypothesisTamper({
+        id: "rep-forged",
+        createdByWorker: "researcher-2b3c4d5e",
+        createdBySession: "sess-attacker",
+      }),
+    ).toEqual({
+      reason: "cross_hypothesis_write",
+      written_by_worker: "researcher-2b3c4d5e",
+      written_by_session: "sess-attacker",
+      memory_id: "rep-forged",
+    });
+  });
+});
+
+describe("store_cross_hypothesis_report", () => {
+  // Hypothesis B. A is the attacker.
+  const B = "2b3c4d5e";
+  const B_SESSION = "b02d5443ca30d9b068dac0dc64e45f0d";
+  const SESSIONS = sessionsNamed("hyp-1a2b3c4d", "hyp-2b3c4d5e");
+
+  function ownRow(): Record<string, unknown> {
+    return {
+      id: "rep-b-own",
+      labels: { kind: "report", name: B },
+      snippet: "B held through July\n{",
+      score: 0,
+      created_by_worker: "researcher-2b3c4d5e",
+      created_by_session: B_SESSION,
+      created_at: 1787334048000,
+    };
+  }
+
+  /** A's researcher, A's session, B's name. The whole attack. */
+  function forgedRow(): Record<string, unknown> {
+    return {
+      id: "rep-b-forged",
+      labels: { kind: "report", name: B },
+      snippet: "B has collapsed, sell everything\n{",
+      score: 0,
+      created_by_worker: "researcher-1a2b3c4d",
+      created_by_session: "53f93cd909691c94e52da75bfb4ca9e2",
+      created_at: 1787334049000,
+    };
+  }
+
+  function fullRow(id: string, headline: string): string {
+    return JSON.stringify({
+      id,
+      labels: { kind: "report", name: B },
+      content: `${headline}\n${JSON.stringify({ headline: "<p>x</p>" })}`,
+      created_by_worker: "researcher-2b3c4d5e",
+      created_by_session: B_SESSION,
+      created_at: 1787334048000,
+    });
+  }
+
+  it("store_cross_hypothesis_report: hypothesis A cannot own B's report — B keeps its own, and reports tamper", async () => {
+    const { store } = harness({
+      sessions: SESSIONS,
+      // Newest first, exactly as Orange orders them: the forgery is on top.
+      reports: { [B]: JSON.stringify({ memories: [forgedRow(), ownRow()] }) },
+      memoriesById: {
+        "rep-b-own": fullRow("rep-b-own", "B held through July"),
+        "rep-b-forged": fullRow("rep-b-forged", "B has collapsed, sell everything"),
+      },
+    });
+    const read = await store.readLatestReport(B, {
+      sessions: new Map([[B, B_SESSION]]),
+    });
+
+    // UNCHANGED: B's own last report is what is served.
+    expect(read.report?.memoryId).toBe("rep-b-own");
+    expect(read.report?.headline).toBe("B held through July");
+    // And the attack is named rather than merely suppressed.
+    expect(read.tamper).toEqual([
+      {
+        reason: "cross_hypothesis_write",
+        written_by_worker: "researcher-1a2b3c4d",
+        written_by_session: "53f93cd909691c94e52da75bfb4ca9e2",
+        memory_id: "rep-b-forged",
+      },
+    ]);
+  });
+
+  it("store_cross_hypothesis_report: an UNPARSEABLE own body still carries the forgery it already witnessed", async () => {
+    // 🔴 The anomaly is witnessed while PICKING the row, before the winning
+    // row's body is fetched or parsed. A parse failure afterwards does not
+    // make the forgery untrue, and a caller that degrades on the throw must
+    // not lose it — that is the seam where B's board row warns and B's detail
+    // page says nothing, which is the wrong direction to disagree in.
+    const { store } = harness({
+      sessions: SESSIONS,
+      reports: { [B]: JSON.stringify({ memories: [forgedRow(), ownRow()] }) },
+      memoriesById: {
+        "rep-b-own": JSON.stringify({
+          id: "rep-b-own",
+          labels: { kind: "report", name: B },
+          // Not a flat {slotId: html} map — a model wrote it.
+          content: 'B held through July\n{"headline":{"html":"<p>x</p>"}}',
+          created_by_worker: "researcher-2b3c4d5e",
+          created_by_session: B_SESSION,
+          created_at: 1787334048000,
+        }),
+      },
+    });
+
+    const err = await store
+      .readLatestReport(B, { sessions: new Map([[B, B_SESSION]]) })
+      .then(() => null, (e: unknown) => e);
+
+    expect(err).toBeInstanceOf(WolfError);
+    expect((err as WolfError).kind).toBe("invalid");
+    // The parser's own detail survives...
+    expect((err as WolfError).details).toMatchObject({ key: "headline" });
+    // ...and so does the anomaly, in the shape a caller can hand straight to
+    // the wire.
+    expect(reportTamperFrom(err)).toEqual([
+      {
+        reason: "cross_hypothesis_write",
+        written_by_worker: "researcher-1a2b3c4d",
+        written_by_session: "53f93cd909691c94e52da75bfb4ca9e2",
+        memory_id: "rep-b-forged",
+      },
+    ]);
+  });
+
+  it("store_cross_hypothesis_report: reportTamperFrom invents nothing for an error that carries none", () => {
+    expect(reportTamperFrom(new WolfError("invalid", "no tamper here"))).toEqual([]);
+    expect(reportTamperFrom(new WolfError("invalid", "junk", { details: { tamper: "nope" } }))).toEqual([]);
+    expect(reportTamperFrom(new Error("not ours"))).toEqual([]);
+    expect(reportTamperFrom(undefined)).toEqual([]);
+  });
+
+  it("store_cross_hypothesis_report: a forgery with no genuine report beneath it leaves NO report at all", async () => {
+    const { store } = harness({
+      sessions: SESSIONS,
+      reports: { [B]: JSON.stringify({ memories: [forgedRow()] }) },
+      memoriesById: { "rep-b-forged": fullRow("rep-b-forged", "B has collapsed") },
+    });
+    const read = await store.readLatestReport(B, { sessions: new Map([[B, B_SESSION]]) });
+    expect(read.report).toBeNull();
+    expect(read.tamper.map((t) => t.reason)).toEqual(["cross_hypothesis_write"]);
+    // The forged headline never reaches a caller by any route.
+    expect(JSON.stringify(read)).not.toContain("collapsed");
+  });
+});
+
+describe("store_read_report_summaries", () => {
+  const A = "1a2b3c4d";
+  const B = "2b3c4d5e";
+  const A_SESSION = "53f93cd909691c94e52da75bfb4ca9e2";
+  const B_SESSION = "b02d5443ca30d9b068dac0dc64e45f0d";
+  const SESSIONS = sessionsNamed("hyp-1a2b3c4d", "hyp-2b3c4d5e");
+  const INDEX: SessionLookup = new Map([
+    [A, A_SESSION],
+    [B, B_SESSION],
+  ]);
+
+  function reportRow(
+    id: string,
+    name: string,
+    snippet: string,
+    provenance: { worker: string; session: string },
+    extra: Record<string, unknown> = {},
+  ): Record<string, unknown> {
+    return {
+      id,
+      labels: { kind: "report", name },
+      snippet,
+      score: 0,
+      created_by_worker: provenance.worker,
+      created_by_session: provenance.session,
+      created_at: 1787334048000,
+      ...extra,
+    };
+  }
+
+  const ownA = { worker: "researcher-1a2b3c4d", session: "sess-tick-a" };
+  const ownB = { worker: "researcher-2b3c4d5e", session: "sess-tick-b" };
+
+  it("store_read_report_summaries: ONE latest_per request carries the headline for every hypothesis", async () => {
+    const { store, stub } = harness({
+      sessions: SESSIONS,
+      reportsLatest: JSON.stringify({
+        memories: [
+          reportRow("rep-a", A, "the basket held\n{\"headline\":\"<p>x</p>\"}", ownA),
+          reportRow("rep-b", B, "copper is squeezed\n{}", ownB),
+        ],
+      }),
+    });
+    const summaries = await store.readReportSummaries(INDEX);
+
+    expect(summaries.get(A)?.headline).toBe("the basket held");
+    expect(summaries.get(A)?.memoryId).toBe("rep-a");
+    expect(summaries.get(A)?.createdAtMs).toBe(1787334048000);
+    expect(summaries.get(B)?.headline).toBe("copper is squeezed");
+
+    // The REQUEST SHAPE, not just the answer: one memory request, and the
+    // three parameters this read is wrong without.
+    expect(stub.memoryRequests).toHaveLength(1);
+    const path = stub.memoryRequests[0]?.path ?? "";
+    expect(path).toContain("selector=kind%3Dreport&");
+    expect(path).toContain("latest_per=name");
+    expect(path).toContain("include_retracted=1");
+    expect(path).toContain("limit=100");
+  });
+
+  it("store_read_report_summaries: a report whose line 1 is EMPTY is `\"\"`, and no report at all is absent", async () => {
+    // "nothing yet" and "said nothing" are different facts. The board renders
+    // them differently and neither may be defaulted into the other.
+    const { store } = harness({
+      sessions: SESSIONS,
+      reportsLatest: JSON.stringify({
+        memories: [reportRow("rep-a", A, "\n{}", ownA)],
+      }),
+    });
+    const summaries = await store.readReportSummaries(INDEX);
+    expect(summaries.get(A)?.headline).toBe("");
+    expect(summaries.has(B)).toBe(false);
+  });
+
+  it("store_read_report_summaries: a headline over 400 characters is truncated, as it is on the full read", async () => {
+    const { store } = harness({
+      sessions: SESSIONS,
+      reportsLatest: JSON.stringify({
+        memories: [reportRow("rep-a", A, `${"w".repeat(450)}\n{}`, ownA)],
+      }),
+    });
+    expect((await store.readReportSummaries(INDEX)).get(A)?.headline).toHaveLength(400);
+  });
+
+  it("store_read_report_summaries: a forged newest report costs ONE follow-up and B's headline is unchanged", async () => {
+    const { store, stub } = harness({
+      sessions: SESSIONS,
+      reportsLatest: JSON.stringify({
+        memories: [
+          reportRow("rep-a", A, "the basket held\n{}", ownA),
+          // `latest_per` hands back only the newest per name, and for B that
+          // is the forgery: A's researcher, A's session, B's name.
+          reportRow("rep-b-forged", B, "B has collapsed, sell everything\n{}", {
+            worker: "researcher-1a2b3c4d",
+            session: A_SESSION,
+          }),
+        ],
+      }),
+      reports: {
+        [B]: JSON.stringify({
+          memories: [
+            reportRow("rep-b-forged", B, "B has collapsed, sell everything\n{}", {
+              worker: "researcher-1a2b3c4d",
+              session: A_SESSION,
+            }),
+            reportRow("rep-b-own", B, "copper is squeezed\n{}", ownB),
+          ],
+        }),
+      },
+    });
+    const summaries = await store.readReportSummaries(INDEX);
+
+    expect(summaries.get(B)?.headline).toBe("copper is squeezed");
+    expect(summaries.get(B)?.memoryId).toBe("rep-b-own");
+    expect(summaries.get(B)?.tamper).toEqual([
+      {
+        reason: "cross_hypothesis_write",
+        written_by_worker: "researcher-1a2b3c4d",
+        written_by_session: A_SESSION,
+        memory_id: "rep-b-forged",
+      },
+    ]);
+    // A was not attacked and pays nothing: one latest_per plus B's audit read.
+    expect(stub.memoryRequests).toHaveLength(2);
+    expect(summaries.get(A)?.tamper).toEqual([]);
+  });
+
+  it("store_read_report_summaries: a forgery with nothing beneath leaves headline null AND tamper set", async () => {
+    const { store } = harness({
+      sessions: SESSIONS,
+      reportsLatest: JSON.stringify({
+        memories: [
+          reportRow("rep-b-forged", B, "B has collapsed\n{}", {
+            worker: "researcher-1a2b3c4d",
+            session: A_SESSION,
+          }),
+        ],
+      }),
+      reports: {
+        [B]: JSON.stringify({
+          memories: [
+            reportRow("rep-b-forged", B, "B has collapsed\n{}", {
+              worker: "researcher-1a2b3c4d",
+              session: A_SESSION,
+            }),
+          ],
+        }),
+      },
+    });
+    const summary = (await store.readReportSummaries(INDEX)).get(B);
+    // null is "no report", NOT "" — and the anomaly is still reported.
+    expect(summary?.headline).toBeNull();
+    expect(summary?.memoryId).toBeNull();
+    expect(summary?.tamper.map((t) => t.reason)).toEqual(["cross_hypothesis_write"]);
+  });
+
+  it("store_read_report_summaries: the FOLLOW-UP read carries include_retracted=1 — the two attacks combined", async () => {
+    // 🔴 The combination is the point, and neither half alone reaches it: a
+    // forged newest row forces the per-name audit read, and the victim's own
+    // report underneath has been HOSTILELY RETRACTED. Orange applies its
+    // not-retracted filter BEFORE the reduction, so without the flag on that
+    // second request B's real headline disappears and the attacker has
+    // erased it after all — having only had to make the erasure look like a
+    // rejection.
+    const hostile = {
+      retracted_by: [
+        {
+          memory_id: "ret-hostile",
+          created_by_worker: "researcher-1a2b3c4d",
+          created_by_session: A_SESSION,
+          created_at: 1787334049100,
+        },
+      ],
+    };
+    const forged = reportRow("rep-b-forged", B, "B has collapsed\n{}", {
+      worker: "researcher-1a2b3c4d",
+      session: A_SESSION,
+    });
+    const { store, stub } = harness({
+      sessions: SESSIONS,
+      reportsLatest: JSON.stringify({ memories: [forged] }),
+      reports: {
+        [B]: JSON.stringify({
+          memories: [forged, reportRow("rep-b-own", B, "copper is squeezed\n{}", ownB, hostile)],
+        }),
+      },
+    });
+    const summary = (await store.readReportSummaries(INDEX)).get(B);
+
+    expect(summary?.headline).toBe("copper is squeezed");
+    expect(summary?.memoryId).toBe("rep-b-own");
+    expect(summary?.tamper.map((t) => t.reason).sort()).toEqual([
+      "cross_hypothesis_write",
+      "hostile_retraction",
+    ]);
+    // The request shape too, because the answer alone cannot say WHICH read
+    // carried the flag.
+    const followUp = stub.memoryRequests.find((r) => r.path.includes("name%3D2b3c4d5e"));
+    expect(followUp?.path).toContain("include_retracted=1");
+  });
+
+  it("store_read_report_summaries: line 1 is TRIMMED, so a whitespace-only headline is \"\" and not blank text", async () => {
+    // Four shapes, because reverting a `.trim()` tears many inputs while a
+    // one-input test covers one of them (R184). The whitespace-only case is
+    // the discriminating one: untrimmed it is `"   "`, which is truthy, so
+    // the UI renders a headline made of spaces instead of "said nothing".
+    const { store } = harness({
+      sessions: SESSIONS,
+      reportsLatest: JSON.stringify({
+        memories: [
+          reportRow("rep-a", A, "   \n{}", ownA),
+          reportRow("rep-b", B, "  copper is squeezed  \n{}", ownB),
+        ],
+      }),
+    });
+    const summaries = await store.readReportSummaries(INDEX);
+    expect(summaries.get(A)?.headline).toBe("");
+    expect(summaries.get(B)?.headline).toBe("copper is squeezed");
+
+  });
+
+  it("store_read_report_summaries: tabs count as whitespace too", async () => {
+    const { store } = harness({
+      sessions: SESSIONS,
+      reportsLatest: JSON.stringify({
+        memories: [
+          reportRow("rep-a", A, "\t\t\n{}", ownA),
+          reportRow("rep-b", B, "\tcopper\t\n{}", ownB),
+        ],
+      }),
+    });
+    const summaries = await store.readReportSummaries(INDEX);
+    expect(summaries.get(A)?.headline).toBe("");
+    expect(summaries.get(B)?.headline).toBe("copper");
+  });
+
+  it("store_read_report_summaries: a hostile retraction hides nothing and is reported", async () => {
+    const { store } = harness({
+      sessions: SESSIONS,
+      reportsLatest: JSON.stringify({
+        memories: [
+          reportRow("rep-a", A, "the basket held\n{}", ownA, {
+            retracted_by: [
+              {
+                memory_id: "ret-hostile",
+                created_by_worker: "researcher-2b3c4d5e",
+                created_by_session: "sess-attacker",
+                created_at: 1787334048100,
+              },
+            ],
+          }),
+        ],
+      }),
+    });
+    const summary = (await store.readReportSummaries(INDEX)).get(A);
+    expect(summary?.headline).toBe("the basket held");
+    expect(summary?.tamper).toEqual([
+      {
+        reason: "hostile_retraction",
+        written_by_worker: "researcher-2b3c4d5e",
+        written_by_session: "sess-attacker",
+        memory_id: "ret-hostile",
+      },
+    ]);
+  });
+
+  it("store_read_report_summaries: a report naming something that is not a hypothesis is dropped, not rendered", async () => {
+    const { store } = harness({
+      sessions: SESSIONS,
+      reportsLatest: JSON.stringify({
+        memories: [reportRow("rep-x", "deadbeef", "not a hypothesis\n{}", ownA)],
+      }),
+    });
+    const summaries = await store.readReportSummaries(INDEX);
+    expect(summaries.size).toBe(0);
   });
 });

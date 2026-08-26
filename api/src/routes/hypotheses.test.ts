@@ -21,8 +21,11 @@ import {
   SESSION_NAME_PATTERN,
   createHypothesisStore,
   slugifyOwner,
+  type SessionLookup,
+  type Tamper,
 } from "../hypothesis/store.js";
-import { createHypothesesRouter } from "./hypotheses.js";
+import { createHypothesesRouter, mergeTamper } from "./hypotheses.js";
+import type { ReportComposeStats } from "./report.js";
 
 // design/2026-08-20-agent-wolf.md, W8's acceptance criteria. Test names are
 // prefixed `hypotheses_`.
@@ -105,6 +108,26 @@ function evaluationRow(id: string, line: string): Record<string, unknown> {
   });
 }
 
+/**
+ * A `kind=report` row. Provenance is NEVER empty — a researcher inside a
+ * container is what writes one — so the id embeds the writer, which is what
+ * lets a tamper assertion name the offending row as a literal.
+ */
+function reportRow(
+  id: string,
+  headline: string,
+  worker: string,
+  session: string,
+): Record<string, unknown> {
+  return memoryRow({
+    id: `rep-${id}-${worker}`,
+    labels: { kind: "report", name: id },
+    snippet: `${headline}\n{"headline":"<p>x</p>"}`,
+    createdByWorker: worker,
+    createdBySession: session,
+  });
+}
+
 // ── The stub Orange ─────────────────────────────────────────────────────
 
 interface Recorded {
@@ -124,10 +147,22 @@ interface StubConfig {
   board?: string;
   /** `latest_per=name` + `selector=kind=evaluation`. */
   evaluations?: string;
+  /**
+   * `latest_per=name` + `selector=kind=report` — the board's THIRD read (W22).
+   *
+   * ⚠️ It needs its own slot, and not for tidiness. Until W22 this stub
+   * dispatched `latest_per` as "starts with kind=evaluation, else the board
+   * body", so a `kind=report` board read would have been answered with the
+   * `kind=hypothesis` rows and a headline test could have passed against
+   * entirely the wrong query (R180).
+   */
+  reportsLatest?: string;
   /** Per-kind, per-name reads, keyed `<kind>:<id>`. */
   details?: Record<string, string>;
   /** `GET /agent/memories/{id}`. */
   memoriesById?: Record<string, string>;
+  /** Status codes `GET /agent/memories/{id}` answers with instead of a body — an UPSTREAM failure, not a parse failure. */
+  failMemoryById?: Record<string, number>;
   /** `POST /agent/session`. Default: Orange's real asynchronous answer. */
   createSession?: Answer;
   /** Successive answers to `GET /agent/sessions/by-name/…`; the last repeats. */
@@ -137,6 +172,26 @@ interface StubConfig {
 }
 
 const EMPTY = '{"memories":[]}';
+
+/**
+ * `limit` and `include_retracted` on a per-name memory read, HONOURED rather
+ * than ignored (W22, R180). Orange applies its not-retracted filter unless
+ * the flag is set, and it does so BEFORE any reduction — a stub that ignores
+ * the flag lets a read drop it and stay green while production hands back an
+ * older row.
+ */
+function applyListParams(body: string, url: URL): string {
+  const parsed = JSON.parse(body) as { memories?: Record<string, unknown>[] };
+  let rows = parsed.memories ?? [];
+  if (url.searchParams.get("include_retracted") !== "1") {
+    rows = rows.filter((row) => {
+      const retractions = row["retracted_by"];
+      return !Array.isArray(retractions) || retractions.length === 0;
+    });
+  }
+  const limit = Number(url.searchParams.get("limit") ?? "50");
+  return JSON.stringify({ memories: rows.slice(0, limit) });
+}
 
 class Stub {
   readonly requests: Recorded[] = [];
@@ -195,6 +250,10 @@ class Stub {
       return answer ?? { status: 500, body: "no answer configured" };
     }
     if (path === "/agent/sessions") {
+      // `?user_email=*` is load-bearing against the real Orange (an API key's
+      // synthetic email matches no session row), so it is honoured here
+      // rather than ignored — W22, R180.
+      if (url.searchParams.get("user_email") !== "*") return { status: 200, body: "[]" };
       const rows = this.config.sessions ?? [];
       const limit = Number(url.searchParams.get("limit") ?? "200");
       const offset = Number(url.searchParams.get("offset") ?? "0");
@@ -218,6 +277,8 @@ class Stub {
     }
     if (path.startsWith("/agent/memories/")) {
       const id = decodeURIComponent(path.slice("/agent/memories/".length));
+      const failure = this.config.failMemoryById?.[id];
+      if (failure !== undefined) return { status: failure, body: "orange is having a bad day" };
       const found = this.config.memoriesById?.[id];
       return found === undefined
         ? { status: 404, body: "memory not found" }
@@ -225,15 +286,30 @@ class Stub {
     }
     if (path === "/agent/memories") {
       const selector = url.searchParams.get("selector") ?? "";
+      // The selector's OWN `kind=` term, never a prefix test: "kind=report"
+      // is a prefix of "kind=report-template", and answering one query with
+      // the other's body is how a wrong selector passes.
+      const kind = selector
+        .split(",")
+        .find((term) => term.startsWith("kind="))
+        ?.slice("kind=".length);
       if (url.searchParams.get("latest_per") !== null) {
-        if (selector.startsWith("kind=evaluation")) {
+        if (kind === "evaluation") {
           return { status: 200, body: this.config.evaluations ?? EMPTY };
+        }
+        if (kind === "report") {
+          // Honest about `include_retracted`: Orange answers the flagged and
+          // unflagged forms DIFFERENTLY, so a read that drops the flag gets
+          // the empty page and its test fails loudly.
+          return url.searchParams.get("include_retracted") === "1"
+            ? { status: 200, body: this.config.reportsLatest ?? EMPTY }
+            : { status: 200, body: EMPTY };
         }
         return { status: 200, body: this.config.board ?? EMPTY };
       }
       const match = /kind=([a-z-]+),name=([0-9a-f]{8})/.exec(selector);
       const key = match === null ? "" : `${match[1]}:${match[2]}`;
-      return { status: 200, body: this.config.details?.[key] ?? EMPTY };
+      return { status: 200, body: applyListParams(this.config.details?.[key] ?? EMPTY, url) };
     }
     if (path === "/agent/attention-requests") {
       return { status: 200, body: this.config.attention ?? '{"attention_requests":[]}' };
@@ -285,11 +361,26 @@ interface Harness {
   base: string;
   stub: Stub;
   cookie: string;
+  /** Every `composeReportStats` call the router made, when one was injected. */
+  statsCalls: { id: string; sessions?: SessionLookup }[];
 }
 
-async function harness(stubConfig: StubConfig): Promise<Harness> {
+/**
+ * W22's optional wiring. `app.ts` passes W21's real `composeReportStats`; a
+ * router built without one must degrade honestly rather than invent a number,
+ * and BOTH halves of that are graded below.
+ */
+interface HarnessOptions {
+  composeReportStats?: (
+    id: string,
+    options?: { sessions?: SessionLookup },
+  ) => Promise<ReportComposeStats | null>;
+}
+
+async function harness(stubConfig: StubConfig, opts: HarnessOptions = {}): Promise<Harness> {
   const stub = new Stub(pool, stubConfig);
   stub.install();
+  const statsCalls: { id: string; sessions?: SessionLookup }[] = [];
   const cfg = config();
   const logger = createLogger({ logLevel: "silent" });
   const client = createOrangeClient({ baseUrl: cfg.orangeBaseUrl, apiKey: cfg.orangeApiKey, logger });
@@ -317,6 +408,14 @@ async function harness(stubConfig: StubConfig): Promise<Harness> {
       // The create poll must not take real seconds in a unit test.
       sessionPollIntervalMs: 1,
       sessionPollTimeoutMs: 40,
+      ...(opts.composeReportStats === undefined
+        ? {}
+        : {
+            composeReportStats: async (id: string, options?: { sessions?: SessionLookup }) => {
+              statsCalls.push({ id, ...(options?.sessions === undefined ? {} : { sessions: options.sessions }) });
+              return opts.composeReportStats!(id, options);
+            },
+          }),
     }),
   );
   app.use(createErrorHandler(logger));
@@ -329,7 +428,7 @@ async function harness(stubConfig: StubConfig): Promise<Harness> {
 
   const signIn = await fetch(`${base}/test-sign-in`, { method: "POST" });
   const cookie = (signIn.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
-  return { base, stub, cookie };
+  return { base, stub, cookie, statsCalls };
 }
 
 async function get(h: Harness, path: string, withCookie = true): Promise<{ status: number; json: any }> {
@@ -390,15 +489,17 @@ describe("hypotheses_board", () => {
     };
   }
 
-  it("hypotheses_board: issues exactly TWO latest_per requests for twelve hypotheses", async () => {
+  it("hypotheses_board: issues exactly THREE latest_per requests for twelve hypotheses", async () => {
     const h = await harness(twelve());
     const res = await get(h, "/api/hypotheses");
 
     expect(res.status).toBe(200);
     expect(res.json).toHaveLength(12);
-    // O(1) in the hypothesis count. W22 raises this to three when it adds the
-    // headline read; nothing writes a kind=report memory before W21.
-    expect(h.stub.latestPerRequests).toHaveLength(2);
+    // O(1) in the hypothesis count: state, evaluations, reports. Twelve
+    // hypotheses cost the same three reads as one. (W27 adds ONE project-wide
+    // attention read on top; it is not a `latest_per` request and is not
+    // this ticket's — UI design § 4 point 3.)
+    expect(h.stub.latestPerRequests).toHaveLength(3);
     const paths = h.stub.latestPerRequests.map((r) => r.path).sort();
     expect(paths[0]).toContain("selector=kind%3Devaluation");
     expect(paths[0]).toContain("latest_per=name");
@@ -407,6 +508,80 @@ describe("hypotheses_board", () => {
     // Load-bearing on the state read: without it a hostile retraction rolls the
     // board back to the previous status silently (R90).
     expect(paths[1]).toContain("include_retracted=1");
+    expect(paths[2]).toContain("selector=kind%3Dreport&");
+    expect(paths[2]).toContain("latest_per=name");
+    // And on the report read, for exactly the same reason.
+    expect(paths[2]).toContain("include_retracted=1");
+  });
+
+  it("hypotheses_board: headline is line 1 of the kind=report snippet, and null when there is no report", async () => {
+    const stub = twelve();
+    stub.reportsLatest = page([
+      reportRow(ids[0]!, "the basket held through July", `researcher-${ids[0]}`, "sess-tick"),
+      reportRow(ids[1]!, "", `researcher-${ids[1]}`, "sess-tick"),
+    ]);
+    const h = await harness(stub);
+    const res = await get(h, "/api/hypotheses");
+
+    const byId = new Map<string, any>(res.json.map((r: any) => [r.id, r]));
+    expect(byId.get(ids[0]!)!.headline).toBe("the basket held through July");
+    // "" is "the report said nothing on line 1" and stays distinguishable
+    // from null, which is "there is no report". W13 renders them differently.
+    expect(byId.get(ids[1]!)!.headline).toBe("");
+    expect(byId.get(ids[2]!)!.headline).toBeNull();
+  });
+
+  it("hypotheses_board: a report written by the hypothesis's OWN interview session is its own", async () => {
+    // Clause 2 of the ownership rule, and it is the clause a `Set<string>`
+    // lookup silently drops: the interview session's worker is `interviewer`,
+    // not `researcher-<id>`, so clause 1 does not fire and only the session id
+    // can accept this row. Without it a human's own report reads as an attack.
+    const stub = twelve();
+    stub.reportsLatest = page([
+      reportRow(ids[0]!, "written from the interview", "interviewer", `sess-hyp-${ids[0]}`),
+    ]);
+    const h = await harness(stub);
+    const res = await get(h, "/api/hypotheses");
+
+    const row = res.json.find((r: any) => r.id === ids[0]);
+    expect(row.headline).toBe("written from the interview");
+    expect(row.tamper).toBeUndefined();
+  });
+
+  it("hypotheses_board: a report written by ANOTHER hypothesis's researcher is ignored and surfaces as tamper", async () => {
+    // The attack: labels are the caller's, so hypothesis A's researcher
+    // appends `kind=report, name=B`. Without the ownership rule it owns B's
+    // headline outright.
+    const victim = ids[1]!;
+    const attacker = ids[0]!;
+    const stub = twelve();
+    stub.details = {};
+    stub.reportsLatest = page([
+      reportRow(victim, "B has collapsed, sell everything", `researcher-${attacker}`, `sess-hyp-${attacker}`),
+    ]);
+    // What B actually last said, one row underneath — only the per-name
+    // audit read can see it.
+    stub.details![`report:${victim}`] = page([
+      reportRow(victim, "B has collapsed, sell everything", `researcher-${attacker}`, `sess-hyp-${attacker}`),
+      reportRow(victim, "copper is squeezed", `researcher-${victim}`, "sess-tick-b"),
+    ]);
+    const h = await harness(stub);
+    const res = await get(h, "/api/hypotheses");
+
+    const row = res.json.find((r: any) => r.id === victim);
+    expect(row.headline).toBe("copper is squeezed");
+    expect(row.tamper).toEqual([
+      {
+        reason: "cross_hypothesis_write",
+        written_by_worker: `researcher-${attacker}`,
+        written_by_session: `sess-hyp-${attacker}`,
+        memory_id: `rep-${victim}-researcher-${attacker}`,
+      },
+    ]);
+    // The forged text reaches no board row at all.
+    expect(JSON.stringify(res.json)).not.toContain("sell everything");
+    // And the attacker's own row is untouched by its own attack.
+    expect(res.json.find((r: any) => r.id === attacker).tamper).toBeUndefined();
   });
 
   it("hypotheses_board: renders support_score and the conditions summary from the evaluation line", async () => {
@@ -906,6 +1081,9 @@ describe("hypotheses_detail", () => {
         "evaluation",
         "hypothesis",
         "notes",
+        // W22's block. Listed HERE deliberately: this assertion is the one
+        // that fails when a later ticket drops a block from the payload.
+        "report",
         "spec",
         "spec_source",
         "spec_validation",
@@ -952,6 +1130,431 @@ describe("hypotheses_detail", () => {
   });
 });
 
+describe("hypotheses_merge_tamper", () => {
+  // Graded directly, because no fixture can reach the overlap through a
+  // route: a retraction memory carries a single SCALAR `retracts=<id>` label
+  // (`go/agentdb/memories.go:302,315`; the lookup groups on a scalar jsonb
+  // extraction at `:655-672`), so one retraction appears in exactly one row's
+  // `retracted_by` — and BOTH production call sites join reads of disjoint
+  // kinds: `kind=hypothesis` × `kind=report` on the board row, and
+  // `kind=report-template` × `kind=report` on the detail block. Each site
+  // names its own pair, because that is where the assumption can change; this
+  // file cannot see either one. The guard is about the arrays being assembled
+  // from INDEPENDENT reads, which is a property of Orange's data model rather
+  // than of this function.
+  const forged: Tamper = {
+    reason: "forged_row",
+    written_by_worker: "researcher-1a1a1a1a",
+    written_by_session: "sess-tick",
+    memory_id: "mem-7f3a",
+  };
+
+  it("hypotheses_merge_tamper: the same anomaly witnessed by two reads renders ONCE", () => {
+    // Same reason, same offending row, different object identity — which is
+    // what two independent reads produce.
+    expect(mergeTamper([forged], [{ ...forged }])).toEqual([forged]);
+  });
+
+  it("hypotheses_merge_tamper: same memory, DIFFERENT reason is two distinct facts", () => {
+    const retraction: Tamper = { ...forged, reason: "hostile_retraction" };
+    expect(mergeTamper([forged], [retraction])).toEqual([forged, retraction]);
+  });
+
+  it("hypotheses_merge_tamper: same reason, DIFFERENT memory is two distinct facts", () => {
+    const other: Tamper = { ...forged, memory_id: "mem-9c1b" };
+    expect(mergeTamper([forged], [other])).toEqual([forged, other]);
+  });
+
+  it("hypotheses_merge_tamper: nothing to report is null, never an empty array", () => {
+    // An empty array would render as a warning banner with no warnings in it.
+    expect(mergeTamper(undefined, [], undefined)).toBeNull();
+  });
+});
+
+// ── W22: the detail payload's `report` block ────────────────────────────
+//
+// Pinned by design/2026-08-20-agent-wolf.md § "The detail route's report
+// block, pinned": snake_case keys, `updated_at_ms` in unix MILLISECONDS,
+// `drift.orphan_slots` / `drift.unfilled_slots`, and `has_template` first
+// because it is half of the go-live gate.
+
+describe("hypotheses_report_block", () => {
+  const ID = "1a1a1a1a";
+  const SESSION_ID = "sess-hyp-1a1a1a1a";
+  // `data-wolf-fallback` is REQUIRED by W16's parser (a CDN failure is
+  // invisible inside an opaque frame), so a template without one does not
+  // parse and would silently declare no slots at all.
+  const TEMPLATE_HTML =
+    '<section><div data-wolf-fallback>the chart did not render</div>' +
+    '<div data-wolf-slot="headline"></div><div data-wolf-slot="chart-main"></div></section>';
+  const TEMPLATE_HASH = "9f2c1d0e";
+
+  function baseStub(): StubConfig {
+    return {
+      sessions: [sessionRow(`hyp-${ID}`, SESSION_ID)],
+      board: page([stateRow(ID, "live", "Copper is the new oil")]),
+      details: { [`hypothesis:${ID}`]: page([stateRow(ID, "live", "Copper is the new oil")]) },
+      memoriesById: {},
+    };
+  }
+
+  function withTemplate(stub: StubConfig, overrides: RowOverrides = {}): StubConfig {
+    stub.details![`report-template:${ID}`] = page([
+      memoryRow({
+        id: "tmpl-1",
+        labels: { kind: "report-template", name: ID, status: "locked" },
+        snippet: TEMPLATE_HASH,
+        createdAtMs: 1787334040000,
+        ...overrides,
+      }),
+    ]);
+    stub.memoriesById!["tmpl-1"] = JSON.stringify({
+      id: "tmpl-1",
+      labels: { kind: "report-template", name: ID, status: "locked" },
+      content: `${TEMPLATE_HASH}\n${TEMPLATE_HTML}`,
+      created_by_worker: overrides.createdByWorker ?? "",
+      created_by_session: overrides.createdBySession ?? "",
+      created_at: 1787334040000,
+    });
+    return stub;
+  }
+
+  function withReport(stub: StubConfig, slots: Record<string, string>, worker = `researcher-${ID}`): StubConfig {
+    stub.details![`report:${ID}`] = page([
+      memoryRow({
+        id: "rep-1",
+        labels: { kind: "report", name: ID },
+        snippet: "the basket held\n{",
+        createdByWorker: worker,
+        createdBySession: "sess-tick",
+        createdAtMs: 1787334090000,
+      }),
+    ]);
+    stub.memoriesById!["rep-1"] = JSON.stringify({
+      id: "rep-1",
+      labels: { kind: "report", name: ID },
+      content: `the basket held\n${JSON.stringify(slots)}`,
+      created_by_worker: worker,
+      created_by_session: "sess-tick",
+      created_at: 1787334090000,
+    });
+    return stub;
+  }
+
+  it("hypotheses_report_block: no template at all is the empty state, and nothing is invented", async () => {
+    const h = await harness(baseStub());
+    const res = await get(h, `/api/hypotheses/${ID}`);
+
+    expect(res.json.report).toEqual({
+      has_template: false,
+      structure_hash: null,
+      stripped_count: null,
+      updated_at_ms: null,
+      drift: null,
+      unreadable: false,
+      tamper: null,
+    });
+  });
+
+  it("hypotheses_report_block: a locked template and a matching tick — the pinned shape, snake_case", async () => {
+    const stub = withReport(withTemplate(baseStub()), {
+      headline: "<p>held</p>",
+      "chart-main": "<div></div>",
+    });
+    const h = await harness(stub, {
+      composeReportStats: async () => ({
+        structureHash: TEMPLATE_HASH,
+        strippedCount: 2,
+        reportMemoryId: "rep-1",
+      }),
+    });
+    const res = await get(h, `/api/hypotheses/${ID}`);
+
+    expect(res.json.report).toEqual({
+      has_template: true,
+      structure_hash: TEMPLATE_HASH,
+      stripped_count: 2,
+      // MILLISECONDS — the memory table's unit, and the newest of the two rows.
+      updated_at_ms: 1787334090000,
+      // A tick that matched the template exactly: both arrays empty, and that
+      // is NOT the same answer as `drift: null`.
+      drift: { orphan_slots: [], unfilled_slots: [] },
+      unreadable: false,
+      tamper: null,
+    });
+  });
+
+  it("hypotheses_report_block: drift names the orphan and the unfilled slot, by wire key", async () => {
+    const stub = withReport(withTemplate(baseStub()), {
+      headline: "<p>held</p>",
+      "stale-slot": "<p>from an older template</p>",
+    });
+    const h = await harness(stub);
+    const res = await get(h, `/api/hypotheses/${ID}`);
+
+    expect(res.json.report.drift).toEqual({
+      orphan_slots: ["stale-slot"],
+      unfilled_slots: ["chart-main"],
+    });
+  });
+
+  it("hypotheses_report_block: drift is null when NO kind=report exists — the empty state, not drift", async () => {
+    const h = await harness(withTemplate(baseStub()));
+    const res = await get(h, `/api/hypotheses/${ID}`);
+
+    expect(res.json.report.has_template).toBe(true);
+    expect(res.json.report.structure_hash).toBe(TEMPLATE_HASH);
+    // A template whose every slot is unfilled would be `{orphan_slots: [],
+    // unfilled_slots: ["headline","chart-main"]}`. `null` is the different
+    // fact that no tick has run at all.
+    expect(res.json.report.drift).toBeNull();
+    expect(res.json.report.updated_at_ms).toBe(1787334040000);
+  });
+
+  it("hypotheses_report_block: stripped_count comes from composeReportStats, and is NULL when it is not wired", async () => {
+    const stub = withReport(withTemplate(baseStub()), { headline: "<p>held</p>", "chart-main": "" });
+
+    const wired = await harness(stub, {
+      composeReportStats: async () => ({
+        structureHash: TEMPLATE_HASH,
+        strippedCount: 7,
+        reportMemoryId: "rep-1",
+      }),
+    });
+    const withStats = await get(wired, `/api/hypotheses/${ID}`);
+    expect(withStats.json.report.stripped_count).toBe(7);
+    // It is called for THIS hypothesis, and handed the session index the
+    // detail read already holds rather than making it walk the session list.
+    expect(wired.statsCalls).toHaveLength(1);
+    expect(wired.statsCalls[0]!.id).toBe(ID);
+    expect(wired.statsCalls[0]!.sessions?.has(ID)).toBe(true);
+
+    const unwired = await harness(stub);
+    const without = await get(unwired, `/api/hypotheses/${ID}`);
+    // 🔴 null, never 0. `0` is "the sanitiser removed nothing", which W23
+    // renders as clean; a router with no producer must not claim that.
+    expect(without.json.report.stripped_count).toBeNull();
+    // Everything else in the block is still real.
+    expect(without.json.report.has_template).toBe(true);
+    expect(without.json.report.structure_hash).toBe(TEMPLATE_HASH);
+  });
+
+  it("hypotheses_report_block: a FORGED report-template surfaces as tamper and has_template stays false", async () => {
+    // Non-empty provenance on a TRUSTED kind: written from inside a container.
+    const stub = withTemplate(baseStub(), {
+      createdByWorker: `researcher-${ID}`,
+      createdBySession: "sess-tick",
+    });
+    const h = await harness(stub);
+    const res = await get(h, `/api/hypotheses/${ID}`);
+
+    expect(res.json.report.has_template).toBe(false);
+    expect(res.json.report.tamper).toEqual([
+      {
+        reason: "forged_row",
+        written_by_worker: `researcher-${ID}`,
+        written_by_session: "sess-tick",
+        memory_id: "tmpl-1",
+      },
+    ]);
+  });
+
+  it("hypotheses_report_block: a template hidden by a HOSTILE retraction is still served, naming the retractor", async () => {
+    const stub = withTemplate(baseStub(), {
+      retractedBy: [
+        {
+          memory_id: "ret-hostile",
+          created_by_worker: `researcher-${ID}`,
+          created_by_session: "sess-tick",
+          created_at: 1787334050000,
+        },
+      ],
+    });
+    const h = await harness(stub);
+    const res = await get(h, `/api/hypotheses/${ID}`);
+
+    // Served, not erased: an untrusted actor cannot withdraw server-written
+    // state, and a 404 here would be indistinguishable from "nobody authored
+    // one".
+    expect(res.json.report.has_template).toBe(true);
+    expect(res.json.report.tamper).toEqual([
+      {
+        reason: "hostile_retraction",
+        written_by_worker: `researcher-${ID}`,
+        written_by_session: "sess-tick",
+        memory_id: "ret-hostile",
+      },
+    ]);
+  });
+
+  it("hypotheses_report_block: a report written by ANOTHER hypothesis is ignored and named", async () => {
+    const stub = withReport(withTemplate(baseStub()), { headline: "<p>x</p>" }, "researcher-2b2b2b2b");
+    const h = await harness(stub);
+    const res = await get(h, `/api/hypotheses/${ID}`);
+
+    // No own report ⇒ the empty state, NOT a report with drift.
+    expect(res.json.report.drift).toBeNull();
+    expect(res.json.report.tamper).toEqual([
+      {
+        reason: "cross_hypothesis_write",
+        written_by_worker: "researcher-2b2b2b2b",
+        written_by_session: "sess-tick",
+        memory_id: "rep-1",
+      },
+    ]);
+    expect(JSON.stringify(res.json)).not.toContain("the basket held");
+  });
+
+  it("hypotheses_report_block: a report written from the hypothesis's OWN interview session is its own", async () => {
+    // Clause 2 again, on the detail read. `lookupFor` builds a Map carrying
+    // the record's session id for exactly this row; a `Set` would drop the
+    // clause and report a human's own report as `cross_hypothesis_write`.
+    const stub = withTemplate(baseStub());
+    stub.details![`report:${ID}`] = page([
+      memoryRow({
+        id: "rep-1",
+        labels: { kind: "report", name: ID },
+        snippet: "the basket held\n{",
+        createdByWorker: "interviewer",
+        createdBySession: SESSION_ID,
+        createdAtMs: 1787334090000,
+      }),
+    ]);
+    stub.memoriesById!["rep-1"] = JSON.stringify({
+      id: "rep-1",
+      labels: { kind: "report", name: ID },
+      content: 'the basket held\n{"headline":"<p>held</p>"}',
+      created_by_worker: "interviewer",
+      created_by_session: SESSION_ID,
+      created_at: 1787334090000,
+    });
+    const h = await harness(stub);
+    const res = await get(h, `/api/hypotheses/${ID}`);
+
+    expect(res.json.report.tamper).toBeNull();
+    // A real tick was found and compared, so drift is an OBJECT, not null.
+    expect(res.json.report.drift).toEqual({ orphan_slots: [], unfilled_slots: ["chart-main"] });
+  });
+
+  it("hypotheses_report_block: with no template the frame is never composed at all", async () => {
+    // There is nothing to sanitise without a template, and composing would
+    // cost a session walk and every dataset read for nothing.
+    const h = await harness(baseStub(), {
+      composeReportStats: async () => ({ structureHash: "x", strippedCount: 3, reportMemoryId: null }),
+    });
+    const res = await get(h, `/api/hypotheses/${ID}`);
+    expect(h.statsCalls).toHaveLength(0);
+    expect(res.json.report.stripped_count).toBeNull();
+  });
+
+  it("hypotheses_report_block: a report body that does not parse costs the block, NOT the page", async () => {
+    // 🔴 A model inside a container writes that body. `readLatestReport`
+    // throws `invalid` for a body that is not a flat {slotId: html} map —
+    // right for the frame, fatal here, because this is the payload carrying
+    // the VERDICT BUTTONS. Untrusted content must not be able to take the
+    // human's controls away.
+    const stub = withTemplate(baseStub());
+    stub.details![`report:${ID}`] = page([
+      memoryRow({
+        id: "rep-1",
+        labels: { kind: "report", name: ID },
+        snippet: "the basket held\n{",
+        createdByWorker: `researcher-${ID}`,
+        createdBySession: "sess-tick",
+        createdAtMs: 1787334090000,
+      }),
+    ]);
+    stub.memoriesById!["rep-1"] = JSON.stringify({
+      id: "rep-1",
+      labels: { kind: "report", name: ID },
+      content: 'the basket held\n{"chart-main":{"html":"<div/>"}}',
+      created_by_worker: `researcher-${ID}`,
+      created_by_session: "sess-tick",
+      created_at: 1787334090000,
+    });
+    const h = await harness(stub);
+    const res = await get(h, `/api/hypotheses/${ID}`);
+
+    expect(res.status).toBe(200);
+    expect(res.json.hypothesis.id).toBe(ID);
+    expect(res.json.report.has_template).toBe(true);
+    expect(res.json.report.drift).toBeNull();
+    // 🔴 `drift: null` alone would be indistinguishable from "no tick has run
+    // yet". `unreadable` is what separates them, and the difference is the
+    // one a model inside a container can cause at will.
+    expect(res.json.report.unreadable).toBe(true);
+  });
+
+  it("hypotheses_report_block: a stored template that no longer validates is `unreadable` too", async () => {
+    const stub = baseStub();
+    stub.details![`report-template:${ID}`] = page([
+      memoryRow({
+        id: "tmpl-1",
+        labels: { kind: "report-template", name: ID, status: "locked" },
+        snippet: "9f2c1d0e",
+        createdAtMs: 1787334040000,
+      }),
+    ]);
+    // No `data-wolf-fallback`, which W16's parser requires — the state Wolf
+    // reaches when a validator changes under a template it already accepted.
+    stub.memoriesById!["tmpl-1"] = JSON.stringify({
+      id: "tmpl-1",
+      labels: { kind: "report-template", name: ID, status: "locked" },
+      content: '9f2c1d0e\n<section><div data-wolf-slot="headline"></div></section>',
+      created_by_worker: "",
+      created_by_session: "",
+      created_at: 1787334040000,
+    });
+    const h = await harness(stub);
+    const res = await get(h, `/api/hypotheses/${ID}`);
+
+    expect(res.status).toBe(200);
+    expect(res.json.report.has_template).toBe(true);
+    expect(res.json.report.unreadable).toBe(true);
+  });
+
+  it("hypotheses_report_block: an UPSTREAM failure on the report read is NOT an unreadable report", async () => {
+    // 🔴 The narrowing at the catch. An Orange outage or a bug must
+    // propagate: answering 200 with an empty block would tell the operator
+    // the report layer is idle while the upstream is down, and W10's poller
+    // reads `unavailable` as "retry" and `internal` as "we have a bug" — both
+    // of which this would erase.
+    const stub = withTemplate(baseStub());
+    stub.details![`report:${ID}`] = page([
+      memoryRow({
+        id: "rep-1",
+        labels: { kind: "report", name: ID },
+        snippet: "the basket held\n{",
+        createdByWorker: `researcher-${ID}`,
+        createdBySession: "sess-tick",
+        createdAtMs: 1787334090000,
+      }),
+    ]);
+    // `memoriesById` has no `rep-1`, so the full read is a 500 from Orange,
+    // not a parse failure.
+    stub.failMemoryById = { "rep-1": 500 };
+    const h = await harness(stub);
+    const res = await get(h, `/api/hypotheses/${ID}`);
+
+    expect(res.status).toBeGreaterThanOrEqual(500);
+    expect(res.json.kind).not.toBe("invalid");
+  });
+
+  it("hypotheses_report_block: both report reads carry include_retracted=1", async () => {
+    // Without it Orange filters retracted rows BEFORE the reduction and a
+    // hostile retraction silently hands back an older row (R90).
+    const h = await harness(withReport(withTemplate(baseStub()), { headline: "<p>x</p>" }));
+    await get(h, `/api/hypotheses/${ID}`);
+    for (const kind of ["report-template", "report"]) {
+      const request = h.stub.requests.find(
+        (r) => r.path.includes(`selector=kind%3D${kind}%2Cname%3D${ID}`) && !r.path.includes("latest_per"),
+      );
+      expect(request, kind).toBeDefined();
+      expect(request!.path, kind).toContain("include_retracted=1");
+    }
+  });
+});
+
 // ── The four human routes (W9) ──────────────────────────────────────────
 //
 // The provisioner's own behaviour — the two orderings, the rollback, the
@@ -965,10 +1568,37 @@ describe("hypotheses_human_routes", () => {
   const ID = "1a1a1a1a";
   const SESSION_ID = "sess-hyp-1a1a1a1a";
 
+  /**
+   * ⚠️ Every stub here carries a LOCKED REPORT TEMPLATE, and it is not
+   * scenery. W22 added the server-side half of the go-live gate: `POST
+   * …/go-live` refuses a hypothesis with no `kind=report-template` at 422
+   * before the provisioner is reached, so a stub without one never gets as
+   * far as the spec errors these tests are about. The refusal itself is
+   * graded by its own case below.
+   */
   function draftStub(): StubConfig {
     return {
       sessions: [sessionRow(`hyp-${ID}`, SESSION_ID)],
-      details: { [`hypothesis:${ID}`]: page([stateRow(ID, "draft", "Copper is the new oil")]) },
+      details: {
+        [`hypothesis:${ID}`]: page([stateRow(ID, "draft", "Copper is the new oil")]),
+        [`report-template:${ID}`]: page([
+          memoryRow({
+            id: "tmpl-live",
+            labels: { kind: "report-template", name: ID, status: "locked" },
+            snippet: "9f2c1d0e",
+          }),
+        ]),
+      },
+      memoriesById: {
+        "tmpl-live": JSON.stringify({
+          id: "tmpl-live",
+          labels: { kind: "report-template", name: ID, status: "locked" },
+          content: '9f2c1d0e\n<section><div data-wolf-slot="headline"></div></section>',
+          created_by_worker: "",
+          created_by_session: "",
+          created_at: 1787334040000,
+        }),
+      },
     };
   }
 
@@ -1015,16 +1645,14 @@ describe("hypotheses_human_routes", () => {
         createdBySession: SESSION_ID,
       }),
     ]);
-    stub.memoriesById = {
-      "cand-bad": JSON.stringify({
+    stub.memoriesById!["cand-bad"] = JSON.stringify({
         id: "cand-bad",
         labels: { kind: "hypothesis-spec-candidate", name: ID },
         content: `a summary\n${JSON.stringify({ thesis: "t", horizon_days: 1, metrics: [], invalidation: [] })}`,
         created_by_worker: "",
         created_by_session: SESSION_ID,
-        created_at: 1787334047000,
-      }),
-    };
+      created_at: 1787334047000,
+    });
     const h = await harness(stub);
     const res = await post(h, `/api/hypotheses/${ID}/go-live`, {});
 
@@ -1069,6 +1697,51 @@ describe("hypotheses_human_routes", () => {
     const h = await harness(draftStub());
     expect((await post(h, `/api/hypotheses/${ID}/retire`, {})).status).toBe(400);
     expect((await post(h, `/api/hypotheses/${ID}/retire`, { rationale: " " })).status).toBe(400);
+    expect(h.stub.appendRequests).toHaveLength(0);
+  });
+
+  it("hypotheses_human_routes: go-live is 422 with path report.has_template when no template is locked", async () => {
+    // R45's server-side backstop. W24's button is enabled iff
+    // `spec_validation.valid && report.has_template`; this is the race, and
+    // 422 maps to `invalid` in § "Shared error taxonomy" — never `internal`.
+    const stub = draftStub();
+    delete stub.details![`report-template:${ID}`];
+    const h = await harness(stub);
+    const res = await post(h, `/api/hypotheses/${ID}/go-live`, {});
+
+    expect(res.status).toBe(422);
+    expect(res.json.kind).toBe("invalid");
+    expect(res.json.details.errors).toEqual([
+      {
+        path: "report.has_template",
+        message:
+          "no report template has been locked for this hypothesis — author one before going live",
+      },
+    ]);
+    // Nothing provisioned: no memory written and no worker created.
+    expect(h.stub.appendRequests).toHaveLength(0);
+    expect(h.stub.requests.filter((r) => r.method === "PUT")).toHaveLength(0);
+  });
+
+  it("hypotheses_human_routes: a template FORGED from inside a container does not open the gate", async () => {
+    // `has_template` is the same read the detail block reports, so a template
+    // that fails the trust rule is not a template here either — otherwise a
+    // prompt-injected researcher could unlock its own go-live.
+    const stub = draftStub();
+    stub.details![`report-template:${ID}`] = page([
+      memoryRow({
+        id: "tmpl-forged",
+        labels: { kind: "report-template", name: ID, status: "locked" },
+        snippet: "9f2c1d0e",
+        createdByWorker: `researcher-${ID}`,
+        createdBySession: "sess-tick",
+      }),
+    ]);
+    const h = await harness(stub);
+    const res = await post(h, `/api/hypotheses/${ID}/go-live`, {});
+
+    expect(res.status).toBe(422);
+    expect(res.json.details.errors[0].path).toBe("report.has_template");
     expect(h.stub.appendRequests).toHaveLength(0);
   });
 

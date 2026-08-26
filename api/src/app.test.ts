@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { MockAgent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import type { AddressInfo } from "node:net";
 import express from "express";
 import { createApp, createErrorHandler } from "./app.js";
@@ -111,9 +112,14 @@ describe("createApp", () => {
     // rejects it as 400 `invalid` BEFORE any upstream call, so this needs no
     // MockAgent and touches no network. Unmounted, Express falls through to
     // 404. 400-vs-404 is the discriminator.
-    async function signedInBase(): Promise<{ base: string; cookie: string }> {
+    async function signedInBase(
+      env: NodeJS.ProcessEnv = {},
+    ): Promise<{ base: string; cookie: string }> {
       const base = await listen(
-        createApp(createLogger({ logLevel: "silent" }), testConfig({ WOLF_TEST_LOGIN: "kai@badcode.dev:test-password" })),
+        createApp(
+          createLogger({ logLevel: "silent" }),
+          testConfig({ WOLF_TEST_LOGIN: "kai@badcode.dev:test-password", ...env }),
+        ),
       );
       const res = await fetch(`${base}/api/auth/dev-login`, {
         method: "POST",
@@ -134,6 +140,253 @@ describe("createApp", () => {
       const { base, cookie } = await signedInBase();
       const res = await fetch(`${base}/api/hypotheses/NOTANID/series/brent_crude`, { headers: { cookie } });
       expect(res.status).toBe(400);
+    });
+
+    // W22's wiring. `createApp` is the ONLY place `composeReportStats` is
+    // handed to the hypotheses router, so this is the only test that can fail
+    // when that argument is dropped — every test in hypotheses.test.ts builds
+    // its own bare express() app and injects its own (or none), which is
+    // exactly the R133 hole W11's two cases above were added to close.
+    //
+    // The discriminator is `stripped_count`: a NUMBER only when a producer
+    // was wired in. Unwired the block is still served with
+    // `stripped_count: null`, so asserting the block's presence would prove
+    // nothing at all.
+    /**
+     * ⚠️ An ANSWER-ONLY Orange stub, deliberately: it dispatches on path and
+     * on the selector's `kind=` term and ignores `limit`, `latest_per` and
+     * `include_retracted`. Honest here because the two cases below are about
+     * what `createApp` WIRES TOGETHER, not about query semantics — those are
+     * graded in `routes/hypotheses.test.ts` against a stub that does honour
+     * all three (R180).
+     */
+    const ORANGE = "http://orange.test:4100";
+    const ID = "1a1a1a1a";
+    const TEMPLATE =
+      '<section><div data-wolf-fallback>no chart</div>' +
+      '<div data-wolf-slot="headline"></div></section>';
+
+    function memoryRow(
+      id: string,
+      labels: Record<string, string>,
+      snippet: string,
+      provenance: { worker: string; session: string } = { worker: "", session: "" },
+    ): Record<string, unknown> {
+      return {
+        id,
+        labels,
+        snippet,
+        score: 0,
+        created_by_worker: provenance.worker,
+        created_by_session: provenance.session,
+        created_at: 1787334047000,
+      };
+    }
+
+    /** `<kind>` → the `memories` page; `byId` → `GET /agent/memories/{id}`. */
+    interface OrangeRows {
+      byKind?: Record<string, Record<string, unknown>[]>;
+      byId?: Record<string, unknown>;
+    }
+
+    async function withOrange<T>(rows: OrangeRows, fn: () => Promise<T>): Promise<T> {
+      const agent = new MockAgent();
+      agent.disableNetConnect();
+      agent.enableNetConnect((host) => host.startsWith("127.0.0.1") || host.startsWith("localhost"));
+      const previous = getGlobalDispatcher();
+      setGlobalDispatcher(agent);
+      try {
+        agent
+          .get(ORANGE)
+          .intercept({ method: "GET", path: () => true })
+          .reply((opts) => {
+            const url = new URL(String(opts.path), ORANGE);
+            const kind = (url.searchParams.get("selector") ?? "")
+              .split(",")
+              .find((term) => term.startsWith("kind="))
+              ?.slice("kind=".length);
+            let body: unknown = { memories: [] };
+            if (url.pathname === "/agent/sessions") {
+              body = [
+                {
+                  id: `sess-hyp-${ID}`,
+                  name: `hyp-${ID}`,
+                  worker: "interviewer",
+                  status: "running",
+                  created_at: 1787334311,
+                  updated_at: 1787334313,
+                },
+              ];
+            } else if (url.pathname.startsWith("/agent/memories/")) {
+              const id = decodeURIComponent(url.pathname.slice("/agent/memories/".length));
+              const found = rows.byId?.[id];
+              if (found === undefined) {
+                return { statusCode: 404, data: "memory not found" as never };
+              }
+              body = found;
+            } else if (url.pathname === "/agent/memories" && kind !== undefined) {
+              body = { memories: rows.byKind?.[kind] ?? [] };
+            }
+            return {
+              statusCode: 200,
+              data: JSON.stringify(body) as never,
+              responseOptions: { headers: { "content-type": "application/json" } },
+            };
+          })
+          .persist();
+        return await fn();
+      } finally {
+        setGlobalDispatcher(previous);
+        await agent.close();
+      }
+    }
+
+    async function fetchSignedIn(path: string): Promise<{ status: number; json: any }> {
+      const { base, cookie } = await signedInBase({ ORANGE_BASE_URL: ORANGE });
+      const res = await fetch(`${base}${path}`, { headers: { cookie } });
+      return { status: res.status, json: await res.json() };
+    }
+
+    async function detail(): Promise<{ status: number; json: any }> {
+      return fetchSignedIn(`/api/hypotheses/${ID}`);
+    }
+
+    const lockedTemplate = {
+      byKind: {
+        hypothesis: [memoryRow("state-1", { kind: "hypothesis", name: ID, status: "draft" }, "Copper\nthesis")],
+        "report-template": [
+          memoryRow("tmpl-1", { kind: "report-template", name: ID, status: "locked" }, "9f2c1d0e"),
+        ],
+      },
+      byId: {
+        "tmpl-1": {
+          id: "tmpl-1",
+          labels: { kind: "report-template", name: ID, status: "locked" },
+          content: `9f2c1d0e\n${TEMPLATE}`,
+          created_by_worker: "",
+          created_by_session: "",
+          created_at: 1787334040000,
+        },
+      },
+    } satisfies OrangeRows;
+
+    it("wires composeReportStats into the detail route — stripped_count is a number, not null", async () => {
+      // The discriminator is `stripped_count`: a NUMBER only when a producer
+      // was wired in. Unwired the block is still served with
+      // `stripped_count: null`, so asserting the block's presence would prove
+      // nothing at all.
+      const res = await withOrange(lockedTemplate, detail);
+
+      expect(res.status).toBe(200);
+      expect(res.json.report.has_template).toBe(true);
+      // A template with no filled slots removes nothing, so the number is 0 —
+      // and 0 is only reachable through a wired producer.
+      expect(typeof res.json.report.stripped_count).toBe("number");
+    });
+
+    it("a cross-hypothesis forgery survives an unreadable own report, end to end", async () => {
+      // 🔴 The defect this case exists for lived in the SEAM between the store
+      // and the route, so it is graded here and not only at the store layer.
+      //
+      //   `2b2b2b2b`'s researcher appends `kind=report, name=1a1a1a1a`;
+      //   `1a1a1a1a`'s own genuine report body is not a flat {slotId: html}
+      //   map, so parsing it throws.
+      //
+      // The route must degrade — untrusted content cannot be allowed to take
+      // away the page carrying the verdict buttons — but the anomaly was
+      // witnessed BEFORE the body was read and is still true. Discarding it
+      // made the board warn about an attack this page reported as a benign
+      // empty state.
+      const forged = memoryRow(
+        "rep-forged",
+        { kind: "report", name: ID },
+        "1a1a1a1a has collapsed, sell everything\n{",
+        { worker: "researcher-2b2b2b2b", session: "sess-hyp-2b2b2b2b" },
+      );
+      const own = memoryRow("rep-own", { kind: "report", name: ID }, "the basket held\n{", {
+        worker: `researcher-${ID}`,
+        session: "sess-tick",
+      });
+      const res = await withOrange(
+        {
+          byKind: { ...lockedTemplate.byKind, report: [forged, own] },
+          byId: {
+            ...lockedTemplate.byId,
+            "rep-own": {
+              id: "rep-own",
+              labels: { kind: "report", name: ID },
+              content: 'the basket held\n{"headline":{"html":"<p>x</p>"}}',
+              created_by_worker: `researcher-${ID}`,
+              created_by_session: "sess-tick",
+              created_at: 1787334090000,
+            },
+          },
+        },
+        detail,
+      );
+
+      expect(res.status).toBe(200);
+      // IGNORED — the forged headline reaches nothing.
+      expect(JSON.stringify(res.json)).not.toContain("sell everything");
+      // NOT RENDERED, and now SAYS SO rather than looking like an idle report
+      // layer.
+      expect(res.json.report.drift).toBeNull();
+      expect(res.json.report.unreadable).toBe(true);
+      // SURFACES AS TAMPER — the third clause of the criterion, and the half
+      // that was silently lost.
+      expect(res.json.report.tamper).toEqual([
+        {
+          reason: "cross_hypothesis_write",
+          written_by_worker: "researcher-2b2b2b2b",
+          written_by_session: "sess-hyp-2b2b2b2b",
+          memory_id: "rep-forged",
+        },
+      ]);
+    });
+
+    it("an unreadable report with NO anomaly carries no `tamper` key on the frame route's 400", async () => {
+      // 🔴 `withReportTamper`'s empty short-circuit, graded on the wire.
+      //
+      // `readLatestReport` attaches what it witnessed to the error it throws,
+      // and `createErrorHandler` echoes an `invalid`'s `details` verbatim. With
+      // no short-circuit an error that witnessed NOTHING is still rebuilt
+      // carrying `"tamper": []`, and an empty array is not the same claim as
+      // an absent one — it renders as a warning banner with no warnings in it.
+      // That is the exact `[]`-vs-absent distinction `mergeTamper` is careful
+      // about on the other two payloads; this is the third.
+      //
+      // One own report, no forgery, a body that is not a flat {slotId: html}
+      // map. `composeFor` reads the template first, so the 404 branch is not
+      // reached and the parse failure is what answers.
+      const own = memoryRow("rep-own", { kind: "report", name: ID }, "the basket held\n{", {
+        worker: `researcher-${ID}`,
+        session: "sess-tick",
+      });
+      const res = await withOrange(
+        {
+          byKind: { ...lockedTemplate.byKind, report: [own] },
+          byId: {
+            ...lockedTemplate.byId,
+            "rep-own": {
+              id: "rep-own",
+              labels: { kind: "report", name: ID },
+              content: 'the basket held\n{"headline":{"html":"<p>x</p>"}}',
+              created_by_worker: `researcher-${ID}`,
+              created_by_session: "sess-tick",
+              created_at: 1787334090000,
+            },
+          },
+        },
+        () => fetchSignedIn(`/api/hypotheses/${ID}/report/frame`),
+      );
+
+      expect(res.status).toBe(400);
+      expect(res.json.kind).toBe("invalid");
+      // The parser's own detail is still there, so this is the right failure
+      // and not merely a differently-shaped one.
+      expect(res.json.details.key).toBe("headline");
+      // And nothing was witnessed, so the key is ABSENT — not present-and-empty.
+      expect(Object.keys(res.json.details)).not.toContain("tamper");
     });
 
     it("refuses to build at all when WOLF_MCP_TOKEN is unset, naming the variable", () => {
