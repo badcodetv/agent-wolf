@@ -264,6 +264,54 @@ describe("prose survives sanitisation", () => {
     expect(sanitiseSlot(input).html).toContain(attr);
   });
 
+  /**
+   * 🔴 **ESCAPED MARKUP MUST STAY ESCAPED.** Nothing else in this file
+   * produces an escaped `<` in the OUTPUT — the two `&lt;` sequences in the
+   * vector table sit inside `<textarea>`/`<xmp>`, whose content
+   * `FORBID_CONTENTS` discards entirely — so until these cases existed, a
+   * `sanitiseSlot` that ended with `.replace(/&lt;/g, "<")` passed all 1348
+   * tests in the repo while turning inert text into a live `<img onerror>`
+   * in the frame. That is the single most classic mXSS enabler there is, and
+   * it is the one real escape the W17 verifier found.
+   *
+   * Each case asserts the entity survives AND that the output is a fixed
+   * point, which catches an unescaping sanitiser twice: once on the token,
+   * and once structurally — unescaped markup would be REAL markup on the
+   * second pass, so the second pass would strip it and the output would
+   * move.
+   */
+  it.each([
+    ["an escaped img/onerror", `<p>a &lt;img src=x onerror=alert(1)&gt;</p>`, ["&lt;img"], ["<img"]],
+    ["an escaped script", `<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>`, ["&lt;script"], ["<script"]],
+    ["escaped angle brackets", `<p>&lt;&lt;&gt;&gt;</p>`, ["&lt;", "&gt;"], ["<<", ">>"]],
+    ["an escaped ampersand", `<p>Tom &amp; Jerry</p>`, ["&amp;"], []],
+  ])("keeps %s escaped, and the output is a fixed point", (_name, input, present, absent) => {
+    const result = sanitiseSlot(input);
+    expect(result.html).toBe(input);
+    expect(result.strippedCount).toBe(0);
+    for (const token of present) expect(result.html).toContain(token);
+    for (const token of absent) expect(result.html).not.toContain(token);
+    const again = sanitiseSlot(result.html);
+    expect(again.html).toBe(result.html);
+    expect(again.strippedCount).toBe(0);
+  });
+
+  it("normalises a bare `<` in text into an entity rather than markup", () => {
+    const result = sanitiseSlot(`<p>5 < 10 and 11 > 7</p>`);
+    expect(result.html).toBe(`<p>5 &lt; 10 and 11 &gt; 7</p>`);
+    expect(sanitiseSlot(result.html).html).toBe(result.html);
+  });
+
+  // DOMPurify serialises `&lt;` inside a quoted attribute value as a literal
+  // `<`, which is legal there — an HTML parser gives `<` no special meaning
+  // inside a quoted value — and the fixed-point check is what proves the
+  // round trip does not drift.
+  it("emits a raw `<` inside a quoted attribute value, and stays a fixed point", () => {
+    const result = sanitiseSlot(`<p title="a &lt; b">t</p>`);
+    expect(result.html).toBe(`<p title="a < b">t</p>`);
+    expect(sanitiseSlot(result.html).html).toBe(result.html);
+  });
+
   it("keeps a whole report-shaped table intact", () => {
     const input =
       `<table class="scoreboard"><caption>Metrics</caption>` +
@@ -423,7 +471,11 @@ const VECTORS: Vector[] = [
     // against a closing quote: api/'s import-boundary checker parses that as
     // a module specifier and reports a nonsense violation (R145(2), still
     // open — this ticket is the fourth to hit it). Hence the longer token
-    // below, which is a stronger assertion anyway.
+    // below. To be precise about it: forbidding `"@import url("` is strictly
+    // WEAKER than forbidding `"@import"` — the former implies the latter, not
+    // the other way round. It stays because it is still fully discriminating
+    // for this vector (emptying FORBID_CONTENTS reddens this row), not
+    // because it is stronger.
     name: "<style> in body, with an @import rule",
     input: `<div><style>@import url("https://${EVIL}/x.css");</style></div>`,
     forbidden: ["<style", "@import url(", EVIL],
@@ -594,6 +646,38 @@ describe("the vector table", () => {
     expectAbsent(result.html, [handler, "alert(1)"]);
     expect(result.html).toContain(KEEP);
     expect(result.strippedCount).toBe(1);
+  });
+
+  /**
+   * `FORBID_CONTENTS` with **text-only** children. The vector-table rows for
+   * these elements all use ELEMENT children, which `_isUnsafeNode` kills
+   * first — so for `noscript` and `xmp` the `FORBID_CONTENTS` entry never
+   * actually fired, and both were guarded by the literal pin alone.
+   *
+   * With text-only children the entries become load-bearing, and the failure
+   * they prevent is **prose leakage**, not XSS: without the entry a model's
+   * raw markup is hoisted out and rendered to a human as though it were the
+   * day's analysis. Measured against isomorphic-dompurify ^2 — six of the
+   * seven are load-bearing this way.
+   */
+  it.each([
+    "script", "style", "noscript", "title", "textarea", "xmp",
+  ])("suppresses text-only content inside <%s> (FORBID_CONTENTS)", (tag) => {
+    const result = sanitiseSlot(`<div><${tag}>LEAKED-TEXT</${tag}></div>`);
+    expect(result.html).toBe(`<div></div>`);
+    expect(result.html).not.toContain("LEAKED-TEXT");
+    // Prose OUTSIDE the forbidden element still comes through, so this is
+    // not green on a sanitiser that empties everything.
+    const withProse = sanitiseSlot(`<div><p>${KEEP}</p><${tag}>LEAKED-TEXT</${tag}></div>`);
+    expect(withProse.html).toContain(KEEP);
+    expect(withProse.html).not.toContain("LEAKED-TEXT");
+  });
+
+  // `template` is the seventh entry and is genuinely inert: its children live
+  // in a DocumentFragment, so they never reach the walk and removing the
+  // entry changes nothing. It stays on the literal pin alone, deliberately.
+  it("suppresses <template> content, which the entry is not what achieves", () => {
+    expect(sanitiseSlot(`<div><template>LEAKED-TEXT</template></div>`).html).toBe(`<div></div>`);
   });
 
   it("strips a handler from an element that is itself removed", () => {
