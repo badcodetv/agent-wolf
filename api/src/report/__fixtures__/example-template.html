@@ -1,0 +1,285 @@
+<!--
+  Agent Wolf — the worked example report template.
+
+  This file is the ONE worked example referenced by `prompts/report-authoring.md`.
+  It is not pasted into the prompt: the prompt names this path, and
+  `api/src/report/fixture.test.ts` runs these exact bytes through
+  `parseTemplate` and `validateTemplate` on every test run, so the prompt
+  cannot promise something the parser refuses.
+
+  What it demonstrates, in the order a reader meets it:
+
+    1. A FRAGMENT — no `<!doctype>`, no `<html>`, `<head>` or `<body>`.
+       `composeFrame` owns the skeleton and refuses a template that carries it.
+    2. The MANDATORY `[data-wolf-fallback]` element, AND the template's own
+       script removing it once the chart has actually drawn. A template that
+       declares the fallback and never removes it displays a permanent failure
+       message on every healthy report.
+    3. Slots as CONTAINERS the daily tick fills — prose regions only. Note
+       what the template puts INSIDE a slot: `composeFrame` replaces a slot's
+       children with the day's content, or with NOTHING when the tick did not
+       fill it, so that markup is never a day-one placeholder a reader sees —
+       it is documentation for the human reviewing the template. Every heading
+       therefore sits OUTSIDE its slot, so the page still reads correctly with
+       every slot empty.
+    4. TABLE STRUCTURE IN THE TEMPLATE: the `<table>`, `<tr>` and `<td>` are
+       here; only the cells' prose is a slot. A slot that tried to emit
+       `<tr><td>…</td></tr>` would lose the tags silently.
+    5. `window.__WOLF_SERIES__` read by the template's own inline script,
+       keyed by metric slug, with `tMs` in epoch milliseconds.
+    6. The CSS `url(#…)` carve-out: `stroke: url(#wolf-line)` in the `<style>`
+       block below references a paint server INSIDE this document and is
+       allowed, while an `<a href="#anywhere">` or `<use href="#id">` would be
+       refused by the attribute rule. Do not write one. (The `fill="url(…)"`
+       presentation attributes on the two `<path>` elements are a different
+       thing and are NOT the carve-out: `fill` is not a URL attribute the
+       validator reads at all, so it passes by omission rather than by rule.
+       They are written here because a chart needs them; do not read them as
+       permission to put a URL in an attribute nobody checks.)
+    7. NO remote URL of any kind, so the frame's derived CSP grants no host at
+       all. A remote chart library is permitted if every URL is `https:`, but
+       each host is then listed on the go-live review screen for a human to
+       approve, and it is one more thing that can fail inside an opaque frame.
+-->
+<section class="wolf-report">
+  <header class="wolf-report__header">
+    <h1 class="wolf-report__title">Daily report</h1>
+    <p class="wolf-report__sub">
+      Every number below is drawn from the datasets this hypothesis's own researcher wrote.
+    </p>
+  </header>
+
+  <!--
+    THE FALLBACK. It renders by default, so a browser that never runs the
+    script below — a syntax error, a chart library that failed to load, a
+    crash halfway through drawing — shows this sentence instead of an empty
+    rectangle. `removeFallback()` at the end of `drawChart()` is what takes it
+    away, and it runs only after the chart is on the page.
+  -->
+  <p class="wolf-report__fallback" data-wolf-fallback>
+    The chart on this report did not render. The figures in the table below still come from the
+    stored datasets, but the shape of the series is missing — treat this report as incomplete.
+  </p>
+
+  <figure class="wolf-chart">
+    <svg class="wolf-chart__svg" viewBox="0 0 640 220" role="img" aria-label="Metric history">
+      <defs>
+        <linearGradient id="wolf-area" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#4f8cff" stop-opacity="0.35"></stop>
+          <stop offset="100%" stop-color="#4f8cff" stop-opacity="0"></stop>
+        </linearGradient>
+        <linearGradient id="wolf-line" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stop-color="#4f8cff"></stop>
+          <stop offset="100%" stop-color="#8f6cff"></stop>
+        </linearGradient>
+      </defs>
+      <path class="wolf-chart__area" id="wolf-chart-area" fill="url(#wolf-area)" d=""></path>
+      <path class="wolf-chart__line" id="wolf-chart-line" fill="none" d=""></path>
+      <text class="wolf-chart__empty" id="wolf-chart-empty" x="320" y="110" text-anchor="middle"></text>
+    </svg>
+    <figcaption class="wolf-chart__caption" id="wolf-chart-caption"></figcaption>
+  </figure>
+
+  <!--
+    A SLOT. Its children are the bytes the daily tick replaces. What is written
+    inside it here is NOT a day-one placeholder: an unfilled slot renders
+    empty, so this line exists for the human reviewing the template and for
+    nobody else. The heading is outside the slot for exactly that reason.
+  -->
+  <section class="wolf-report__note">
+    <h2 class="wolf-report__h2">Today's note</h2>
+    <div class="wolf-report__note-body" data-wolf-slot="headline-note">
+      <p>(the researcher's daily note)</p>
+    </div>
+  </section>
+
+  <!--
+    THE TABLE LIVES HERE, NOT IN A SLOT. `<table>`, `<thead>`, `<tr>`, `<th>`
+    and `<td>` are all template bytes. Each row's COMMENT cell is a slot, so
+    the tick writes prose into a cell that already exists. A slot asked to
+    emit `<tr><td>…</td></tr>` would have those tags dropped by the
+    sanitiser's body-context parse, keeping only the text, and the stripped
+    count would report 0 — nothing would say anything went wrong.
+  -->
+  <table class="wolf-table">
+    <caption class="wolf-table__caption">Latest observation per metric</caption>
+    <thead>
+      <tr>
+        <th scope="col">Metric</th>
+        <th scope="col">Latest</th>
+        <th scope="col">Observed</th>
+        <th scope="col">Researcher's comment</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <th scope="row">gold-usd</th>
+        <td class="wolf-table__value" data-metric="gold-usd">&mdash;</td>
+        <td class="wolf-table__when" data-metric-when="gold-usd">&mdash;</td>
+        <td class="wolf-table__comment" data-wolf-slot="gold-usd-comment"></td>
+      </tr>
+      <tr>
+        <th scope="row">real-yield-10y</th>
+        <td class="wolf-table__value" data-metric="real-yield-10y">&mdash;</td>
+        <td class="wolf-table__when" data-metric-when="real-yield-10y">&mdash;</td>
+        <td class="wolf-table__comment" data-wolf-slot="real-yield-comment"></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <section class="wolf-report__risks">
+    <h2 class="wolf-report__h2">Risks and caveats</h2>
+    <div class="wolf-report__risks-body" data-wolf-slot="risks">
+      <p>(anything the researcher wants a reader to be careful about)</p>
+    </div>
+  </section>
+</section>
+
+<style>
+  .wolf-report { font: 15px/1.5 system-ui, sans-serif; color: #1a1c20; }
+  .wolf-report__title { font-size: 20px; margin: 0 0 4px; }
+  .wolf-report__h2 { font-size: 15px; margin: 0 0 6px; }
+  .wolf-report__sub { margin: 0 0 16px; color: #5a6068; }
+  .wolf-report__fallback {
+    margin: 0 0 16px; padding: 10px 12px;
+    border: 1px solid #d8a13a; border-radius: 6px; background: #fdf6e6;
+  }
+  .wolf-chart { margin: 0 0 20px; }
+  .wolf-chart__svg { width: 100%; height: auto; }
+  /* The `url(#…)` carve-out: a paint server in THIS document, not a network fetch. */
+  .wolf-chart__line { stroke: url(#wolf-line); stroke-width: 2; }
+  .wolf-chart__empty { fill: #8a9099; font-size: 13px; }
+  .wolf-chart__caption { color: #5a6068; font-size: 13px; }
+  .wolf-table { width: 100%; border-collapse: collapse; margin: 0 0 20px; }
+  .wolf-table th, .wolf-table td { border-bottom: 1px solid #e4e7ea; padding: 6px 8px; text-align: left; vertical-align: top; }
+  .wolf-table__value, .wolf-table__when { font-variant-numeric: tabular-nums; white-space: nowrap; }
+</style>
+
+<script>
+  (function () {
+    "use strict";
+
+    // The series the frame injected, keyed by metric slug. Every metric the
+    // LOCKED SPEC names is present, even on day one — a metric whose dataset
+    // has never been written arrives as `{unit, version: 0, points: []}`, so
+    // this code must handle an empty `points` array rather than assume data.
+    var series = (window.__WOLF_SERIES__ || {});
+
+    // The metrics this template draws, in the order it draws them. Pinned
+    // here rather than derived from `Object.keys(series)` so that adding a
+    // metric to the spec cannot silently change what the chart shows: the
+    // template is frozen at go-live and a change to it is a human decision.
+    var METRICS = ["gold-usd", "real-yield-10y"];
+    var PRIMARY = "gold-usd";
+
+    function pointsFor(slug) {
+      var metric = series[slug];
+      if (!metric || !Array.isArray(metric.points)) return [];
+      return metric.points.filter(function (p) {
+        // `tMs` is EPOCH MILLISECONDS and `v` is a number. Anything else is
+        // not a point this chart can place.
+        return p && typeof p.tMs === "number" && typeof p.v === "number" && isFinite(p.v);
+      });
+    }
+
+    function formatWhen(tMs) {
+      // Report in UTC. A local-time axis makes two readers disagree about
+      // which day a move happened on.
+      return new Date(tMs).toISOString().slice(0, 10);
+    }
+
+    function fillTable() {
+      METRICS.forEach(function (slug) {
+        var points = pointsFor(slug);
+        var last = points.length ? points[points.length - 1] : null;
+        var unit = (series[slug] && series[slug].unit) || "";
+        var valueCell = document.querySelector('[data-metric="' + slug + '"]');
+        var whenCell = document.querySelector('[data-metric-when="' + slug + '"]');
+        if (valueCell) {
+          valueCell.textContent = last ? last.v.toFixed(2) + (unit ? " " + unit : "") : "no data";
+        }
+        if (whenCell) {
+          whenCell.textContent = last ? formatWhen(last.tMs) : "—";
+        }
+      });
+    }
+
+    function pathFor(points, width, height, pad, close) {
+      var xs = points.map(function (p) { return p.tMs; });
+      var ys = points.map(function (p) { return p.v; });
+      var minX = Math.min.apply(null, xs);
+      var maxX = Math.max.apply(null, xs);
+      var minY = Math.min.apply(null, ys);
+      var maxY = Math.max.apply(null, ys);
+      var spanX = maxX - minX || 1;
+      var spanY = maxY - minY || 1;
+      var plotW = width - pad * 2;
+      var plotH = height - pad * 2;
+      var d = points.map(function (p, i) {
+        var x = pad + ((p.tMs - minX) / spanX) * plotW;
+        var y = pad + plotH - ((p.v - minY) / spanY) * plotH;
+        return (i === 0 ? "M" : "L") + x.toFixed(1) + " " + y.toFixed(1);
+      }).join(" ");
+      if (!close) return d;
+      var lastX = pad + plotW;
+      var baseY = pad + plotH;
+      return d + " L" + lastX.toFixed(1) + " " + baseY.toFixed(1) + " L" + pad.toFixed(1) + " " + baseY.toFixed(1) + " Z";
+    }
+
+    function removeFallback() {
+      // THE LINE THAT MATTERS. Without it every healthy report permanently
+      // displays the failure message above. It runs at the END of a
+      // successful draw and nowhere else — never in a `finally`, never at the
+      // top of the function, because a fallback removed before the chart
+      // exists is a fallback that can never fire.
+      var fallback = document.querySelector("[data-wolf-fallback]");
+      if (fallback && fallback.parentNode) fallback.parentNode.removeChild(fallback);
+    }
+
+    function drawChart() {
+      var points = pointsFor(PRIMARY);
+      var line = document.getElementById("wolf-chart-line");
+      var area = document.getElementById("wolf-chart-area");
+      var empty = document.getElementById("wolf-chart-empty");
+      var caption = document.getElementById("wolf-chart-caption");
+      if (!line || !area || !empty || !caption) return false;
+
+      if (points.length < 2) {
+        // AN EMPTY SERIES IS A SUCCESSFUL RENDER, not a failure. Day one has
+        // no data and is not a broken report, so this branch draws its own
+        // "not enough observations yet" state and still returns true — the
+        // fallback is about the chart never running, not about the data being
+        // young.
+        empty.textContent = points.length === 0
+          ? "No observations yet for " + PRIMARY + "."
+          : "Only one observation so far for " + PRIMARY + ".";
+        caption.textContent = "";
+        return true;
+      }
+
+      empty.textContent = "";
+      line.setAttribute("d", pathFor(points, 640, 220, 12, false));
+      area.setAttribute("d", pathFor(points, 640, 220, 12, true));
+      caption.textContent =
+        PRIMARY + ": " + points.length + " observations, " +
+        formatWhen(points[0].tMs) + " to " + formatWhen(points[points.length - 1].tMs) + ".";
+      return true;
+    }
+
+    function render() {
+      try {
+        fillTable();
+        if (drawChart()) removeFallback();
+      } catch (err) {
+        // Leave the fallback standing. An operator seeing the failure message
+        // is the point; a silent empty rectangle is what this catch prevents.
+      }
+    }
+
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", render);
+    } else {
+      render();
+    }
+  })();
+</script>
