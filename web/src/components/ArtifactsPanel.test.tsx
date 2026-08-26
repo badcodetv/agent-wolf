@@ -177,6 +177,25 @@ describe("ArtifactsPanel", () => {
     expect(screen.queryByTestId("artifacts-empty")).toBeNull();
   });
 
+  it("artifacts_panel: a NON-HTTP failure renders the component's OWN sentence, not a blank marker", async () => {
+    // The sibling above covers the `ApiError` half, where the SERVER's
+    // sentence is surfaced verbatim. This is the other half: a 200 whose body
+    // is not JSON throws a `SyntaxError` out of `response.json()`, below
+    // `ApiError`, and the component has to say something itself.
+    //
+    // It went unasserted, and changing the fallback left all 478 web tests
+    // green — this is the sentence a user actually reads when the read fails
+    // for a reason the taxonomy never saw.
+    renderPanel(lightTheme, { [ARTIFACTS]: { status: 200, text: "<html>not json at all</html>" } });
+    const severity = await screen.findByTestId("severity");
+    // Same four assertions as its sibling (R222/R226), with the literal
+    // sentence rather than the exported constant.
+    expect(severity).toHaveAttribute("data-severity", "degraded");
+    expect(severity).toHaveTextContent("could not read this session's artifacts");
+    expect(screen.queryByTestId("artifacts-panel")).toBeNull();
+    expect(screen.queryByTestId("artifacts-empty")).toBeNull();
+  });
+
   // ── The mapping ───────────────────────────────────────────────────────
 
   it("artifacts_map: toArtifactInfo carries NO downloadUrl, and derives fileName from the path", () => {

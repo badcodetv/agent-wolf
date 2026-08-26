@@ -51,6 +51,19 @@ import Severity from "./trust/Severity.js";
 import { ApiError, fetchArtifacts, sessionNameForHypothesis } from "../api/client.js";
 import type { ArtifactRow } from "../api/types.js";
 
+/**
+ * The failure sentence for a read that did not come back as a Wolf error at
+ * all — a malformed body, a transport fault below `ApiError`. It is the only
+ * one of the two failure texts this component authors: an `ApiError` carries
+ * the server's own sentence and that is surfaced VERBATIM, because "no session
+ * hyp-1a2b3c4d" is the actionable half and flattening it throws that away.
+ *
+ * Pinned by test as a literal. It went unasserted at first and changing it
+ * left all 478 web tests green — the sentence a user actually reads on a
+ * non-HTTP failure had no guard at all.
+ */
+export const UNREADABLE_ARTIFACTS = "could not read this session's artifacts";
+
 /** Day one for every hypothesis: the container has written nothing yet. Never a bare blank. */
 export const NO_ARTIFACTS =
   "No artifacts yet — nothing has been written to this session's workspace.";
@@ -126,7 +139,7 @@ export default function ArtifactsPanel({ hypothesisId }: ArtifactsPanelProps) {
         setFailure(null);
       } catch (err) {
         if (!live) return;
-        setFailure(err instanceof ApiError ? err.message : "could not read this session's artifacts");
+        setFailure(err instanceof ApiError ? err.message : UNREADABLE_ARTIFACTS);
       }
     })();
     return () => {
@@ -163,6 +176,15 @@ export default function ArtifactsPanel({ hypothesisId }: ArtifactsPanelProps) {
           artifacts={rows.map(toArtifactInfo)}
           // The session NAME, not Orange's uuid — Wolf addresses a session by
           // the name it chose, and the API's projection never sends the uuid.
+          //
+          // 🔴 UNASSERTED, and it cannot be made assertable today: `ArtifactPanel`
+          // renders `sessionId` nowhere — it reaches only `onPinToDashboard` —
+          // and the prop is REQUIRED on `ArtifactPanelProps`, so R148's "if a
+          // guard cannot fail on its own, write it as a comment" has no remedy
+          // here. **The trigger condition, so the next reader knows WHEN this
+          // stops being inert: if any of Orange's three `ArtifactPanel`
+          // callbacks (`onPinToDashboard`, `onViewAll`, `onArtifactClick`) is
+          // ever wired, this prop becomes live and needs a value assertion.**
           sessionId={sessionNameForHypothesis(hypothesisId)}
         />
       </Box>

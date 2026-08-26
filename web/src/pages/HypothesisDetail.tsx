@@ -31,11 +31,25 @@
  * ## One fetch
  *
  * `GET /api/hypotheses/:id` is read once, here, and handed down as props.
- * There is no second detail fetch and no second detail type. Two blocks make
- * requests of their own, and neither is a second read of the detail payload:
- * the charts section asks for one series per metric of the locked spec, and
- * (W29) the artifacts panel asks for `…/artifacts` — a list this page has no
- * other way to get, since the detail payload does not carry it.
+ * There is no second detail fetch and no second detail type.
+ *
+ * 🔴 **THREE** blocks make requests of their own, and none of them is a second
+ * read of the detail payload:
+ *
+ *  1. the charts section — one series per metric of the locked spec;
+ *  2. (W29) the artifacts panel — `…/artifacts`, a list this page has no other
+ *     way to get, since the detail payload does not carry it;
+ *  3. **the RAIL** — `ChatRail` (`:60` below) renders `OrangeChatFrame`
+ *     (`ChatRail.tsx:89`), which calls `fetchEmbedToken`
+ *     (`OrangeChatFrame.tsx:106`) on every mount. It is easy to miss because
+ *     the rail is a sibling of the scrolling column rather than a block
+ *     inside it — but it is on this page, and every page-level test stubs it
+ *     as `[TOKEN]`.
+ *
+ * *(This paragraph said "two" and named the first two. It said "one" before
+ * that and named only the charts. Both counts were wrong for the same reason:
+ * the writer corrected the sentence without opening what it names. R211's
+ * check applies to a correction as much as to the claim it replaces.)*
  *
  * ## It degrades; it does not throw
  *
