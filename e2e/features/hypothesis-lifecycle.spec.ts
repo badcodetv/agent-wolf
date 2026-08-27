@@ -12,6 +12,7 @@
 
 import { expect, test } from "@playwright/test";
 import {
+  allSchedules,
   createAndGoLive,
   datasetMeta,
   getMemory,
@@ -259,10 +260,21 @@ test.describe("hypothesis lifecycle", () => {
       page.locator('[data-testid="hypothesis-row"]').first(),
       "the board rendered no hypothesis-row at all",
     ).toBeVisible();
-    await expect(
-      page.locator('[data-testid="hypothesis-row"]').filter({ hasText: "X1 lifecycle" }),
-      "this hypothesis has no row on the board",
-    ).toBeVisible();
+
+    // 🔴 KEYED ON THE ID, NEVER ON THE TITLE. The `wolf` project is SHARED and
+    // long-lived: every run creates a hypothesis with this same title, so
+    // `filter({ hasText: "X1 lifecycle" })` matches every previous run's row
+    // too and Playwright fails it as a strict-mode violation —
+    // "resolved to 2 elements". Measured: three consecutive runs, identical
+    // failure, once a single earlier row survived.
+    //
+    // The row's link carries the id, which IS unique per run, so this both
+    // finds the right row and asserts there is exactly one of it.
+    const row = page.locator('[data-testid="hypothesis-row"]').filter({
+      has: page.locator(`a[href="/hypotheses/${hyp.id}"]`),
+    });
+    await expect(row, `expected exactly one board row for ${hyp.id}`).toHaveCount(1);
+    await expect(row, "this hypothesis has no row on the board").toBeVisible();
 
     await page.goto(`/hypotheses/${hyp.id}`);
     // `detail-column` is the left column W13 authors and W14 fills; there is no
@@ -349,13 +361,10 @@ test.describe("hypothesis lifecycle", () => {
     // TEARDOWN ASSERTED BY OBSERVED EFFECT, never by trusting the report body.
     expect(await workerExists(`researcher-${hyp.id}`)).toBe(false);
     expect(await sessionByName(hyp.sessionName)).toBeNull();
-    const schedules = await orange<{ schedules?: { worker?: string }[] }>(
-      "GET",
-      "/agent/schedules?limit=200",
-    );
-    expect((schedules.body.schedules ?? []).map((s) => s.worker)).not.toContain(
-      `researcher-${hyp.id}`,
-    );
+    // Through `allSchedules`, which fails if the listing came back at its cap.
+    // This assertion is an ABSENCE, so a truncated page would satisfy it
+    // without teardown having happened — see the note on `assertNotTruncated`.
+    expect((await allSchedules()).map((s) => s.worker)).not.toContain(`researcher-${hyp.id}`);
 
     // …AND THE DATASET SURVIVES. Datasets are never torn down: the verdict's
     // own memory carries the evaluation snapshot, but the working data stays

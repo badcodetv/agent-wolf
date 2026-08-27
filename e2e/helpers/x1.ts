@@ -107,6 +107,30 @@ export async function orange<T = unknown>(
   }
   const res = await fetch(`${ORANGE_BASE}${path}`, { method, headers, body: payload });
   const text = await res.text();
+
+  // 🔴 `unauthorized` IS NEVER TRANSIENT — ABORT, DO NOT RETRY.
+  //
+  // agentd resolves the project's API key ONCE, at boot. A second `e2e/run.sh`
+  // recreates agentd with a freshly minted key and this run's key stops working
+  // instantly, mid-flight. Measured: K1 → 200; second `up -d` with K2; K1 →
+  // unauthorized.
+  //
+  // Without this, `waitFor` catches the thrown expectation and RETRIES for its
+  // whole budget — so the real message ("your credential was rotated") is
+  // buried under a nine-minute "timed out waiting for the first tick to write
+  // dataset …", in three spec files at once, with a different set of tests
+  // each run. That is precisely how this rig came to look non-deterministic
+  // when it was not. Same lesson as D4: immediate, visible damage must be
+  // reported immediately, never absorbed by a poll.
+  if (res.status === 401 || res.status === 403 || text.trim() === "unauthorized") {
+    throw new UnretryableError(
+      `Orange refused this run's project API key on ${method} ${path} (HTTP ${res.status}). ` +
+        "The key is minted per run and baked into agentd at boot, so this almost always means " +
+        "ANOTHER e2e/run.sh started and recreated agentd with a different key. " +
+        "run.sh now takes an exclusive lock to prevent it; if you see this, something " +
+        "recreated the agentd container mid-run.",
+    );
+  }
   let parsed: unknown = undefined;
   try {
     parsed = JSON.parse(text) as unknown;
@@ -179,12 +203,38 @@ export interface OrangeSession {
  * — so a plain listing returns the `hyp-<id>` sessions and NONE of the per-tick
  * ones. Wolf's own client has always passed it (`api/src/orange/client.ts:698`).
  */
+/**
+ * 🔴 A LISTING THAT CAME BACK FULL IS NOT A LISTING, IT IS A PAGE.
+ *
+ * Every absence assertion in this suite ("the torn-down worker is NOT in the
+ * schedules", "no session named X remains") is `not.toContain` over one of
+ * these capped lists. Such an assertion gets WEAKER as the project fills up,
+ * and at exactly `limit` rows it becomes vacuous: the row we require to be
+ * gone may simply have fallen off the end of the page, and teardown then
+ * "passes" without tearing anything down.
+ *
+ * The `wolf` project is shared and long-lived, so this is a real reachable
+ * state, not a theoretical one. Fail loudly at the cap instead of silently
+ * returning a green.
+ */
+const LIST_LIMIT = 200;
+
+function assertNotTruncated(rows: unknown[], what: string): void {
+  expect(
+    rows.length,
+    `GET ${what} returned ${rows.length} rows — the same as its limit, so this listing is TRUNCATED. ` +
+      `Every "not.toContain" assertion over it is now vacuous. Raise the limit or scope the query.`,
+  ).toBeLessThan(LIST_LIMIT);
+}
+
 export async function sessions(worker?: string): Promise<OrangeSession[]> {
-  const q = new URLSearchParams({ user_email: "*", limit: "200" });
+  const q = new URLSearchParams({ user_email: "*", limit: String(LIST_LIMIT) });
   if (worker !== undefined) q.set("worker", worker);
   const res = await orange<OrangeSession[]>("GET", `/agent/sessions?${q.toString()}`);
   expect(res.status, `GET /agent/sessions → ${res.text.slice(0, 200)}`).toBe(200);
-  return Array.isArray(res.body) ? res.body : [];
+  const rows = Array.isArray(res.body) ? res.body : [];
+  assertNotTruncated(rows, "/agent/sessions");
+  return rows;
 }
 
 export async function sessionByName(name: string): Promise<OrangeSession | null> {
@@ -203,16 +253,37 @@ export async function workerExists(name: string): Promise<boolean> {
 }
 
 export async function schedulesForWorker(worker: string): Promise<unknown[]> {
-  const res = await orange<{ schedules?: { worker?: string }[] }>(
-    "GET",
-    "/agent/schedules?limit=200",
-  );
-  expect(res.status, `GET /agent/schedules → ${res.text.slice(0, 200)}`).toBe(200);
-  const rows = res.body?.schedules ?? [];
+  const rows = await allSchedules();
   return rows.filter((row) => row.worker === worker);
 }
 
+/**
+ * The schedules listing, guarded against the truncation trap above. Callers
+ * asserting a worker's ABSENCE must go through this rather than fetching the
+ * capped route themselves.
+ */
+export async function allSchedules(): Promise<{ worker?: string }[]> {
+  const res = await orange<{ schedules?: { worker?: string }[] }>(
+    "GET",
+    `/agent/schedules?limit=${LIST_LIMIT}`,
+  );
+  expect(res.status, `GET /agent/schedules → ${res.text.slice(0, 200)}`).toBe(200);
+  const rows = res.body?.schedules ?? [];
+  assertNotTruncated(rows, "/agent/schedules");
+  return rows;
+}
+
 // ── Polling ─────────────────────────────────────────────────────────────────
+
+/**
+ * A failure that polling cannot fix, so `waitFor` rethrows it at once instead
+ * of burning its budget. A rotated credential is the motivating case: retrying
+ * it converts a one-line diagnosis into a nine-minute timeout that blames the
+ * wrong subsystem.
+ */
+export class UnretryableError extends Error {
+  override readonly name = "UnretryableError";
+}
 
 export async function waitFor<T>(
   what: string,
@@ -227,6 +298,8 @@ export async function waitFor<T>(
     try {
       value = await probe();
     } catch (err) {
+      // 🔴 Straight out, no retry, no waiting for the deadline.
+      if (err instanceof UnretryableError) throw err;
       last = err instanceof Error ? err.message : String(err);
     }
     if (value !== null && value !== undefined && value !== false) return value;
