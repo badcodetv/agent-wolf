@@ -155,9 +155,21 @@ test.describe("hypothesis lifecycle", () => {
     expect(called).toContain("mcp__core__dataset_put");
     expect(called).toContain("mcp__core__memory_create");
 
+    // 🔴 THE RAW STRING, NOT `JSON.stringify` OF IT. `data.output` is ALREADY a
+    // string carrying JSON text — measured, not assumed — so stringifying it
+    // again escapes every quote: `{"kind":"misconfigured"…}` becomes
+    // `"{\"kind\":\"misconfigured\"…}"`, and any pattern containing a quote
+    // stops matching. That is a bug this file shipped: the envelope assertion
+    // below was written with quotes, against a double-encoded string, and
+    // failed for a reason that had nothing to do with what it was testing.
+    // Unquoted patterns like `avav.us` survived the escaping, which is exactly
+    // why the neighbouring assertion kept passing and hid it.
     const ends = inner
       .filter((e) => e.type === "tool_use_end")
-      .map((e) => JSON.stringify((e.data as { output?: unknown }).output ?? ""));
+      .map((e) => {
+        const out = (e.data as { output?: unknown }).output;
+        return typeof out === "string" ? out : JSON.stringify(out ?? "");
+      });
 
     // `series_search` ROUND-TRIPPED: the AeroVironment row comes from W6's
     // committed ticker table, inside wolf-api, reached over the DinD gateway.
