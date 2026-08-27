@@ -209,6 +209,40 @@ async function expectFrameRendered(frame: Frame): Promise<void> {
   await expect(frame.locator("#x1-caption")).toContainText(/observations/);
 }
 
+/**
+ * Whether this document can reach Wolf's ORIGIN-KEYED client storage.
+ * `"GRANTED"` means it is in Wolf's own origin; a `denied:` string means the
+ * origin is opaque.
+ *
+ * 🔴 THIS REPLACED A `document.cookie` CHECK THAT COULD NOT FAIL, and the
+ * reason belongs here rather than in a commit message. `wolf_session` is
+ * `httpOnly: true` (api/src/auth/session.ts:64), so `document.cookie` never
+ * contains it in ANY origin — "the framed document cannot see the session
+ * cookie" was therefore equally true of a fully compromised document, which
+ * makes it decoration rather than a test.
+ *
+ * Measured, both ways, against the live rig with `"sandbox allow-scripts"`
+ * deleted from `frameCsp`:
+ *
+ *   in-iframe   origin null                    → origin null                    (unchanged)
+ *   top-level   origin null                    → origin http://localhost:8091
+ *   top-level   cookie threw                   → cookie not-readable  (NEVER readable — httpOnly)
+ *   top-level   localStorage SecurityError     → localStorage ACCESSIBLE
+ *
+ * Storage is the capability that actually tracks the origin, so it is the one
+ * asserted. (`connect-src 'none'` independently blocks fetch, so a network
+ * probe would not distinguish the two states either.)
+ */
+const STORAGE_PROBE = (): string => {
+  try {
+    window.localStorage.setItem("w26-probe", "1");
+    window.localStorage.removeItem("w26-probe");
+    return "GRANTED";
+  } catch (err) {
+    return `denied: ${(err as Error).name}`;
+  }
+};
+
 /** Nothing executable survived into the frame, anywhere. */
 async function expectNothingExecutable(frame: Frame): Promise<void> {
   const body = await frame.locator("body").innerHTML();
@@ -372,15 +406,11 @@ test.describe("report layer", () => {
     expect(origin, "the report frame is NOT origin-isolated").toBe("null");
 
     // The consequence, stated as a fact rather than left as an inference: a
-    // document in an opaque origin cannot read this site's cookies.
-    const cookie = await frame.evaluate(() => {
-      try {
-        return document.cookie;
-      } catch {
-        return "__threw__";
-      }
-    });
-    expect(cookie, "the framed document can see the session cookie").not.toContain("wolf_session");
+    // document in an opaque origin cannot reach Wolf's own client storage.
+    expect(
+      await frame.evaluate(STORAGE_PROBE),
+      "the framed document reached Wolf's origin-keyed localStorage",
+    ).toBe("denied: SecurityError");
   });
 
   // ── Leg 4 — the regression test ──────────────────────────────────────────
@@ -431,16 +461,16 @@ test.describe("report layer", () => {
         "page can now reach the session cookie and every signed-in route",
     ).toBe("null");
 
-    const cookie = await page.evaluate(() => {
-      try {
-        return document.cookie;
-      } catch {
-        return "__threw__";
-      }
-    });
-    expect(cookie, "the directly-navigated report can read the session cookie").not.toContain(
-      "wolf_session",
-    );
+    // 🔴 The same capability check as leg 3, and the one that MOVES when the
+    // directive is deleted: measured GRANTED with `sandbox` removed from the
+    // CSP, denied with it present. It sits after the header assertion above,
+    // so a `sandbox`-deleting mutation trips that one first — but unlike the
+    // cookie check this replaced, it would genuinely fail if it were reached.
+    expect(
+      await page.evaluate(STORAGE_PROBE),
+      "the directly-navigated report reached Wolf's origin-keyed localStorage — it is running " +
+        "in Wolf's own origin, not an opaque one",
+    ).toBe("denied: SecurityError");
   });
 
   // ── Leg 2 ────────────────────────────────────────────────────────────────
