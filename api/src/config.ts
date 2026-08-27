@@ -391,12 +391,19 @@ export function parseTestLogin(raw: string | undefined, nodeEnv: string): TestLo
 // 🔴 THE FAILURE MODE, because it is why this survived every ticket that
 // consumed the value: a wrong gateway here is written into the Orange
 // project's `mcp_config` as WOLF_MCP_URL, and every `mcp__wolf__*` call
-// from inside a session container then **times out — no error, no log
-// line, nowhere**. A wrong address on a bridge does not refuse a
-// connection, it silently goes nowhere. There is nothing to grep for, so
-// only running the product can find it. Change this function only with a
-// test whose routing table has the default route and docker0 on DIFFERENT
-// networks; a fixture where they agree cannot fail.
+// from inside a session container then fails.
+//
+// 🔴 It does NOT hang, and the difference matters to whoever debugs it: X1
+// ran `curl 172.26.0.1:8100/mcp` from inside a nested container and got
+// **exit 7 — could not connect**, immediately. So do not go looking for a
+// slow request. What makes it invisible is not latency but WHERE the
+// failure lands: on the far side of the container boundary, where nothing
+// on the Wolf side logs it and there is no error to grep for here. Only
+// running the product can find it.
+//
+// Change this function only with a test whose routing table has the default
+// route and docker0 on DIFFERENT networks; a fixture where they agree
+// cannot fail.
 //
 // Resolution order:
 //   1. `WOLF_MCP_URL` set explicitly in the environment — wins outright, no

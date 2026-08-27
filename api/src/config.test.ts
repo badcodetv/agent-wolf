@@ -310,6 +310,30 @@ describe("resolveMcpUrl / DinD gateway discovery", () => {
     expect(parseDocker0GatewayFromProcRoute(table)).toBeUndefined();
   });
 
+  it("is documented in .env.example as reading docker0 and NEVER the default route", () => {
+    // 🔴 R211's shape, in the one file an operator reads before booting the
+    // stack: `.env.example` described the OLD probe ("reads the default
+    // route from inside DinD's shared network namespace") and, on top of
+    // that description, told compose operators to leave the variable unset.
+    // Before W33 that advice sent them straight into R235. The advice is
+    // sound now — which is exactly why the sentence explaining HOW it
+    // discovers must not be allowed to drift back: a reader who checks the
+    // comment against the code trusts the comment.
+    const example = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".env.example"),
+      "utf8",
+    );
+    expect(example).toContain("docker0");
+    expect(example).toContain("NEVER the default route");
+    // The fallback and the escape hatch are both still true and both still
+    // load-bearing — the second is what made the R235 defect survivable.
+    expect(example).toContain("172.17.0.1");
+    expect(example).toContain("WINS OUTRIGHT");
+    // R80, met here because this is where an operator meets it: the compose
+    // default forwards "" and discovery has to keep running.
+    expect(example).toContain("An EMPTY value counts as unset");
+  });
+
   it("loadConfig wires resolveMcpUrl through with the routeSource parameter", () => {
     const routeSource = routeSourceReturning(
       fakeRouteTable({ defaultVia: "172.26.0.1", docker0Network: "172.30.0.0" }),
