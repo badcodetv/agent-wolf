@@ -379,8 +379,30 @@ trap cleanup EXIT INT TERM
 # something cleanup does on its own: on a project holding REAL hypotheses this
 # deletes them. Use it only on a test project after a poisoned run.
 if [ "${1:-}" = "--reclaim-orphans" ]; then
-  log "reclaiming EVERY X1-shaped session in project wolf (explicit, destructive)"
+  log "reclaiming EVERY X1-shaped schedule and session in project wolf (explicit, destructive)"
   before_n="$(count_sessions)"
+
+  # 🔴 SCHEDULES FIRST, AND THE FIRST VERSION OF THIS COMMAND FORGOT IT.
+  # `cleanup` gets this right and says why — "a live schedule keeps dispatching
+  # tick sessions while we delete them" — and I wrote this command without
+  # carrying the rule across. Measured consequence: deleting 40 sessions took
+  # the project to 0, and three surviving `researcher-<id>` schedules had
+  # re-minted 10 within two minutes and kept going, +6 per subsequent run
+  # forever. Deleting the children while the parent still runs is not a
+  # reclaim, it is a pause.
+  api GET '/agent/schedules?limit=500' 2>/dev/null \
+    | python3 -c 'import json,re,sys
+try:
+    doc = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(0)
+rows = doc.get("schedules", doc) if isinstance(doc, dict) else doc
+for r in rows if isinstance(rows, list) else []:
+    if re.fullmatch(r"researcher-[0-9a-f]{8}", r.get("worker") or ""):
+        print(r.get("id",""))' | grep -v '^$' | while read -r schid; do
+      api DELETE "/agent/schedules/${schid}" >/dev/null 2>&1 || true
+    done
+
   api GET '/agent/sessions?user_email=*&limit=500' 2>/dev/null \
     | python3 -c 'import json,re,sys
 try:
