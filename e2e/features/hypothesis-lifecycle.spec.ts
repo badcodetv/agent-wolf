@@ -155,9 +155,21 @@ test.describe("hypothesis lifecycle", () => {
     expect(called).toContain("mcp__core__dataset_put");
     expect(called).toContain("mcp__core__memory_create");
 
+    // 🔴 THE RAW STRING, NOT `JSON.stringify` OF IT. `data.output` is ALREADY a
+    // string carrying JSON text — measured, not assumed — so stringifying it
+    // again escapes every quote: `{"kind":"misconfigured"…}` becomes
+    // `"{\"kind\":\"misconfigured\"…}"`, and any pattern containing a quote
+    // stops matching. That is a bug this file shipped: the envelope assertion
+    // below was written with quotes, against a double-encoded string, and
+    // failed for a reason that had nothing to do with what it was testing.
+    // Unquoted patterns like `avav.us` survived the escaping, which is exactly
+    // why the neighbouring assertion kept passing and hid it.
     const ends = inner
       .filter((e) => e.type === "tool_use_end")
-      .map((e) => JSON.stringify((e.data as { output?: unknown }).output ?? ""));
+      .map((e) => {
+        const out = (e.data as { output?: unknown }).output;
+        return typeof out === "string" ? out : JSON.stringify(out ?? "");
+      });
 
     // `series_search` ROUND-TRIPPED: the AeroVironment row comes from W6's
     // committed ticker table, inside wolf-api, reached over the DinD gateway.
@@ -167,13 +179,33 @@ test.describe("hypothesis lifecycle", () => {
     ).toBe(true);
 
     // 🔴 `series_fetch` IS ASSERTED BY ITS ANSWER, NOT ONLY BY ITS NAME. Being
-    // in the called list proves the harness sent it; only wolf-api's own error
-    // shape proves it ARRIVED. Offline and with no FRED key the honest answer
-    // is `misconfigured` — a structured WolfError, which a connection failure
-    // could never produce.
+    // in the called list proves the harness SENT it; only wolf-api's own
+    // envelope proves it ARRIVED — a connection failure produces a harness
+    // error, never a typed `WolfError`.
+    //
+    // 🔴 THE ENVELOPE, NOT THE MESSAGE — and this assertion has already been
+    // wrong once for exactly that reason. `series_fetch(source: "fred")` has
+    // three answers and the first draft pinned the message text of ONE of them:
+    //
+    //   no key   → {"error":{"kind":"misconfigured",
+    //               "message":"FRED_API_KEY is required to construct a FRED client",…}}
+    //   bad key  → {"error":{"kind":"misconfigured",
+    //               "message":"FRED rejected the configured API key",…}}   ← no "FRED_API_KEY"
+    //   good key → a success carrying a credential-bearing download_url
+    //
+    // Both measured directly against a running wolf-api. The draft required
+    // `"misconfigured"` AND `"FRED_API_KEY"`, so it passed in a checkout with no
+    // `.env` and failed in the canonical one, which has a real key — and the
+    // failure was the symptom that exposed the far worse defect: the rig was
+    // making a live credentialed call at all. `run.sh` now blanks the key and
+    // asserts it, so the first branch is the only reachable one; this asserts
+    // the part that is true of every branch that reaches wolf-api.
     expect(
-      ends.some((out) => out.includes("misconfigured") && out.includes("FRED_API_KEY")),
-      "series_fetch produced no wolf-api error body — it may never have reached wolf-api at all",
+      ends.some((out) => out.includes('"kind":"misconfigured"') && out.includes('"retryable"')),
+      "series_fetch produced no typed WolfError envelope. Either it never reached wolf-api, " +
+        "or wolf-api answered SUCCESSFULLY because a FRED_API_KEY leaked into the container — " +
+        "which would mean this 'offline' run made a live credentialed call. run.sh's " +
+        "'offline proof' line checks that before the specs start.",
     ).toBe(true);
   });
 

@@ -93,10 +93,28 @@ set -euo pipefail
 
 E2E_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WOLF_REPO="$(cd "${E2E_DIR}/.." && pwd)"
-ORANGE_REPO="${ORANGE_REPO:-$(cd "${WOLF_REPO}/../../agent-orange" 2>/dev/null && pwd || true)}"
+# Two layouts, and BOTH are real. The canonical checkout is a SIBLING
+# (`/…/badcode/agent-wolf` beside `/…/badcode/agent-orange`); a per-ticket
+# worktree sits one level deeper (`/…/badcode/wave18/x1`). The first version of
+# this line knew only the worktree layout, so running from the canonical
+# checkout — which is where it lives — failed to find Orange at all. It failed
+# CLOSED with the right message, which is the correct direction, but a rig that
+# cannot find its own sibling by default is a rig everyone runs with an
+# environment variable they should not need.
+if [ -z "${ORANGE_REPO:-}" ]; then
+  for candidate in "${WOLF_REPO}/../agent-orange" "${WOLF_REPO}/../../agent-orange"; do
+    if [ -f "${candidate}/docker-compose.yml" ]; then
+      ORANGE_REPO="$(cd "${candidate}" && pwd)"
+      break
+    fi
+  done
+fi
 
-if [ -z "${ORANGE_REPO}" ] || [ ! -f "${ORANGE_REPO}/docker-compose.yml" ]; then
+if [ -z "${ORANGE_REPO:-}" ] || [ ! -f "${ORANGE_REPO}/docker-compose.yml" ]; then
   echo "run.sh: cannot find the agent-orange checkout." >&2
+  echo "        Looked for a docker-compose.yml in:" >&2
+  echo "          ${WOLF_REPO}/../agent-orange      (sibling checkout)" >&2
+  echo "          ${WOLF_REPO}/../../agent-orange   (per-ticket worktree)" >&2
   echo "        Set ORANGE_REPO=/path/to/agent-orange and re-run." >&2
   exit 2
 fi
@@ -432,6 +450,15 @@ wolf_compose() {
       WOLF_MCP_URL="${WOLF_MCP_URL}" \
       WOLF_API_KEY="${WOLF_API_KEY}" \
       WOLF_MCP_TOKEN="${WOLF_MCP_TOKEN}" \
+      `# 🔴 THE OFFLINE GUARANTEE, AND IT HAS TO BE HERE. Compose reads a .env` \
+      `# from the PROJECT DIRECTORY, and the canonical agent-wolf checkout has` \
+      `# one holding a real FRED_API_KEY. Left alone, wolf-api boots with that` \
+      `# key and the tick's mcp__wolf__series_fetch makes a LIVE, CREDENTIALED` \
+      `# call to api.stlouisfed.org — in a suite whose first acceptance` \
+      `# criterion is "runs offline". This rig was offline only by ACCIDENT of` \
+      `# being run from a worktree that had no .env. Blanked explicitly, the` \
+      `# same way the model credentials are, and asserted below.` \
+      FRED_API_KEY= \
       WOLF_SESSION_SECRET="${WOLF_SESSION_SECRET}" \
       WOLF_SERIES_TOKEN_SECRET="${WOLF_SERIES_TOKEN_SECRET}" \
       WOLF_ALLOWED_EMAILS="${X1_LOGIN_EMAIL}" \
@@ -453,6 +480,17 @@ wolf_compose up -d --build
 
 wait_for "wolf-web /api/auth/me" 120 \
   bash -c "test \"\$(curl -s -o /dev/null -w '%{http_code}' '${WOLF_BASE}/api/auth/me')\" = 401"
+
+# 🔴 NO UPSTREAM CREDENTIAL REACHED wolf-api. Measured inside the container, by
+# LENGTH — the value is never read, never printed, never compared. An
+# environment invariant belongs here, where it can be checked once and fail the
+# run, not inside a spec assertion that would fail three minutes later and blame
+# the wrong thing.
+fred_len="$(docker compose -p "${WOLF_PROJECT}" exec -T wolf-api sh -c 'printf "%s" "${#FRED_API_KEY}"' 2>/dev/null || echo unknown)"
+if [ "${fred_len}" != "0" ]; then
+  fail "wolf-api booted with a FRED_API_KEY of length ${fred_len} — this run would make a LIVE, CREDENTIALED call to api.stlouisfed.org. Refusing. (A .env in the agent-wolf checkout is the usual source; run.sh blanks it, so this means the blanking did not take.)"
+fi
+echo "offline proof: FRED_API_KEY inside wolf-api has length 0 — no live market-data call is possible."
 
 # ── 5b. What the two stacks were actually configured with ───────────────────
 #
