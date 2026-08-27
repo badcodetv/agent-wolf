@@ -5,29 +5,58 @@ import { describe, expect, it } from "vitest";
 import { WolfError } from "./errors.js";
 import { parseTemplate } from "./report/template.js";
 import {
-  DEFAULT_GATEWAY_FALLBACK,
   DEFAULT_ORANGE_PUBLIC_URL,
   DEFAULT_WOLF_POLL_INTERVAL_SECONDS,
   loadConfig,
-  parseDefaultGatewayFromProcRoute,
+  parseDocker0GatewayFromProcRoute,
   resolveMcpUrl,
   type RouteSource,
 } from "./config.js";
 
-/** A fake /proc/net/route table with a default route via `gatewayIp`, formatted the way the real file is (tab-separated, header row included). */
-function fakeRouteTable(gatewayIp: string): string {
-  const octets = gatewayIp.split(".").map((n) => parseInt(n, 10));
-  const gatewayHex = octets
-    .slice()
+/**
+ * Encodes a dotted-decimal IPv4 address the way /proc/net/route holds it:
+ * 8 hex characters, **little-endian byte order** (172.17.0.0 → "000011AC").
+ */
+function procRouteHex(ip: string): string {
+  return ip
+    .split(".")
+    .map((n) => parseInt(n, 10))
     .reverse()
     .map((n) => n.toString(16).padStart(2, "0"))
     .join("")
     .toUpperCase();
-  return [
+}
+
+/**
+ * A fake /proc/net/route table as read from **inside DinD's netns**,
+ * formatted the way the real file is (tab-separated, header row included).
+ *
+ * 🔴 The two arguments are the whole of W33 (R235). Under compose they name
+ * DIFFERENT networks: `defaultVia` is the OUTER compose-network gateway,
+ * which nothing inside a nested session container can reach, and
+ * `docker0Network` is DinD's INNER bridge, which is the address a session
+ * container actually uses. **A fixture that puts both on the same network
+ * cannot fail, and is the reason the wrong-route probe survived every
+ * ticket that consumed its answer.** Omit `docker0Network` to model a table
+ * that has a default route and no docker0 bridge at all.
+ */
+function fakeRouteTable(opts: { defaultVia: string; docker0Network?: string }): string {
+  // eth0's OWN /16, directly connected — the row a real table carries
+  // alongside the default route, and 🔴 the one an interface-blind probe
+  // picks up instead of docker0's. It is emitted BEFORE the docker0 row,
+  // which is the order that makes an interface-blind probe answer wrongly.
+  const ethNetwork = opts.defaultVia.split(".").slice(0, 2).concat(["0", "0"]).join(".");
+  const rows = [
     "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT",
-    `eth0\t00000000\t${gatewayHex}\t0003\t0\t0\t0\t00000000\t0\t0\t0`,
-    "docker0\t000011AC\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0",
-  ].join("\n");
+    `eth0\t00000000\t${procRouteHex(opts.defaultVia)}\t0003\t0\t0\t0\t00000000\t0\t0\t0`,
+    `eth0\t${procRouteHex(ethNetwork)}\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0`,
+  ];
+  if (opts.docker0Network !== undefined) {
+    rows.push(
+      `docker0\t${procRouteHex(opts.docker0Network)}\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0`,
+    );
+  }
+  return rows.join("\n");
 }
 
 function routeSourceReturning(table: string | undefined): RouteSource {
@@ -80,16 +109,25 @@ describe("loadConfig", () => {
   });
 });
 
-// R43: "172.17.0.1 is a default, not a constant — discover it." Three
-// resolution paths, each unit-tested with a fake route source so none of
-// this depends on the real machine's networking.
+// R43 + 🔴 W33/R235: "172.17.0.1 is a default, not a constant — discover it."
+// R43 got the FALLBACK right and the DISCOVERY wrong: it read DinD's
+// **default route**, which under compose is the OUTER compose-network
+// gateway, not DinD's inner **docker0** bridge — the one address a nested
+// session container can reach. X1 measured the pair from inside a nested
+// container: 172.17.0.1:8100/mcp → 401 (reachable), 172.26.0.1:8100/mcp →
+// exit 7 (cannot connect), while the probe had discovered 172.26.0.1.
+//
+// 🔴 Every fixture below therefore puts the default route and docker0 on
+// DIFFERENT networks. They agree on a plain Docker install and differ under
+// compose, so a fixture where they agree passes either way and proves
+// nothing.
 describe("resolveMcpUrl / DinD gateway discovery", () => {
   it("path 1: an explicit WOLF_MCP_URL wins outright — discovery is not even attempted", () => {
     let called = false;
     const routeSource: RouteSource = {
       readRouteTable: () => {
         called = true;
-        return fakeRouteTable("172.99.0.1");
+        return fakeRouteTable({ defaultVia: "172.26.0.1", docker0Network: "172.17.0.0" });
       },
     };
 
@@ -99,16 +137,72 @@ describe("resolveMcpUrl / DinD gateway discovery", () => {
     expect(called).toBe(false);
   });
 
-  it("path 2: no WOLF_MCP_URL — discovers the gateway from a fake default-route table", () => {
-    const routeSource = routeSourceReturning(fakeRouteTable("172.24.176.1"));
+  it("path 1: an explicit WOLF_MCP_URL wins even when the probe WOULD have found a docker0 gateway", () => {
+    // The escape hatch is the only reason the R235 defect was survivable —
+    // X1's rig sets the variable, so it was unaffected. A "discovery also
+    // runs and wins" regression would take that hatch away.
+    const routeSource = routeSourceReturning(
+      fakeRouteTable({ defaultVia: "172.26.0.1", docker0Network: "172.18.0.0" }),
+    );
+
+    const resolved = resolveMcpUrl({ WOLF_MCP_URL: "http://wolf-api.internal:8100/mcp" }, 8100, routeSource);
+
+    expect(resolved).toEqual({ url: "http://wolf-api.internal:8100/mcp", source: "explicit" });
+    // The claim this case carries that its sibling above does not: the
+    // explicit value beats a LIVE discovered answer, not merely an absent one.
+    expect(resolved.url).not.toContain("172.18.0.1");
+  });
+
+  it("path 1: an EMPTY WOLF_MCP_URL is treated as unset, so discovery still runs (R80)", () => {
+    // 🔴 Load-bearing, and it is the compose stack's ordinary state:
+    // `docker-compose.yml:33` forwards `WOLF_MCP_URL: ${WOLF_MCP_URL:-}`, so
+    // an operator who has NOT set the variable gets "" in the container, not
+    // absence. Discovery only ever runs because "" is falsy here — treating
+    // "" as an explicit value would make every session's mcpUrl the empty
+    // string, which fails the same silent way a wrong gateway does.
+    const routeSource = routeSourceReturning(
+      fakeRouteTable({ defaultVia: "172.26.0.1", docker0Network: "172.18.0.0" }),
+    );
+
+    const resolved = resolveMcpUrl({ WOLF_MCP_URL: "" }, 8100, routeSource);
+
+    expect(resolved).toEqual({ url: "http://172.18.0.1:8100/mcp", source: "discovered" });
+  });
+
+  it("path 2: discovers DinD's docker0 gateway, NOT the default route (R235)", () => {
+    // Exactly X1's measured compose reading: default route 172.26.0.1 (the
+    // outer compose network — exit 7 from a nested container), docker0
+    // 172.17.0.0/16 (401 — reachable).
+    const routeSource = routeSourceReturning(
+      fakeRouteTable({ defaultVia: "172.26.0.1", docker0Network: "172.17.0.0" }),
+    );
 
     const resolved = resolveMcpUrl({}, 8100, routeSource);
 
-    expect(resolved).toEqual({ url: "http://172.24.176.1:8100/mcp", source: "discovered" });
+    expect(resolved).toEqual({ url: "http://172.17.0.1:8100/mcp", source: "discovered" });
+    expect(resolved.url).not.toContain("172.26.0.1");
+  });
+
+  it("path 2: follows docker0 onto a NON-default subnet — so neither the default route nor the literal fallback can pass this", () => {
+    // R43's own reproduction: Docker allocates 172.18.0.0/16 for docker0
+    // when 172.17.0.0/16 is already taken. 172.18.0.1 is neither the
+    // default-route address nor the 172.17.0.1 fallback, so this is the
+    // case that separates a real probe from either wrong answer.
+    const routeSource = routeSourceReturning(
+      fakeRouteTable({ defaultVia: "172.26.0.1", docker0Network: "172.18.0.0" }),
+    );
+
+    const resolved = resolveMcpUrl({}, 8100, routeSource);
+
+    expect(resolved).toEqual({ url: "http://172.18.0.1:8100/mcp", source: "discovered" });
+    expect(resolved.url).not.toContain("172.26.0.1");
+    expect(resolved.url).not.toContain("172.17.0.1");
   });
 
   it("path 2 uses the already-resolved port, not a hard-coded one", () => {
-    const routeSource = routeSourceReturning(fakeRouteTable("172.18.0.1"));
+    const routeSource = routeSourceReturning(
+      fakeRouteTable({ defaultVia: "172.26.0.1", docker0Network: "172.18.0.0" }),
+    );
 
     const resolved = resolveMcpUrl({}, 9100, routeSource);
 
@@ -120,45 +214,106 @@ describe("resolveMcpUrl / DinD gateway discovery", () => {
 
     const resolved = resolveMcpUrl({}, 8100, routeSource);
 
-    expect(resolved).toEqual({ url: `http://${DEFAULT_GATEWAY_FALLBACK}:8100/mcp`, source: "fallback" });
+    expect(resolved).toEqual({ url: "http://172.17.0.1:8100/mcp", source: "fallback" });
   });
 
-  it("path 3: falls back when the route table has no default-route row (destination 00000000)", () => {
+  it("path 3: a table with a default route but NO docker0 row falls back — the default route is never used as the gateway", () => {
+    // 🔴 The inversion of the R235 defect, pinned: the old probe answered
+    // "http://172.26.0.1:8100/mcp" (source `discovered`) for this exact
+    // table, and an interface-blind one would answer the same from eth0's
+    // directly-connected row. dockerd may not have created docker0 yet when wolf-api boots,
+    // and the documented default is a better answer than an address on the
+    // wrong side of the bridge.
+    const routeSource = routeSourceReturning(fakeRouteTable({ defaultVia: "172.26.0.1" }));
+
+    const resolved = resolveMcpUrl({}, 8100, routeSource);
+
+    expect(resolved).toEqual({ url: "http://172.17.0.1:8100/mcp", source: "fallback" });
+    expect(resolved.url).not.toContain("172.26.0.1");
+  });
+
+  it("path 3: falls back when docker0's destination is malformed", () => {
     const routeSource = routeSourceReturning(
       "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n" +
-        "docker0\t000011AC\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0",
+        "eth0\t00000000\t01001AAC\t0003\t0\t0\t0\t00000000\t0\t0\t0\n" +
+        "docker0\tnothex11\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0",
     );
 
     const resolved = resolveMcpUrl({}, 8100, routeSource);
 
-    expect(resolved).toEqual({ url: `http://${DEFAULT_GATEWAY_FALLBACK}:8100/mcp`, source: "fallback" });
+    expect(resolved).toEqual({ url: "http://172.17.0.1:8100/mcp", source: "fallback" });
   });
 
-  it("path 3: falls back when the default-route row's gateway is 00000000 (directly connected, no gateway)", () => {
+  it("ignores a docker0 row that routes THROUGH a gateway, and takes the directly-connected subnet", () => {
+    // A docker0 row whose Gateway is not 00000000 is a route to somewhere
+    // ELSE that happens to leave via the bridge; its Destination is not the
+    // bridge's own network, so deriving the bridge address from it is wrong.
     const routeSource = routeSourceReturning(
       "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n" +
-        "eth0\t00000000\t00000000\t0001\t0\t0\t0\t00000000\t0\t0\t0",
+        "eth0\t00000000\t01001AAC\t0003\t0\t0\t0\t00000000\t0\t0\t0\n" +
+        // 10.99.0.0 via 172.17.0.9, out of docker0 — must be skipped.
+        "docker0\t0000630A\t090011AC\t0003\t0\t0\t0\t0000FFFF\t0\t0\t0\n" +
+        // docker0's own directly-connected subnet, 172.18.0.0/16.
+        "docker0\t000012AC\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0",
     );
 
     const resolved = resolveMcpUrl({}, 8100, routeSource);
 
-    expect(resolved.source).toBe("fallback");
+    expect(resolved).toEqual({ url: "http://172.18.0.1:8100/mcp", source: "discovered" });
+    // 10.99.0.1 is what the skipped, routed-through row would have yielded.
+    expect(resolved.url).not.toContain("10.99.0.1");
   });
 
-  it("parseDefaultGatewayFromProcRoute decodes a real captured /proc/net/route line (172.24.176.1)", () => {
-    // Captured verbatim from a real DinD-adjacent host: little-endian hex
-    // "01B018AC" decodes to 172.24.176.1, matching `ip route show default`
-    // on that same host.
-    const real =
+  it("ignores a docker0 row whose destination is 00000000 rather than deriving 0.0.0.1 from it", () => {
+    const routeSource = routeSourceReturning(
+      "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n" +
+        "docker0\t00000000\t00000000\t0001\t0\t0\t0\t00000000\t0\t0\t0",
+    );
+
+    const resolved = resolveMcpUrl({}, 8100, routeSource);
+
+    expect(resolved).toEqual({ url: "http://172.17.0.1:8100/mcp", source: "fallback" });
+  });
+
+  it("ignores a docker0 network whose last octet is 255, rather than deriving a .256", () => {
+    const routeSource = routeSourceReturning(
+      "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n" +
+        // 172.18.0.255 — not a network address; +1 would be 172.18.0.256.
+        "docker0\tFF0012AC\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0",
+    );
+
+    const resolved = resolveMcpUrl({}, 8100, routeSource);
+
+    expect(resolved).toEqual({ url: "http://172.17.0.1:8100/mcp", source: "fallback" });
+  });
+
+  it("parseDocker0GatewayFromProcRoute decodes the little-endian Destination column and adds one", () => {
+    // The eth0 row is a line captured verbatim from a real DinD-adjacent
+    // host: "01B018AC" decodes to 172.24.176.1 and matched `ip route show
+    // default` there. 🔴 It is present to be IGNORED — it is the answer the
+    // R235 defect returned. The docker0 row's "000011AC" is the
+    // little-endian encoding of network 172.17.0.0, whose bridge address is
+    // 172.17.0.1.
+    const table =
       "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n" +
       "eth0\t00000000\t01B018AC\t0003\t0\t0\t0\t00000000\t0\t0\t0\n" +
       "docker0\t000011AC\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0";
 
-    expect(parseDefaultGatewayFromProcRoute(real)).toBe("172.24.176.1");
+    expect(parseDocker0GatewayFromProcRoute(table)).toBe("172.17.0.1");
+  });
+
+  it("parseDocker0GatewayFromProcRoute returns undefined when there is no docker0 row", () => {
+    const table =
+      "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n" +
+      "eth0\t00000000\t01B018AC\t0003\t0\t0\t0\t00000000\t0\t0\t0";
+
+    expect(parseDocker0GatewayFromProcRoute(table)).toBeUndefined();
   });
 
   it("loadConfig wires resolveMcpUrl through with the routeSource parameter", () => {
-    const routeSource = routeSourceReturning(fakeRouteTable("172.30.0.1"));
+    const routeSource = routeSourceReturning(
+      fakeRouteTable({ defaultVia: "172.26.0.1", docker0Network: "172.30.0.0" }),
+    );
 
     const config = loadConfig({ WOLF_API_PORT: "8200" }, routeSource);
 

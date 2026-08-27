@@ -364,24 +364,46 @@ export function parseTestLogin(raw: string | undefined, nodeEnv: string): TestLo
   return { email: email.toLowerCase(), password };
 }
 
-// ── DinD gateway discovery (R43) ────────────────────────────────────────
+// ── DinD gateway discovery (R43, corrected by W33/R235) ─────────────────
 //
 // design/2026-08-20-agent-wolf.md § "Local topology and networking":
 // "172.17.0.1 is a default, not a constant — discover it." Docker only
 // allocates the 172.17.0.0/16 subnet for DinD's inner docker0 bridge when
 // that subnet is free; W1's verifier reproduced it becoming 172.18.0.1.
-// Session containers reach wolf-api at this address, so a silent shift
-// makes every MCP tool call from inside a session time out with no obvious
-// cause.
 //
-// Resolution order, exactly as the plan specifies:
+// 🔴 WHICH ROUTE, AND WHY THIS FUNCTION HAS ALREADY BEEN WRONG ONCE (R235).
+// wolf-api shares DinD's network namespace, so it can read DinD's own
+// routing table — but that table holds TWO gateways and only one of them
+// is the answer:
+//
+//   · the DEFAULT route  → under compose, the OUTER compose-network gateway
+//     (X1 measured 172.26.0.1). Nothing inside a nested session container
+//     can reach it.
+//   · DinD's own docker0 → the INNER bridge every session container is
+//     attached to, and therefore the address it uses to reach wolf-api
+//     (X1 measured 172.17.0.1 → HTTP 401, i.e. reachable).
+//
+// R43 prescribed the default route. That is the wrong one, and the two
+// AGREE on a plain Docker install and DIFFER under compose — so a host-side
+// check passes, a unit test with an agreeing fixture passes, and only a
+// reading taken from inside a nested container disagrees.
+//
+// 🔴 THE FAILURE MODE, because it is why this survived every ticket that
+// consumed the value: a wrong gateway here is written into the Orange
+// project's `mcp_config` as WOLF_MCP_URL, and every `mcp__wolf__*` call
+// from inside a session container then **times out — no error, no log
+// line, nowhere**. A wrong address on a bridge does not refuse a
+// connection, it silently goes nowhere. There is nothing to grep for, so
+// only running the product can find it. Change this function only with a
+// test whose routing table has the default route and docker0 on DIFFERENT
+// networks; a fixture where they agree cannot fail.
+//
+// Resolution order:
 //   1. `WOLF_MCP_URL` set explicitly in the environment — wins outright, no
 //      discovery attempted. A real (non-compose) deployment sets this and
-//      never runs the probe below.
-//   2. Read the default route from DinD's own network namespace (wolf-api
-//      shares it via `network_mode: "container:${ORANGE_DIND_CONTAINER}"`),
-//      via /proc/net/route's destination-00000000 entry, and build
-//      `http://<gateway>:<port>/mcp`.
+//      never runs the probe below. 🔴 This is the escape hatch that made
+//      the R235 defect survivable; it must keep winning.
+//   2. Derive the gateway from the docker0 row of /proc/net/route.
 //   3. Fall back to the literal 172.17.0.1.
 // Whichever of 2/3 is used is logged at info, once, by the caller (index.ts,
 // once a logger exists — config.ts itself only returns the source tag).
@@ -390,9 +412,12 @@ export type McpUrlSource = "explicit" | "discovered" | "fallback";
 
 export const DEFAULT_GATEWAY_FALLBACK = "172.17.0.1";
 
+/** The interface name of DinD's inner Docker bridge — the one session containers attach to. */
+export const DOCKER_BRIDGE_IFACE = "docker0";
+
 /**
- * Where the default-route table is read from. Injectable so tests can
- * supply a fake table without touching the real filesystem — this is what
+ * Where the routing table is read from. Injectable so tests can supply a
+ * fake table without touching the real filesystem — this is what
  * "unit-tested with a fake route source" (the W1 criterion) means.
  */
 export interface RouteSource {
@@ -411,34 +436,59 @@ export const procNetRouteSource: RouteSource = {
 };
 
 /**
- * Parses /proc/net/route's tab-separated table and returns the gateway of
- * the default route (the row whose Destination is `00000000`) as a dotted
- * decimal IPv4 address, or undefined if there is no such row or it is
- * malformed. A default-route row with Gateway `00000000` (a directly
- * connected route, no gateway) does not count.
- *
- * The Gateway column is 8 hex chars encoding the address in **little-endian
- * byte order** — e.g. gateway 172.24.176.1 (bytes AC 18 B0 01) appears as
- * "01B018AC". Decoding: split into four hex byte-pairs, reverse their
- * order, parse each as decimal.
+ * Decodes one of /proc/net/route's 8-hex-char address columns into its four
+ * octets, or undefined if the field is malformed. The column is
+ * **little-endian** — 172.17.0.0 (bytes AC 11 00 00) appears as "000011AC",
+ * so the decoded byte pairs are reversed.
  */
-export function parseDefaultGatewayFromProcRoute(contents: string): string | undefined {
-  const lines = contents.split("\n");
-  for (const line of lines) {
+function decodeProcRouteOctets(field: string): [number, number, number, number] | undefined {
+  if (!/^[0-9A-Fa-f]{8}$/.test(field)) return undefined;
+  const bytes = [
+    parseInt(field.slice(0, 2), 16),
+    parseInt(field.slice(2, 4), 16),
+    parseInt(field.slice(4, 6), 16),
+    parseInt(field.slice(6, 8), 16),
+  ];
+  const [b0, b1, b2, b3] = bytes;
+  if (b0 === undefined || b1 === undefined || b2 === undefined || b3 === undefined) return undefined;
+  return [b3, b2, b1, b0];
+}
+
+/**
+ * Returns the address of **DinD's own docker0 bridge** — the gateway a
+ * nested session container uses to reach wolf-api — as a dotted decimal
+ * IPv4 address, or undefined if the table has no usable docker0 row (which
+ * is the normal reading before dockerd has created the bridge).
+ *
+ * 🔴 Deliberately NOT the default route; see the section comment above.
+ *
+ * /proc/net/route carries no interface address, so the bridge address is
+ * derived from the docker0 row's Destination — the bridge's network — plus
+ * one, which is where Docker puts the bridge itself (172.17.0.0/16 →
+ * 172.17.0.1). Only the **directly connected** docker0 row counts: a
+ * docker0 row with a non-zero Gateway is a route to some other network that
+ * merely leaves via the bridge, and its Destination is not the bridge's own.
+ */
+export function parseDocker0GatewayFromProcRoute(contents: string): string | undefined {
+  for (const line of contents.split("\n")) {
     const fields = line.trim().split(/\s+/);
     // Columns: Iface Destination Gateway Flags RefCnt Use Metric Mask MTU Window IRTT
-    const [, destination, gateway] = fields;
-    if (destination !== "00000000") continue;
-    if (!gateway || gateway === "00000000" || gateway.length !== 8) continue;
-    if (!/^[0-9A-Fa-f]{8}$/.test(gateway)) continue;
+    const [iface, destination, gateway] = fields;
+    if (iface !== DOCKER_BRIDGE_IFACE) continue;
+    if (destination === undefined || gateway === undefined) continue;
+    // A route THROUGH a gateway: its destination is not docker0's network.
+    if (gateway !== "00000000") continue;
+    // A default route on docker0 would decode to 0.0.0.0, whose "+1" is the
+    // meaningless 0.0.0.1.
+    if (destination === "00000000") continue;
 
-    const bytes = [
-      gateway.slice(0, 2),
-      gateway.slice(2, 4),
-      gateway.slice(4, 6),
-      gateway.slice(6, 8),
-    ].map((hex) => parseInt(hex, 16));
-    return bytes.slice().reverse().join(".");
+    const octets = decodeProcRouteOctets(destination);
+    if (!octets) continue;
+    const [a, b, c, d] = octets;
+    // A network address's last octet leaves room for the bridge at +1;
+    // 255 would produce a .256, so the row is not what we think it is.
+    if (d === 255) continue;
+    return `${a}.${b}.${c}.${d + 1}`;
   }
   return undefined;
 }
@@ -465,7 +515,7 @@ export function resolveMcpUrl(
   }
 
   const table = routeSource.readRouteTable();
-  const gateway = table ? parseDefaultGatewayFromProcRoute(table) : undefined;
+  const gateway = table ? parseDocker0GatewayFromProcRoute(table) : undefined;
   if (gateway) {
     return { url: `http://${gateway}:${port}/mcp`, source: "discovered" };
   }
