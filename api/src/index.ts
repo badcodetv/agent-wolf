@@ -48,9 +48,16 @@ function main(): void {
 
   // Logged once, at boot: which of the three WOLF_MCP_URL resolution paths
   // (explicit / discovered / fallback) was used. See config.ts's "DinD
-  // gateway discovery" section — a silent shift in the DinD bridge address
-  // makes every MCP tool call from inside a session time out with no
-  // obvious cause, so this line is the diagnostic for that failure mode.
+  // gateway discovery" section — a wrong DinD bridge address here, whether
+  // because the bridge moved (R43) or because the probe read the wrong row
+  // (W33/R235), makes every MCP tool call from inside a session FAIL TO
+  // CONNECT with no error on the Wolf side, so this line is the diagnostic
+  // for that failure mode.
+  //
+  // 🔴 It does NOT hang. X1 measured `curl` exit 7 — could not connect —
+  // returning immediately. Do not read a slow request as this bug, and do
+  // not sit waiting for a timeout that is never coming: compare this line's
+  // `mcpUrl` against DinD's own docker0 address instead.
   logger.info({ mcpUrl: config.mcpUrl, mcpUrlSource: config.mcpUrlSource }, "resolved WOLF_MCP_URL");
 
   // Which of the two signing-secret paths was taken. The VALUE is never
