@@ -219,12 +219,27 @@ export interface OrangeSession {
  */
 const LIST_LIMIT = 200;
 
+/**
+ * 🔴 `UnretryableError`, NOT a plain expectation — and the difference is 300
+ * seconds and a wrong diagnosis (R249).
+ *
+ * A truncated listing is a PERMANENT condition: the `wolf` project only fills
+ * up further, so no amount of waiting makes the row we need reappear on the
+ * page. Thrown as a plain error inside a `waitFor` probe, it was caught, its
+ * message stashed in `last`, and the poll retried to its deadline — so the run
+ * burned its whole budget and then reported "timed out after 300s waiting for
+ * the first tick to write dataset …", with the real cause buried in a
+ * parenthetical sub-clause blaming a subsystem that was working. Same lesson,
+ * and the same fix, as the rotated-credential case in `orange()` above.
+ */
 function assertNotTruncated(rows: unknown[], what: string): void {
-  expect(
-    rows.length,
-    `GET ${what} returned ${rows.length} rows — the same as its limit, so this listing is TRUNCATED. ` +
-      `Every "not.toContain" assertion over it is now vacuous. Raise the limit or scope the query.`,
-  ).toBeLessThan(LIST_LIMIT);
+  if (rows.length < LIST_LIMIT) return;
+  throw new UnretryableError(
+    `GET ${what} returned ${rows.length} rows — the same as its limit, so this listing is ` +
+      `TRUNCATED. Every "not.toContain" assertion over it is now vacuous. Raise the limit or ` +
+      `scope the query. Retrying cannot fix it: the project only grows, so this is reported ` +
+      `immediately rather than at a poll's deadline.`,
+  );
 }
 
 export async function sessions(worker?: string): Promise<OrangeSession[]> {
