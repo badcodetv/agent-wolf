@@ -408,10 +408,16 @@ describe("mcp_download_url origin", () => {
     const discovered = loadConfig(
       { WOLF_API_PORT: "8100", WOLF_MCP_TOKEN: TOKEN },
       {
+        // W33/R235: discovery reads DinD's docker0 row, not the default
+        // route, so this fixture carries both — on DIFFERENT networks,
+        // which is the compose stack's normal state. The default route
+        // (172.26.0.1) is the address the old, wrong probe returned.
         readRouteTable: () =>
           [
             "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT",
-            "eth0\t00000000\t0100B0AC\t0003\t0\t0\t0\t00000000\t0\t0\t0",
+            "eth0\t00000000\t01001AAC\t0003\t0\t0\t0\t00000000\t0\t0\t0",
+            "eth0\t00001AAC\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0",
+            "docker0\t0000B0AC\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0",
           ].join("\n"),
       },
     );
