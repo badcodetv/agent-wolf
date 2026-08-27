@@ -104,6 +104,18 @@ test.describe("hypothesis lifecycle", () => {
       4 * 60_000,
     );
 
+    // …and the same static turn from the INTERVIEW session. It was emitted and
+    // never asserted until the verifier pointed it out: a mock turn nothing
+    // checks is a turn that can stop working silently.
+    const interviewProbe = await listMemories("kind=x1-harness-probe,name=interview", {
+      limit: 50,
+    });
+    expect(
+      interviewProbe.length,
+      "the interview session's harness-written MCP probe never landed",
+    ).toBeGreaterThan(0);
+    expect(interviewProbe[0]!.created_by_worker).toBe("interviewer");
+
     // `mcp__core__dataset_put` through the same client.
     const probe = await datasetMeta("x1-tick-probe");
     expect(probe, "the static dataset_put probe never landed").not.toBeNull();
@@ -143,15 +155,26 @@ test.describe("hypothesis lifecycle", () => {
     expect(called).toContain("mcp__core__dataset_put");
     expect(called).toContain("mcp__core__memory_create");
 
-    const searchResult = inner.find(
-      (e) =>
-        e.type === "tool_use_end" &&
-        JSON.stringify((e.data as { output?: unknown }).output ?? "").includes("avav.us"),
-    );
+    const ends = inner
+      .filter((e) => e.type === "tool_use_end")
+      .map((e) => JSON.stringify((e.data as { output?: unknown }).output ?? ""));
+
+    // `series_search` ROUND-TRIPPED: the AeroVironment row comes from W6's
+    // committed ticker table, inside wolf-api, reached over the DinD gateway.
     expect(
-      searchResult,
+      ends.some((out) => out.includes("avav.us")),
       "series_search did not answer from inside the container — the wolf MCP server was not reachable",
-    ).toBeDefined();
+    ).toBe(true);
+
+    // 🔴 `series_fetch` IS ASSERTED BY ITS ANSWER, NOT ONLY BY ITS NAME. Being
+    // in the called list proves the harness sent it; only wolf-api's own error
+    // shape proves it ARRIVED. Offline and with no FRED key the honest answer
+    // is `misconfigured` — a structured WolfError, which a connection failure
+    // could never produce.
+    expect(
+      ends.some((out) => out.includes("misconfigured") && out.includes("FRED_API_KEY")),
+      "series_fetch produced no wolf-api error body — it may never have reached wolf-api at all",
+    ).toBe(true);
   });
 
   test("Wolf's own evaluator trips the condition and moves it to challenged", async ({ page }) => {
@@ -197,8 +220,17 @@ test.describe("hypothesis lifecycle", () => {
     await signIn(page);
 
     await page.goto("/");
-    const row = page.locator(`[data-testid="hypothesis-row"]`).filter({ hasText: hyp.id });
-    await expect(row.or(page.getByText("X1 lifecycle"))).toBeVisible();
+    // 🔴 THE TESTID, NOT `.or(getByText(…))`. An `.or()` against the title text
+    // passes even if `hypothesis-row` never renders at all — an assertion that
+    // is also true when the thing under test is absent is not an assertion.
+    await expect(
+      page.locator('[data-testid="hypothesis-row"]').first(),
+      "the board rendered no hypothesis-row at all",
+    ).toBeVisible();
+    await expect(
+      page.locator('[data-testid="hypothesis-row"]').filter({ hasText: "X1 lifecycle" }),
+      "this hypothesis has no row on the board",
+    ).toBeVisible();
 
     await page.goto(`/hypotheses/${hyp.id}`);
     // `detail-column` is the left column W13 authors and W14 fills; there is no

@@ -26,7 +26,7 @@
  * which is a prompt-injected agent acting from inside its own container.
  */
 
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import {
   createAndGoLive,
   execInSessionContainer,
@@ -54,6 +54,29 @@ interface BoardRow {
   id: string;
   status: string;
   tamper?: Tamper[] | null;
+}
+
+/**
+ * ONE board read, returning this hypothesis's row.
+ *
+ * Deliberately not a poll. The only thing it retries is a non-200 — a stack
+ * that has not answered yet — and it gives up after fifteen seconds, so a
+ * broken defence surfaces as `expected "live", received "confirmed"` rather
+ * than as a timeout three minutes later.
+ */
+async function boardRow(page: Page, hypothesisId: string): Promise<BoardRow> {
+  const res = await waitFor(
+    "GET /api/hypotheses to answer 200",
+    async () => {
+      const r = await wolf<BoardRow[]>(page.request, "get", "/api/hypotheses");
+      return r.status === 200 ? r : null;
+    },
+    15_000,
+    1_000,
+  );
+  const row = res.body.find((r) => r.id === hypothesisId);
+  expect(row, `hypothesis ${hypothesisId} is not on the board at all`).toBeDefined();
+  return row!;
 }
 
 test.describe("tamper resistance", () => {
@@ -95,19 +118,22 @@ test.describe("tamper resistance", () => {
 
     // …and the board still shows the REAL status, with a warning naming the
     // writer. `latest_per=name` would otherwise have handed back this row.
-    const board = await waitFor(
-      "the board to flag the forged row",
-      async () => {
-        const res = await wolf<BoardRow[]>(page.request, "get", "/api/hypotheses");
-        if (res.status !== 200) return null;
-        const row = res.body.find((r) => r.id === hyp.id);
-        return row?.tamper && row.tamper.length > 0 ? row : null;
-      },
-      3 * 60_000,
-    );
+    //
+    // 🔴 ONE READ, THEN PLAIN ASSERTIONS — deliberately NOT wrapped in a
+    // `waitFor`. The board derives from memory on every request, and the row it
+    // must react to is already asserted to exist above, so there is nothing
+    // left to wait for. It matters because REMOVING A DEFENCE IS IMMEDIATE,
+    // VISIBLE DAMAGE: with the trust rule broken, this reads `confirmed` at
+    // once. Polling for the tamper flag would turn that into a three-minute
+    // "timed out waiting for the board to flag…", which costs three minutes per
+    // failure and says nothing about what actually broke (X1 verifier, D4).
+    const board = await boardRow(page, hyp.id);
     expect(board.status, "a forged row became state — the trust rule failed").toBe("live");
-    const forgedFlag = board.tamper!.find((t) => t.reason === "forged_row");
-    expect(forgedFlag, `no forged_row tamper: ${JSON.stringify(board.tamper)}`).toBeDefined();
+    const forgedFlag = board.tamper?.find((t) => t.reason === "forged_row");
+    expect(
+      forgedFlag,
+      `no forged_row tamper on the board row: ${JSON.stringify(board.tamper ?? null)}`,
+    ).toBeDefined();
     expect(forgedFlag!.written_by_worker).toBe(`researcher-${hyp.id}`);
     expect(forgedFlag!.memory_id).toBe(forged.id);
 
@@ -178,23 +204,23 @@ print(json.dumps({"id": created.get("id"),
 
     // 5. …and the board is unmoved: the real status, plus a warning naming the
     //    retractor. This is the resurrection attack failing.
-    const board = await waitFor(
-      "the board to flag the hostile retraction",
-      async () => {
-        const res = await wolf<BoardRow[]>(page.request, "get", "/api/hypotheses");
-        if (res.status !== 200) return null;
-        const row = res.body.find((r) => r.id === hyp.id);
-        return row?.tamper?.some((t) => t.reason === "hostile_retraction") === true ? row : null;
-      },
-      3 * 60_000,
-    );
+    //
+    // 🔴 ONE READ, THEN PLAIN ASSERTIONS — same reason as leg (a). A Wolf that
+    // honoured this retraction would drop straight back to the previous row
+    // (or lose the hypothesis) on the very next request, so a poll here would
+    // convert an instant, legible failure into a three-minute timeout.
+    const board = await boardRow(page, hyp.id);
     expect(board.status, "a hostile retraction rolled the board back").toBe("live");
-    const flag = board.tamper!.find((t) => t.reason === "hostile_retraction")!;
-    expect(flag.written_by_session).toBe(hyp.sessionId);
-    expect(flag.memory_id).toBe(retraction.id);
+    const flag = board.tamper?.find((t) => t.reason === "hostile_retraction");
+    expect(
+      flag,
+      `no hostile_retraction tamper on the board row: ${JSON.stringify(board.tamper ?? null)}`,
+    ).toBeDefined();
+    expect(flag!.written_by_session).toBe(hyp.sessionId);
+    expect(flag!.memory_id).toBe(retraction.id);
 
     // Both attacks are visible at once, and neither changed the status.
-    expect(board.tamper!.map((t) => t.reason).sort()).toEqual(
+    expect((board.tamper ?? []).map((t) => t.reason).sort()).toEqual(
       expect.arrayContaining(["forged_row", "hostile_retraction"]),
     );
 

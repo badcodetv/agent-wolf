@@ -53,5 +53,15 @@ COPY --from=build /src/node_modules ./node_modules
 # open '/prompts/researcher-preamble.md'` — i.e. NO hypothesis can be launched
 # in the shipped container, while `yarn test` passes because every unit test
 # runs from the source tree where the relative path resolves.
+#
+# ⚠️ CAVEAT, LOGGED RATHER THAN FIXED HERE. This line encodes a COINCIDENCE:
+# both layouts happen to sit three directories from different roots. Add or
+# remove one directory level under `dist/` and the prompts silently move, every
+# go-live 500s again, and no unit test notices — because they never resolve this
+# path at all. The principled fix is an explicit prompts root (an env var, or a
+# path resolved from the package root rather than counted upward), and it
+# belongs to whoever owns `provision.ts`, not to X1. Until then
+# `e2e/features/hypothesis-lifecycle.spec.ts`'s go-live step is the gate that
+# catches it.
 COPY prompts /prompts
 CMD ["node", "dist/index.js"]

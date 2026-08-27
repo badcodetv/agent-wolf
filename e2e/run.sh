@@ -64,9 +64,28 @@
 #   file under a mktemp -d directory, `chmod 600`, and referenced by NAME.
 # * `dcc` (below) is the only permitted way to look at compose config:
 #   `docker compose config` interpolates and prints secrets (R82).
-# * Cleanup NEVER touches a container this script did not create. It works
-#   through Orange's HTTP API (sessions and schedules in the `wolf` project) and
-#   through `docker compose -p <our project>`, never `docker rm` on a bare id.
+# * 🔴 CLEANUP DELETES ONLY THE ATOMS THIS RUN RECORDED CREATING, and the
+#   sentence that used to sit here — "cleanup never touches a container this
+#   script did not create" — was true of CONTAINERS and read as a much broader
+#   promise than it kept. It did not hold of PROJECT STATE: the first version
+#   listed every schedule in the `wolf` project and deleted all of them, which
+#   was invisible in the rig (bootstrap re-creates the critic schedule, and
+#   reported `"criticSchedule":"created"` every single run instead of
+#   `"unchanged"`) and would have destroyed live state on a project holding real
+#   hypotheses — every researcher schedule and every session. Found by X1's
+#   verifier, not self-reported.
+#
+#   🔴 SCOPING BY NAME PATTERN WOULD NOT HAVE FIXED IT. Real hypotheses are also
+#   named `hyp-<id>` with `researcher-<id>` workers, so a `hyp-*` sweep destroys
+#   exactly the state the danger is about. The fix is a RUN MANIFEST: the specs
+#   append every hypothesis id they create (see `X1_RUN_MANIFEST`), and cleanup
+#   deletes only those ids' schedules and sessions. Anything else in the project
+#   is COUNTED AND REPORTED, never deleted.
+#
+#   What cleanup may do, exhaustively: DELETE `/agent/schedules/{id}` and
+#   `/agent/session/{id}` for manifest ids only; and `docker compose -p <one of
+#   our two project names> down` under `--down`. It never runs `docker rm`,
+#   `docker stop` or `docker kill`, and never names a container id.
 
 set -euo pipefail
 
@@ -137,10 +156,26 @@ umask 077
 # ── Cleanup, which must run on EVERY exit path ──────────────────────────────
 #
 # A failed run that leaks sessions poisons the next one: the host port pool is
-# 100 and every live session holds one. This deletes the `wolf` project's
-# schedules FIRST (a surviving schedule keeps minting tick sessions while we
-# delete them) and then every session in the project — the per-tick job
-# sessions as well as the `hyp-<id>` ones.
+# 100 and every live session holds one. So this reclaims the hypotheses THIS RUN
+# created — their schedule first (a surviving schedule keeps minting tick
+# sessions while we delete them), then their `hyp-<id>` session AND every
+# per-tick job session dispatched for their `researcher-<id>` worker.
+#
+# 🔴 SCOPED BY THE RUN MANIFEST, NOT BY A PATTERN AND NOT BY "EVERYTHING IN THE
+# PROJECT". See the SAFETY note in the header for why a `hyp-*` pattern is not a
+# fix. Anything in the project that this run did not create is counted and
+# reported so a leak is VISIBLE, and then left exactly where it is.
+
+# One line per hypothesis id, appended by the specs as they create them
+# (helpers/x1.ts `recordHypothesis`). Created empty here so that a run which
+# dies before creating anything deletes nothing at all.
+export X1_RUN_MANIFEST="${SECRET_DIR}/created-hypotheses"
+: > "${X1_RUN_MANIFEST}"
+
+manifest_ids() {
+  [ -s "${X1_RUN_MANIFEST}" ] || return 0
+  sort -u "${X1_RUN_MANIFEST}" | grep -E '^[0-9a-f]{8}$' || true
+}
 
 api() { # api <METHOD> <PATH> [BODY]  — Orange, with the project API key
   local method="$1" path="$2" body="${3:-}"
@@ -170,27 +205,34 @@ except Exception:
 print(len(rows) if isinstance(rows, list) else "?")'
 }
 
-list_session_ids() {
+# Session ids belonging to ONE hypothesis id: its `hyp-<id>` chat session and
+# every job session the dispatcher ran for `researcher-<id>`. Matched on the
+# fields Orange returns, never on a substring of a name.
+list_session_ids_for() { # list_session_ids_for <hypothesis-id>
   api GET '/agent/sessions?user_email=*&limit=200' 2>/dev/null \
     | python3 -c 'import json,sys
+want = sys.argv[1]
 try:
     rows = json.load(sys.stdin)
 except Exception:
     raise SystemExit(0)
 for r in rows if isinstance(rows, list) else []:
-    print(r.get("id",""))' | grep -v '^$' || true
+    if r.get("name") == "hyp-" + want or r.get("worker") == "researcher-" + want:
+        print(r.get("id",""))' "$1" | grep -v '^$' || true
 }
 
-list_schedule_ids() {
+list_schedule_ids_for() { # list_schedule_ids_for <hypothesis-id>
   api GET '/agent/schedules?limit=200' 2>/dev/null \
     | python3 -c 'import json,sys
+want = "researcher-" + sys.argv[1]
 try:
     doc = json.load(sys.stdin)
 except Exception:
     raise SystemExit(0)
 rows = doc.get("schedules", doc) if isinstance(doc, dict) else doc
 for r in rows if isinstance(rows, list) else []:
-    print(r.get("id",""))' | grep -v '^$' || true
+    if r.get("worker") == want:
+        print(r.get("id",""))' "$1" | grep -v '^$' || true
 }
 
 CLEANED=0
@@ -200,15 +242,35 @@ cleanup() {
   CLEANED=1
   # Do not try to clean up a stack that never came up.
   if curl -fsS -o /dev/null --max-time 5 "${ORANGE_BASE}/agent/sessions" -H "X-API-Key: ${WOLF_API_KEY}" 2>/dev/null; then
-    log "cleanup: deleting the wolf project's schedules, then its sessions"
-    local sid
-    for sid in $(list_schedule_ids); do
-      api DELETE "/agent/schedules/${sid}" >/dev/null 2>&1 || true
-    done
-    for sid in $(list_session_ids); do
-      api DELETE "/agent/session/${sid}" >/dev/null 2>&1 || true
-    done
-    printf 'cleanup: sessions remaining in project wolf: %s\n' "$(count_sessions)"
+    local before after ids hid sid n
+    before="$(count_sessions)"
+    ids="$(manifest_ids)"
+    if [ -z "${ids}" ]; then
+      log "cleanup: this run recorded creating no hypotheses — deleting NOTHING"
+    else
+      n="$(printf '%s\n' "${ids}" | wc -l)"
+      log "cleanup: reclaiming the ${n} hypothesis/hypotheses THIS RUN created (schedule, then sessions)"
+      for hid in ${ids}; do
+        # Schedule first: a live schedule keeps dispatching tick sessions while
+        # we delete them.
+        for sid in $(list_schedule_ids_for "${hid}"); do
+          api DELETE "/agent/schedules/${sid}" >/dev/null 2>&1 || true
+        done
+        for sid in $(list_session_ids_for "${hid}"); do
+          api DELETE "/agent/session/${sid}" >/dev/null 2>&1 || true
+        done
+        printf 'cleanup:   %s reclaimed\n' "${hid}"
+      done
+    fi
+    after="$(count_sessions)"
+    printf 'cleanup: sessions in project wolf %s → %s\n' "${before}" "${after}"
+    # 🔴 Reported, never deleted. A non-zero remainder is either state this run
+    # did not create (leave it alone) or a genuine leak (fix the manifest) —
+    # and it must be VISIBLE either way rather than quietly swept up.
+    if [ "${after}" != "0" ] && [ "${after}" != "?" ]; then
+      printf 'cleanup: %s session(s) remain that this run did not record creating — LEFT ALONE, not deleted.\n' "${after}"
+      printf 'cleanup: if they are yours, they are a leak; if not, they belong to someone else.\n'
+    fi
   else
     echo "cleanup: Orange is not answering; nothing to reclaim through the API"
   fi
@@ -279,8 +341,22 @@ orange_compose restart agentd
 # ── 2. The mock-mode assertion (no billable call) ───────────────────────────
 
 assert_mock_mode() {
-  local logs boot
-  logs="$(orange_compose logs agentd 2>&1)"
+  local logs boot i
+
+  # 🔴 WAIT FOR THE LINE BEFORE JUDGING IT. This runs immediately after
+  # `restart agentd`, and the boot line is printed a moment later — so an
+  # unlucky read saw an old log or an empty one. It failed CLOSED (no line →
+  # abort), which is the safe direction, but a rig that aborts intermittently
+  # gets re-run rather than believed, and the next reflex is to weaken the
+  # assertion. Bounded, and the timeout is itself a failure.
+  for i in $(seq 1 60); do
+    logs="$(orange_compose logs agentd 2>&1)"
+    printf '%s\n' "${logs}" | grep -qF 'ANTHROPIC_API_KEY unset → SCRIPTED mock model proxy' && break
+    printf '%s\n' "${logs}" | grep -qF 'real model proxy →' && break
+    printf '%s\n' "${logs}" | grep -qF 'subscription mode →' && break
+    [ "${i}" = 60 ] && fail "agentd printed no model-proxy line within 60s of restarting — refusing to run anything that could be billable"
+    sleep 1
+  done
 
   # ONE command per factual claim (R231): each grep below stands alone and its
   # message names the command that actually ran.
@@ -435,6 +511,7 @@ set +e
     X1_DIND_CONTAINER="${ORANGE_DIND_CONTAINER}" \
     X1_LOGIN_EMAIL="${X1_LOGIN_EMAIL}" \
     X1_LOGIN_PASSWORD="${X1_LOGIN_PASSWORD}" \
+    X1_RUN_MANIFEST="${X1_RUN_MANIFEST}" \
     WOLF_API_KEY="${WOLF_API_KEY}" \
     npx playwright test "${SPEC_ARGS[@]}" )
 RC=$?

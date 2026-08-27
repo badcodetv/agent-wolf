@@ -17,6 +17,7 @@
  *     is a prompt-injected agent acting from inside its own container.
  */
 
+import { appendFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
@@ -52,6 +53,33 @@ export const LOGIN_PASSWORD = process.env.X1_LOGIN_PASSWORD ?? "x1-dev-login";
 
 /** The one metric every X1 spec is built on. Must match e2e/mock/build-script.py. */
 export const METRIC_SLUG = "probe-rate";
+
+/**
+ * 🔴 THE RUN MANIFEST — what makes `run.sh`'s cleanup safe.
+ *
+ * Cleanup deletes only the Orange atoms whose hypothesis ids appear here, so
+ * every id MUST be recorded the instant `POST /api/hypotheses` returns it — the
+ * session already exists by then, and a crash one line later would otherwise
+ * leak a container and a host port with nothing recording that it was ours.
+ *
+ * It cannot be a name pattern instead: real hypotheses are also named
+ * `hyp-<id>` with `researcher-<id>` workers, so a `hyp-*` sweep pointed at a
+ * project holding live state destroys exactly what the scoping exists to
+ * protect. An id this run generated is the only safe key.
+ *
+ * Appended, never rewritten, and `appendFileSync` so three parallel spec files
+ * cannot lose each other's lines.
+ */
+function recordHypothesis(id: string): void {
+  const manifest = process.env.X1_RUN_MANIFEST;
+  if (manifest === undefined || manifest === "") {
+    throw new Error(
+      "X1_RUN_MANIFEST is not set — run these specs through e2e/run.sh, or cleanup " +
+        "will not know this hypothesis was ours and will leak its container and host port",
+    );
+  }
+  appendFileSync(manifest, `${id}\n`, "utf8");
+}
 
 const API_KEY = process.env.WOLF_API_KEY ?? "";
 if (API_KEY === "") {
@@ -363,6 +391,12 @@ export async function createAndGoLive(
   // and every hypothesis reads as untrusted, so assert the shape here rather
   // than discovering it as a missing tamper flag six steps later.
   expect(id, "the hypothesis id is BARE 8-hex, never prefixed").toMatch(/^[0-9a-f]{8}$/);
+
+  // 🔴 RECORDED BEFORE ANY OTHER STEP. The `hyp-<id>` session and its container
+  // already exist; from here on, anything that throws must still leave cleanup
+  // able to reclaim them.
+  recordHypothesis(id);
+
   const sessionName = `hyp-${id}`;
 
   const session = await waitFor(
