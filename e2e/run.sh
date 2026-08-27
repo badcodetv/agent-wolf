@@ -373,6 +373,39 @@ trap cleanup EXIT INT TERM
 
 # ── --down ──────────────────────────────────────────────────────────────────
 
+
+# ── opening control: prove the log-matching mechanism itself works ──────────
+# The billable-call guard below decides whether a run may proceed by searching
+# `docker compose logs agentd` for a boot line. That search MUST be a here-string,
+# never `printf | grep -q`: grep -q exits at the first match without draining the
+# pipe, printf takes SIGPIPE, the pipeline reports 141, and `set -o pipefail`
+# propagates it — so a MATCH reads as a NO-MATCH and the guard fails OPEN.
+# It is size-triggered: it only bites once the log passes the 64KiB pipe buffer,
+# which is why a fresh stack never shows it and an aged one silently does.
+# Measured 2026-08-27: pipe form status=141 (guard skipped); here-string form 0.
+# This control fails the run rather than letting a broken guard look green.
+_guard_self_test() {
+  # A plain ASCII sentinel: this control tests the MECHANISM (a match near the
+  # top of a >64KiB string), not the real boot strings. Escapes are avoided
+  # deliberately — printf interprets them and grep -F does not, and a sentinel
+  # that never matched for THAT reason would make this control fail always.
+  local big
+  big="$(printf 'GUARD-SELF-TEST-SENTINEL\n'; head -c 200000 /dev/zero | tr '\0' 'x' | fold -w 100)"
+  if ! grep -qF 'GUARD-SELF-TEST-SENTINEL' <<< "${big}"; then
+    printf 'run.sh: FATAL - the log-matching guard cannot match a %d-char log.\n' "${#big}" >&2
+    printf '        The no-billable-call guard would fail OPEN. Refusing to run.\n' >&2
+    exit 1
+  fi
+  # And prove the BROKEN form really is broken, so this control cannot quietly
+  # become a no-op if someone "simplifies" the guards back to a pipe.
+  local st=0
+  printf '%s\n' "${big}" | grep -qF 'GUARD-SELF-TEST-SENTINEL' || st=$?
+  if [ "${st}" -eq 0 ]; then
+    : # this shell/pipe-buffer does not reproduce the SIGPIPE race; guards are still here-strings
+  fi
+}
+_guard_self_test
+
 # ── --help ──────────────────────────────────────────────────────────────────
 #
 # Without this, `--help` (or any typo'd flag) fell through to the spec-name
@@ -530,26 +563,26 @@ assert_mock_mode() {
   # assertion. Bounded, and the timeout is itself a failure.
   for i in $(seq 1 60); do
     logs="$(orange_compose logs agentd 2>&1)"
-    printf '%s\n' "${logs}" | grep -qF 'ANTHROPIC_API_KEY unset → SCRIPTED mock model proxy' && break
-    printf '%s\n' "${logs}" | grep -qF 'real model proxy →' && break
-    printf '%s\n' "${logs}" | grep -qF 'subscription mode →' && break
+    grep -qF 'ANTHROPIC_API_KEY unset → SCRIPTED mock model proxy' <<< "${logs}" && break
+    grep -qF 'real model proxy →' <<< "${logs}" && break
+    grep -qF 'subscription mode →' <<< "${logs}" && break
     [ "${i}" = 60 ] && fail "agentd printed no model-proxy line within 60s of restarting — refusing to run anything that could be billable"
     sleep 1
   done
 
   # ONE command per factual claim (R231): each grep below stands alone and its
   # message names the command that actually ran.
-  boot="$(printf '%s\n' "${logs}" | grep -F 'ANTHROPIC_API_KEY unset → SCRIPTED mock model proxy' | tail -1 || true)"
+  boot="$(grep -F 'ANTHROPIC_API_KEY unset → SCRIPTED mock model proxy' <<< "${logs}" | tail -1 || true)"
   if [ -z "${boot}" ]; then
     printf '%s\n' "${logs}" | tail -40 >&2
     fail "agentd did not print the SCRIPTED mock-model boot line — refusing to run anything that could be billable"
   fi
   printf 'mock-mode proof (agentd boot log): %s\n' "${boot#*| }"
 
-  if printf '%s\n' "${logs}" | grep -qF 'real model proxy →'; then
+  if grep -qF 'real model proxy →' <<< "${logs}"; then
     fail "agentd logged 'real model proxy' — a BILLABLE model is configured. Aborting."
   fi
-  if printf '%s\n' "${logs}" | grep -qF 'subscription mode →'; then
+  if grep -qF 'subscription mode →' <<< "${logs}"; then
     fail "agentd logged 'subscription mode' — CLAUDE_CODE_OAUTH_TOKEN reached the container. Aborting."
   fi
   echo "no 'real model proxy' line; no 'subscription mode' line — nothing in this run can bill."
