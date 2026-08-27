@@ -107,6 +107,30 @@ export async function orange<T = unknown>(
   }
   const res = await fetch(`${ORANGE_BASE}${path}`, { method, headers, body: payload });
   const text = await res.text();
+
+  // 🔴 `unauthorized` IS NEVER TRANSIENT — ABORT, DO NOT RETRY.
+  //
+  // agentd resolves the project's API key ONCE, at boot. A second `e2e/run.sh`
+  // recreates agentd with a freshly minted key and this run's key stops working
+  // instantly, mid-flight. Measured: K1 → 200; second `up -d` with K2; K1 →
+  // unauthorized.
+  //
+  // Without this, `waitFor` catches the thrown expectation and RETRIES for its
+  // whole budget — so the real message ("your credential was rotated") is
+  // buried under a nine-minute "timed out waiting for the first tick to write
+  // dataset …", in three spec files at once, with a different set of tests
+  // each run. That is precisely how this rig came to look non-deterministic
+  // when it was not. Same lesson as D4: immediate, visible damage must be
+  // reported immediately, never absorbed by a poll.
+  if (res.status === 401 || res.status === 403 || text.trim() === "unauthorized") {
+    throw new UnretryableError(
+      `Orange refused this run's project API key on ${method} ${path} (HTTP ${res.status}). ` +
+        "The key is minted per run and baked into agentd at boot, so this almost always means " +
+        "ANOTHER e2e/run.sh started and recreated agentd with a different key. " +
+        "run.sh now takes an exclusive lock to prevent it; if you see this, something " +
+        "recreated the agentd container mid-run.",
+    );
+  }
   let parsed: unknown = undefined;
   try {
     parsed = JSON.parse(text) as unknown;
@@ -214,6 +238,16 @@ export async function schedulesForWorker(worker: string): Promise<unknown[]> {
 
 // ── Polling ─────────────────────────────────────────────────────────────────
 
+/**
+ * A failure that polling cannot fix, so `waitFor` rethrows it at once instead
+ * of burning its budget. A rotated credential is the motivating case: retrying
+ * it converts a one-line diagnosis into a nine-minute timeout that blames the
+ * wrong subsystem.
+ */
+export class UnretryableError extends Error {
+  override readonly name = "UnretryableError";
+}
+
 export async function waitFor<T>(
   what: string,
   probe: () => Promise<T | null | undefined | false>,
@@ -227,6 +261,8 @@ export async function waitFor<T>(
     try {
       value = await probe();
     } catch (err) {
+      // 🔴 Straight out, no retry, no waiting for the deadline.
+      if (err instanceof UnretryableError) throw err;
       last = err instanceof Error ? err.message : String(err);
     }
     if (value !== null && value !== undefined && value !== false) return value;
