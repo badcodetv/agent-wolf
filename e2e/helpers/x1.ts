@@ -203,12 +203,38 @@ export interface OrangeSession {
  * — so a plain listing returns the `hyp-<id>` sessions and NONE of the per-tick
  * ones. Wolf's own client has always passed it (`api/src/orange/client.ts:698`).
  */
+/**
+ * 🔴 A LISTING THAT CAME BACK FULL IS NOT A LISTING, IT IS A PAGE.
+ *
+ * Every absence assertion in this suite ("the torn-down worker is NOT in the
+ * schedules", "no session named X remains") is `not.toContain` over one of
+ * these capped lists. Such an assertion gets WEAKER as the project fills up,
+ * and at exactly `limit` rows it becomes vacuous: the row we require to be
+ * gone may simply have fallen off the end of the page, and teardown then
+ * "passes" without tearing anything down.
+ *
+ * The `wolf` project is shared and long-lived, so this is a real reachable
+ * state, not a theoretical one. Fail loudly at the cap instead of silently
+ * returning a green.
+ */
+const LIST_LIMIT = 200;
+
+function assertNotTruncated(rows: unknown[], what: string): void {
+  expect(
+    rows.length,
+    `GET ${what} returned ${rows.length} rows — the same as its limit, so this listing is TRUNCATED. ` +
+      `Every "not.toContain" assertion over it is now vacuous. Raise the limit or scope the query.`,
+  ).toBeLessThan(LIST_LIMIT);
+}
+
 export async function sessions(worker?: string): Promise<OrangeSession[]> {
-  const q = new URLSearchParams({ user_email: "*", limit: "200" });
+  const q = new URLSearchParams({ user_email: "*", limit: String(LIST_LIMIT) });
   if (worker !== undefined) q.set("worker", worker);
   const res = await orange<OrangeSession[]>("GET", `/agent/sessions?${q.toString()}`);
   expect(res.status, `GET /agent/sessions → ${res.text.slice(0, 200)}`).toBe(200);
-  return Array.isArray(res.body) ? res.body : [];
+  const rows = Array.isArray(res.body) ? res.body : [];
+  assertNotTruncated(rows, "/agent/sessions");
+  return rows;
 }
 
 export async function sessionByName(name: string): Promise<OrangeSession | null> {
@@ -227,13 +253,24 @@ export async function workerExists(name: string): Promise<boolean> {
 }
 
 export async function schedulesForWorker(worker: string): Promise<unknown[]> {
+  const rows = await allSchedules();
+  return rows.filter((row) => row.worker === worker);
+}
+
+/**
+ * The schedules listing, guarded against the truncation trap above. Callers
+ * asserting a worker's ABSENCE must go through this rather than fetching the
+ * capped route themselves.
+ */
+export async function allSchedules(): Promise<{ worker?: string }[]> {
   const res = await orange<{ schedules?: { worker?: string }[] }>(
     "GET",
-    "/agent/schedules?limit=200",
+    `/agent/schedules?limit=${LIST_LIMIT}`,
   );
   expect(res.status, `GET /agent/schedules → ${res.text.slice(0, 200)}`).toBe(200);
   const rows = res.body?.schedules ?? [];
-  return rows.filter((row) => row.worker === worker);
+  assertNotTruncated(rows, "/agent/schedules");
+  return rows;
 }
 
 // ── Polling ─────────────────────────────────────────────────────────────────

@@ -12,6 +12,7 @@
 
 import { expect, test } from "@playwright/test";
 import {
+  allSchedules,
   createAndGoLive,
   datasetMeta,
   getMemory,
@@ -360,13 +361,10 @@ test.describe("hypothesis lifecycle", () => {
     // TEARDOWN ASSERTED BY OBSERVED EFFECT, never by trusting the report body.
     expect(await workerExists(`researcher-${hyp.id}`)).toBe(false);
     expect(await sessionByName(hyp.sessionName)).toBeNull();
-    const schedules = await orange<{ schedules?: { worker?: string }[] }>(
-      "GET",
-      "/agent/schedules?limit=200",
-    );
-    expect((schedules.body.schedules ?? []).map((s) => s.worker)).not.toContain(
-      `researcher-${hyp.id}`,
-    );
+    // Through `allSchedules`, which fails if the listing came back at its cap.
+    // This assertion is an ABSENCE, so a truncated page would satisfy it
+    // without teardown having happened — see the note on `assertNotTruncated`.
+    expect((await allSchedules()).map((s) => s.worker)).not.toContain(`researcher-${hyp.id}`);
 
     // …AND THE DATASET SURVIVES. Datasets are never torn down: the verdict's
     // own memory carries the evaluation snapshot, but the working data stays
