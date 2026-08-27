@@ -243,6 +243,104 @@ const STORAGE_PROBE = (): string => {
   }
 };
 
+type TamperReason = Tamper["reason"];
+
+/** What one hypothesis's report block should say, in full. */
+interface ExpectedReport {
+  /** Slot ids the tick filled that the template does not declare. */
+  orphanSlots: string[];
+  /** Slot ids the template declares that the tick left empty. */
+  unfilledSlots: string[];
+  /** `"clean"` pins `stripped_count === 0`; `"stripped"` pins `> 0`. */
+  sanitiser: "clean" | "stripped";
+  /** The EXACT set of tamper reasons. `[]` means NONE — see below. */
+  tamper: TamperReason[];
+}
+
+/**
+ * Asserts the WHOLE report block and the WHOLE notice strip, in one place.
+ * The caller must already be on `/hypotheses/<id>`.
+ *
+ * 🔴 WHY THIS IS ONE FUNCTION AND NOT THREE SETS OF INLINE ASSERTIONS.
+ *
+ * Each leg used to assert whatever its own subject happened to be: the happy
+ * path pinned drift AND stripped AND the four notices; the sanitiser leg
+ * pinned stripped but never drift; the drift leg pinned drift but never
+ * stripped. Every one of those omissions is a defect the suite could not
+ * see, and the omissions differed per leg — so no single leg looked thin.
+ * That is the divergence shape this project has been caught by repeatedly:
+ * a fact asserted in one place and quietly forgotten in a neighbour.
+ *
+ * 🔴 AND THE WORST OF THEM: NOBODY ASSERTED THE ABSENCE OF TAMPER. The two
+ * tamper legs look for their own reason with `.find(...)` and take `.first()`
+ * on the notice, and BOTH are satisfied by a list full of spurious extras. A
+ * defect that flagged every report in the product as tampered passed all ten
+ * legs. `tamper` here is an EXACT set, so `[]` is a real assertion that a
+ * healthy hypothesis carries no anomaly at all, and a populated one is an
+ * assertion that it carries THAT anomaly and nothing else.
+ *
+ * With one list, a fact can no longer be pinned in one leg and forgotten in
+ * another: there is only one place to forget it, and every caller pays.
+ */
+async function expectReportState(
+  page: Page,
+  id: string,
+  expected: ExpectedReport,
+): Promise<ReportBlock> {
+  const report = (await detail(page, id)).report;
+
+  expect(report.has_template, `${id}: no locked template`).toBe(true);
+  expect(report.unreadable, `${id}: Wolf could not read what it stored`).toBe(false);
+
+  // Drift, both directions, as SETS — order is document order and not the
+  // subject of any leg here.
+  expect(report.drift, `${id}: drift is null, which means NO TICK HAS RUN`).not.toBeNull();
+  expect([...report.drift!.orphan_slots].sort(), `${id}: orphan slots`).toEqual(
+    [...expected.orphanSlots].sort(),
+  );
+  expect([...report.drift!.unfilled_slots].sort(), `${id}: unfilled slots`).toEqual(
+    [...expected.unfilledSlots].sort(),
+  );
+  const drifted = expected.orphanSlots.length + expected.unfilledSlots.length > 0;
+
+  // 🔴 `null` is a THIRD state ("nobody counted"), not a small number.
+  expect(report.stripped_count, `${id}: nobody counted the sanitiser's records`).not.toBeNull();
+  if (expected.sanitiser === "clean") {
+    expect(report.stripped_count, `${id}: the sanitiser removed something it should not have`).toBe(0);
+  } else {
+    expect(
+      report.stripped_count!,
+      `${id}: the sanitiser removed NOTHING from hostile content`,
+    ).toBeGreaterThan(0);
+  }
+
+  // The exact tamper set. Sorted and de-duplicated so the assertion is about
+  // WHICH anomalies exist, not the order the reads happened to witness them.
+  const reasons = [...new Set((report.tamper ?? []).map((t) => t.reason))].sort();
+  expect(reasons, `${id}: tamper reasons — full array ${JSON.stringify(report.tamper)}`).toEqual(
+    [...expected.tamper].sort(),
+  );
+
+  // The notice strip, EVERY notice, present or absent. An assertion that a
+  // notice is absent is as load-bearing as one that it is shown: a UI that
+  // rendered every warning on every report would otherwise pass.
+  await expect(page.getByTestId("report-notice-drift")).toHaveCount(drifted ? 1 : 0);
+  await expect(page.getByTestId("report-notice-stripped")).toHaveCount(
+    expected.sanitiser === "stripped" ? 1 : 0,
+  );
+  await expect(page.getByTestId("report-notice-unreadable")).toHaveCount(0);
+  // `stripped_count` is a real number in every case here, so the "nobody
+  // counted" sentence must never appear.
+  await expect(page.getByTestId("report-stripped-uncounted")).toHaveCount(0);
+  // ONE notice per tamper ENTRY — which is also the invariant that an anomaly
+  // is rendered and never dropped.
+  await expect(page.getByTestId("report-notice-tamper")).toHaveCount(
+    (report.tamper ?? []).length,
+  );
+
+  return report;
+}
+
 /** Nothing executable survived into the frame, anywhere. */
 async function expectNothingExecutable(frame: Frame): Promise<void> {
   const body = await frame.locator("body").innerHTML();
@@ -376,22 +474,17 @@ test.describe("report layer", () => {
       "the declared slot did not receive the tick's content",
     ).toContainText(CLEAN_SLOT_TEXT);
 
-    // A clean tick matched the template exactly, so NO notice is shown. The
-    // three that could fire are asserted absent individually rather than as
-    // "the strip is empty", so a future fourth notice does not silently
-    // weaken this.
-    const report = (await detail(page, clean.id)).report;
-    expect(report.drift, "a clean tick must produce drift with both arrays empty").not.toBeNull();
-    expect(report.drift!.orphan_slots).toEqual([]);
-    expect(report.drift!.unfilled_slots).toEqual([]);
-    expect(report.stripped_count, "the clean slot must strip nothing").toBe(0);
-    expect(report.unreadable).toBe(false);
-    await expect(page.getByTestId("report-notice-drift")).toHaveCount(0);
-    await expect(page.getByTestId("report-notice-stripped")).toHaveCount(0);
-    await expect(page.getByTestId("report-notice-unreadable")).toHaveCount(0);
-    // `stripped_count: 0` is a real count, so the "nobody counted" sentence
-    // must NOT be on the page — the tri-state failing closed would show it.
-    await expect(page.getByTestId("report-stripped-uncounted")).toHaveCount(0);
+    // A clean tick matched the template exactly: no drift, nothing stripped,
+    // nothing unreadable and — the assertion this file used to be missing
+    // altogether — NO TAMPER. `tamper: []` is exact, so a defect that flagged
+    // every report in the product as tampered fails HERE, on the healthy
+    // hypothesis, which is the only place it can be caught.
+    await expectReportState(page, clean.id, {
+      orphanSlots: [],
+      unfilledSlots: [],
+      sanitiser: "clean",
+      tamper: [],
+    });
   });
 
   // ── Leg 3 ────────────────────────────────────────────────────────────────
@@ -491,25 +584,27 @@ test.describe("report layer", () => {
 
     // The server's own count, first. `> 0` — the SIGN is the contract and the
     // magnitude is not (a DOMPurify upgrade moves it).
-    const report = await waitForReport(page, hostile.id, "the hostile tick");
-    expect(
-      report.stripped_count,
-      "the sanitiser removed nothing from a slot full of script, handlers and a remote image",
-    ).not.toBeNull();
-    expect(report.stripped_count!).toBeGreaterThan(0);
-    expect(report.unreadable, "the hostile report must still be readable").toBe(false);
-
+    await waitForReport(page, hostile.id, "the hostile tick");
     await page.goto(`/hypotheses/${hostile.id}`);
 
-    // The notice, and its actual sentence — a visible empty box would satisfy
-    // `toBeVisible` on its own.
-    const notice = page.getByTestId("report-notice-stripped");
-    await expect(notice, "no strip-count notice for a report the sanitiser cut").toBeVisible();
-    await expect(notice).toContainText(/content was removed from this report by the sanitiser/i);
-    await expect(
-      page.getByTestId("report-stripped-uncounted"),
-      "the count WAS taken, so the 'nobody counted' sentence must not appear",
-    ).toHaveCount(0);
+    // 🔴 THE WHOLE BLOCK, not just the half this leg is named after. The
+    // hostile tick fills EXACTLY the declared slot, so its drift is the same
+    // both-arrays-empty state the happy path pins — and asserting that here
+    // is what stops "the sanitiser leg" from being blind to a drift defect
+    // that only shows on hostile content. Tamper is `[]` for the same reason
+    // it is on the happy path.
+    await expectReportState(page, hostile.id, {
+      orphanSlots: [],
+      unfilledSlots: [],
+      sanitiser: "stripped",
+      tamper: [],
+    });
+
+    // The notice's actual sentence — `expectReportState` pins that exactly one
+    // is shown, this pins WHAT it says. A visible empty box satisfies neither.
+    await expect(page.getByTestId("report-notice-stripped")).toContainText(
+      /content was removed from this report by the sanitiser/i,
+    );
 
     const frame = await reportFrame(page);
     // POSITIVE HALF, and it comes first: the document rendered, the chart drew,
@@ -541,18 +636,25 @@ test.describe("report layer", () => {
   }) => {
     await signIn(page);
 
-    const report = await waitForReport(page, drifting.id, "the drifting tick");
-    // 🔴 `drift: null` is the EMPTY state ("no tick has run"), not drift.
-    // `waitForReport` has already refused that, but stating it here is what
-    // stops a future edit from reading the two as the same answer.
-    expect(report.drift, "no report at all — this leg would be asserting nothing").not.toBeNull();
-    expect(report.drift!.orphan_slots).toContain(DRIFT_SLOT_ID);
-    expect(report.drift!.unfilled_slots).toContain(DECLARED_SLOT_ID);
-    expect(report.unreadable, "an undeclared slot is drift, never an unreadable body").toBe(false);
-
+    await waitForReport(page, drifting.id, "the drifting tick");
     await page.goto(`/hypotheses/${drifting.id}`);
+
+    // 🔴 THE WHOLE BLOCK. Drift in both directions at once — one orphan, one
+    // unfilled — AND `stripped_count: 0`, because this tick's content is clean
+    // prose. Pinning the sanitiser here guards the strips-everything direction
+    // on a SECOND payload, which the happy path alone cannot do. Tamper `[]`.
+    await expectReportState(page, drifting.id, {
+      orphanSlots: [DRIFT_SLOT_ID],
+      unfilledSlots: [DECLARED_SLOT_ID],
+      sanitiser: "clean",
+      tamper: [],
+    });
+
+    // …and WHAT the notice says. `expectReportState` pins that exactly one is
+    // shown; these pin that it names both slots, and names them on the right
+    // sides — the two fixes are opposite, so swapping them would be worse than
+    // saying nothing.
     const notice = page.getByTestId("report-notice-drift");
-    await expect(notice, "no drift notice for a report that drifted").toBeVisible();
     await expect(notice).toContainText(new RegExp(`filled but not declared by the template:.*${DRIFT_SLOT_ID}`));
     await expect(notice).toContainText(
       new RegExp(`declared by the template but not filled:.*${DECLARED_SLOT_ID}`),
@@ -636,20 +738,26 @@ print(json.dumps({"id": created.get("id"),
     // visible damage: the very next request would serve the forgery. Polling
     // for the tamper flag would turn a one-line diagnosis into a timeout that
     // blames the tick pipeline (the D4 lesson `helpers/x1.ts` records).
-    const report = (await detail(page, clean.id)).report;
-    const flag = (report.tamper ?? []).find((t) => t.reason === "cross_hypothesis_write");
-    expect(
-      flag,
-      `no cross_hypothesis_write tamper on ${clean.id}: ${JSON.stringify(report.tamper)}`,
-    ).toBeDefined();
-    expect(flag!.memory_id).toBe(forged.id);
-    expect(flag!.written_by_session).toBe(hostile.sessionId);
-
     await page.goto(`/hypotheses/${clean.id}`);
-    await expect(
-      page.getByTestId("report-notice-tamper").first(),
-      "the detail page shows no tamper notice for a forged report",
-    ).toBeVisible();
+
+    // 🔴 THE EXACT SET, not a `.find`. `.find` is satisfied by a list of
+    // twenty spurious flags that happens to contain this one, so it cannot
+    // tell "the defence works" from "everything is flagged". The happy path
+    // pins `[]` on this same hypothesis earlier in the file; this pins that
+    // the attack added EXACTLY ONE reason and nothing else.
+    const report = await expectReportState(page, clean.id, {
+      orphanSlots: [],
+      unfilledSlots: [],
+      sanitiser: "clean",
+      tamper: ["cross_hypothesis_write"],
+    });
+
+    // …and that the one flag names the row and the writer, which is what makes
+    // it an accusation rather than an alarm.
+    const flags = (report.tamper ?? []).filter((t) => t.reason === "cross_hypothesis_write");
+    expect(flags, "expected exactly one cross_hypothesis_write flag").toHaveLength(1);
+    expect(flags[0]!.memory_id).toBe(forged.id);
+    expect(flags[0]!.written_by_session).toBe(hostile.sessionId);
 
     // …and the frame shows CLEAN's own report, not the forgery. Both halves:
     // the forged text is absent AND the real text is present, so a frame that
@@ -731,13 +839,13 @@ print(json.dumps({"id": created.get("id"),
       report.has_template,
       "a hostile retraction removed the locked template — the resurrection attack worked",
     ).toBe(true);
-    const flag = (report.tamper ?? []).find((t) => t.reason === "hostile_retraction");
+    const flags = (report.tamper ?? []).filter((t) => t.reason === "hostile_retraction");
     expect(
-      flag,
-      `no hostile_retraction tamper on ${clean.id}: ${JSON.stringify(report.tamper)}`,
-    ).toBeDefined();
-    expect(flag!.memory_id).toBe(retraction.id);
-    expect(flag!.written_by_session).toBe(clean.sessionId);
+      flags,
+      `expected exactly one hostile_retraction on ${clean.id}: ${JSON.stringify(report.tamper)}`,
+    ).toHaveLength(1);
+    expect(flags[0]!.memory_id).toBe(retraction.id);
+    expect(flags[0]!.written_by_session).toBe(clean.sessionId);
 
     // 6. 🔴 A FRESH COMPOSE, NOT THE CACHE. `composeFor` keys its frame cache
     //    on (structure hash, report memory id, dataset versions) — none of
@@ -758,10 +866,18 @@ print(json.dumps({"id": created.get("id"),
     );
 
     await page.goto(`/hypotheses/${clean.id}`);
-    await expect(
-      page.getByTestId("report-notice-tamper").first(),
-      "the detail page shows no tamper notice for a hostile retraction",
-    ).toBeVisible();
+
+    // 🔴 BOTH attacks, and ONLY both. Leg 8 left a `cross_hypothesis_write` on
+    // this hypothesis and this leg adds a `hostile_retraction`; the exact set
+    // asserts the second attack was caught, the first was not lost, and
+    // nothing spurious was invented along the way.
+    await expectReportState(page, clean.id, {
+      orphanSlots: [],
+      unfilledSlots: [],
+      sanitiser: "clean",
+      tamper: ["cross_hypothesis_write", "hostile_retraction"],
+    });
+
     const frame = await reportFrame(page);
     await expectFrameRendered(frame);
     await expect(
