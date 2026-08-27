@@ -54,10 +54,11 @@ function main(): void {
   // CONNECT with no error on the Wolf side, so this line is the diagnostic
   // for that failure mode.
   //
-  // 🔴 It does NOT hang. X1 measured `curl` exit 7 — could not connect —
-  // returning immediately. Do not read a slow request as this bug, and do
-  // not sit waiting for a timeout that is never coming: compare this line's
-  // `mcpUrl` against DinD's own docker0 address instead.
+  // 🔴 X1 measured `curl` exit 7 — could not connect. That is an ERROR, not
+  // a hang, but the exit code alone does not say whether it came back fast
+  // (no route) or slow (SYNs into a black hole), so do not diagnose this by
+  // how long the call took. Compare this line's `mcpUrl` against DinD's own
+  // docker0 address instead.
   logger.info({ mcpUrl: config.mcpUrl, mcpUrlSource: config.mcpUrlSource }, "resolved WOLF_MCP_URL");
 
   // Which of the two signing-secret paths was taken. The VALUE is never
