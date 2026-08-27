@@ -394,13 +394,24 @@ export function parseTestLogin(raw: string | undefined, nodeEnv: string): TestLo
 // from inside a session container then fails.
 //
 // 🔴 X1 ran `curl 172.26.0.1:8100/mcp` from inside a nested container and
-// got **exit 7 — could not connect**. That is an ERROR, not a hang. But the
-// exit code alone does not say whether it came back fast (no route) or slow
-// (SYNs into a black hole), so **do not diagnose this by how long the call
-// took**. What makes it invisible is not latency but WHERE the failure
-// lands: on the far side of the container boundary, where nothing on the
-// Wolf side logs it and there is no error to grep for here. Only running
-// the product can find it.
+// got **exit 7 — could not connect**. That is an ERROR, not a hang, and on
+// this stack exit 7 is specifically the IMMEDIATE-negative case. The three
+// shapes were measured (curl 7.81.0):
+//
+//   refused, RST                          exit  7    ~0.4ms
+//   routable-but-dead, --connect-timeout 2 exit 28    2.0s
+//   routable-but-dead, kernel SYN retries  exit 28    ~131s
+//
+// Every slow shape returns **28** (`CURLE_OPERATION_TIMEDOUT`); only the
+// immediate negative returns **7** (`CURLE_COULDNT_CONNECT`). So an exit 7
+// here did come back fast. 🔴 Diagnose by the EXIT CODE anyway, never by
+// the clock — the code separates the two shapes exactly, and a stopwatch
+// separates them only if you already know which one you are holding.
+//
+// What makes it invisible is not latency but WHERE the failure lands: on
+// the far side of the container boundary, where nothing on the Wolf side
+// logs it and there is no error to grep for here. Only running the product
+// can find it.
 //
 // Change this function only with a test whose routing table has the default
 // route and docker0 on DIFFERENT networks; a fixture where they agree
