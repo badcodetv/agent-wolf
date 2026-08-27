@@ -7,6 +7,10 @@
 #   ./e2e/run.sh                      run every spec
 #   ./e2e/run.sh tamper-resistance    run e2e/features/tamper-resistance.spec.ts only
 #   ./e2e/run.sh --down               stop both stacks and exit
+#   ./e2e/run.sh --reclaim-orphans    DESTRUCTIVE. Delete every X1-shaped
+#                                     schedule and session in project `wolf`,
+#                                     including ones this run did not create.
+#   ./e2e/run.sh --help               print the above and exit
 #
 # An unknown spec name exits non-zero rather than passing vacuously with zero
 # tests — a filter that matches nothing is the loudest kind of false green.
@@ -368,6 +372,42 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # ── --down ──────────────────────────────────────────────────────────────────
+
+# ── --help ──────────────────────────────────────────────────────────────────
+#
+# Without this, `--help` (or any typo'd flag) fell through to the spec-name
+# filter and died with "no such spec: e2e/features/--help.spec.ts". More
+# importantly: --reclaim-orphans is destructive and, until now, said so ONLY in
+# a source comment. An operator reaching for it reads `--help`, not line 372.
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  cat <<'USAGE'
+X1 — the Agent Wolf end-to-end rig.
+
+Brings up BOTH stacks (Orange + Wolf) in offline mock-model mode, bootstraps the
+`wolf` project, runs the Playwright specs, and cleans up after itself on exit.
+
+  ./e2e/run.sh                     run every spec
+  ./e2e/run.sh <name>              run e2e/features/<name>.spec.ts only
+  ./e2e/run.sh --down              stop both stacks and exit
+  ./e2e/run.sh --reclaim-orphans   see WARNING below
+  ./e2e/run.sh --help              this text
+
+Normal cleanup deletes only the hypotheses THIS run recorded creating. It never
+guesses from a name pattern, because a real hypothesis is named `hyp-<id>` too.
+
+WARNING — what --reclaim-orphans destroys:
+  Every session named `hyp-<8 hex>` and every session or schedule whose worker
+  is `researcher-<8 hex>`, in project `wolf`, REGARDLESS of which run created
+  it and regardless of whether a run created it at all. On a project holding
+  real hypotheses this deletes them and their schedules permanently. There is
+  no undo and no confirmation prompt.
+
+  It exists because each leaked session holds one of the host's 100 ports, so a
+  poisoned run can exhaust the pool. Run it on a test project, after a run that
+  leaked — never as routine hygiene, and never on a project you care about.
+USAGE
+  exit 0
+fi
 
 # ── --reclaim-orphans ───────────────────────────────────────────────────────
 #
