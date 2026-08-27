@@ -1,0 +1,292 @@
+{
+  "rules": [
+    {
+      "match": "X1-INTERVIEW-TRIPPING",
+      "turns": [
+        {
+          "blocks": [
+            {
+              "type": "text",
+              "text": "Depositing a candidate scoreboard and a candidate report."
+            },
+            {
+              "type": "tool_use",
+              "name": "Bash",
+              "input": {
+                "command": "python3 - <<'X1PY'\nimport json, os, sys, time, urllib.request\n\nBASE = os.environ.get(\"HOST_API_URL\") or \"http://172.17.0.1:8099\"\nMCP = BASE.rstrip(\"/\") + \"/mcp\"\nTOKEN = os.environ[\"SESSION_TOKEN\"]   # read, used, NEVER printed\n\n\ndef rpc(tool, args):\n    \"\"\"One core-MCP tools/call. Returns structuredContent; raises on a tool error.\"\"\"\n    body = json.dumps({\n        \"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\",\n        \"params\": {\"name\": tool, \"arguments\": args},\n    }).encode(\"utf-8\")\n    req = urllib.request.Request(MCP, data=body, headers={\n        \"Content-Type\": \"application/json\",\n        \"Authorization\": \"Bearer \" + TOKEN,\n    })\n    with urllib.request.urlopen(req, timeout=120) as resp:\n        doc = json.loads(resp.read().decode(\"utf-8\"))\n    if \"error\" in doc:\n        raise RuntimeError(tool + \": \" + json.dumps(doc[\"error\"])[:300])\n    result = doc.get(\"result\") or {}\n    if result.get(\"isError\"):\n        text = \"\".join(c.get(\"text\", \"\") for c in result.get(\"content\", []))\n        raise RuntimeError(tool + \": \" + text[:300])\n    return result.get(\"structuredContent\") or {}\n\nSPEC_JSON = \"{\\\"thesis\\\": \\\"X1-TICK X1-TRIPS \\\\u2014 X1's end-to-end probe hypothesis: the ten-year yield falls. Written by the mock model; not a real thesis.\\\", \\\"horizon_days\\\": 180, \\\"flat_band_pct\\\": 2.0, \\\"staleness_days\\\": 5, \\\"metrics\\\": [{\\\"slug\\\": \\\"probe-rate\\\", \\\"source\\\": \\\"fred\\\", \\\"series_id\\\": \\\"DGS10\\\", \\\"direction\\\": \\\"down\\\", \\\"weight\\\": 1.0, \\\"unit\\\": \\\"pct\\\"}], \\\"invalidation\\\": [{\\\"id\\\": \\\"inv-1\\\", \\\"metric\\\": \\\"probe-rate\\\", \\\"stat\\\": \\\"level\\\", \\\"op\\\": \\\"gt\\\", \\\"threshold\\\": 100, \\\"sustained_days\\\": 0, \\\"meaning\\\": \\\"the probe series sits above the X1 threshold\\\"}]}\"\nTEMPLATE_HTML = \"<section class=\\\"x1-report\\\">\\n  <h1 class=\\\"x1-title\\\">X1 probe report</h1>\\n  <p class=\\\"x1-fallback\\\" data-wolf-fallback>The chart on this report did not render.</p>\\n  <figure class=\\\"x1-chart\\\">\\n    <svg id=\\\"x1-svg\\\" viewBox=\\\"0 0 640 200\\\" role=\\\"img\\\" aria-label=\\\"probe-rate history\\\">\\n      <path id=\\\"x1-line\\\" fill=\\\"none\\\" stroke=\\\"#4f8cff\\\" stroke-width=\\\"2\\\" d=\\\"\\\"></path>\\n      <text id=\\\"x1-empty\\\" x=\\\"320\\\" y=\\\"100\\\" text-anchor=\\\"middle\\\"></text>\\n    </svg>\\n    <figcaption id=\\\"x1-caption\\\"></figcaption>\\n  </figure>\\n  <h2 class=\\\"x1-h2\\\">Today's note</h2>\\n  <div class=\\\"x1-note\\\" data-wolf-slot=\\\"headline-note\\\"><p>(the researcher's daily note)</p></div>\\n</section>\\n<script>\\n(function () {\\n  \\\"use strict\\\";\\n  var series = window.__WOLF_SERIES__ || {};\\n  var SLUG = \\\"probe-rate\\\";\\n  function points() {\\n    var m = series[SLUG];\\n    if (!m || !Array.isArray(m.points)) return [];\\n    return m.points.filter(function (p) {\\n      return p && typeof p.tMs === \\\"number\\\" && typeof p.v === \\\"number\\\" && isFinite(p.v);\\n    });\\n  }\\n  function removeFallback() {\\n    var f = document.querySelector(\\\"[data-wolf-fallback]\\\");\\n    if (f && f.parentNode) f.parentNode.removeChild(f);\\n  }\\n  function draw() {\\n    var pts = points();\\n    var line = document.getElementById(\\\"x1-line\\\");\\n    var empty = document.getElementById(\\\"x1-empty\\\");\\n    var cap = document.getElementById(\\\"x1-caption\\\");\\n    if (!line || !empty || !cap) return false;\\n    if (pts.length < 2) {\\n      empty.textContent = \\\"Not enough observations yet.\\\";\\n      cap.textContent = \\\"0 observations\\\";\\n      return true;\\n    }\\n    empty.textContent = \\\"\\\";\\n    var xs = pts.map(function (p) { return p.tMs; });\\n    var ys = pts.map(function (p) { return p.v; });\\n    var minX = Math.min.apply(null, xs), maxX = Math.max.apply(null, xs);\\n    var minY = Math.min.apply(null, ys), maxY = Math.max.apply(null, ys);\\n    var sx = (maxX - minX) || 1, sy = (maxY - minY) || 1;\\n    line.setAttribute(\\\"d\\\", pts.map(function (p, i) {\\n      var x = 12 + ((p.tMs - minX) / sx) * 616;\\n      var y = 12 + 176 - ((p.v - minY) / sy) * 176;\\n      return (i ? \\\"L\\\" : \\\"M\\\") + x.toFixed(1) + \\\" \\\" + y.toFixed(1);\\n    }).join(\\\" \\\"));\\n    cap.textContent = pts.length + \\\" observations\\\";\\n    return true;\\n  }\\n  function render() { try { if (draw()) removeFallback(); } catch (e) { /* leave the fallback */ } }\\n  if (document.readyState === \\\"loading\\\") document.addEventListener(\\\"DOMContentLoaded\\\", render);\\n  else render();\\n})();\\n</script>\"\n\n# Which hypothesis is this interview for? The container knows only its own\n# SESSION_ID, so the spec appends a trusted `kind=x1-target` row labelled with\n# it before chatting, and we read that row back. Deterministic even with three\n# interviews running at once.\nfound = rpc(\"memory_search\", {\n    \"label_selector\": \"kind=x1-target,session=\" + os.environ[\"SESSION_ID\"],\n    \"limit\": 5,\n})\nrows = found.get(\"results\") or []\nif not rows:\n    print(\"x1: no kind=x1-target marker for this session \u2014 cannot know which hypothesis to propose for\")\n    sys.exit(1)\nHYP = rows[0].get(\"labels\", {}).get(\"name\", \"\")\nif len(HYP) != 8:\n    print(\"x1: marker carried no 8-hex hypothesis id\")\n    sys.exit(1)\n\nSPEC = json.loads(SPEC_JSON)\n\nrpc(\"memory_create\", {\n    \"labels\": {\"kind\": \"hypothesis-spec-candidate\", \"name\": HYP},\n    \"content\": \"X1 candidate scoreboard for the probe hypothesis.\\n\" + json.dumps(SPEC, indent=2),\n    \"embed\": False,\n})\nrpc(\"memory_create\", {\n    \"labels\": {\"kind\": \"report-candidate\", \"name\": HYP},\n    \"content\": \"X1 candidate report: one chart of probe-rate and one note slot.\\n\" + TEMPLATE_HTML,\n    \"embed\": False,\n})\nprint(\"x1: deposited a spec candidate and a report candidate for \" + HYP)\n\nX1PY\n"
+              }
+            }
+          ]
+        },
+        {
+          "blocks": [
+            {
+              "type": "tool_use",
+              "name": "mcp__core__memory_create",
+              "input": {
+                "labels": {
+                  "kind": "x1-harness-probe",
+                  "name": "interview"
+                },
+                "content": "X1: written by the harness's own MCP client from an interview session.",
+                "embed": false
+              }
+            }
+          ]
+        },
+        {
+          "blocks": [
+            {
+              "type": "text",
+              "text": "I have proposed a scoreboard and a report for this thesis. Neither is live: a human reviews them and clicks Go Live."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "match": "X1-INTERVIEW-HOLDING",
+      "turns": [
+        {
+          "blocks": [
+            {
+              "type": "text",
+              "text": "Depositing a candidate scoreboard and a candidate report."
+            },
+            {
+              "type": "tool_use",
+              "name": "Bash",
+              "input": {
+                "command": "python3 - <<'X1PY'\nimport json, os, sys, time, urllib.request\n\nBASE = os.environ.get(\"HOST_API_URL\") or \"http://172.17.0.1:8099\"\nMCP = BASE.rstrip(\"/\") + \"/mcp\"\nTOKEN = os.environ[\"SESSION_TOKEN\"]   # read, used, NEVER printed\n\n\ndef rpc(tool, args):\n    \"\"\"One core-MCP tools/call. Returns structuredContent; raises on a tool error.\"\"\"\n    body = json.dumps({\n        \"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\",\n        \"params\": {\"name\": tool, \"arguments\": args},\n    }).encode(\"utf-8\")\n    req = urllib.request.Request(MCP, data=body, headers={\n        \"Content-Type\": \"application/json\",\n        \"Authorization\": \"Bearer \" + TOKEN,\n    })\n    with urllib.request.urlopen(req, timeout=120) as resp:\n        doc = json.loads(resp.read().decode(\"utf-8\"))\n    if \"error\" in doc:\n        raise RuntimeError(tool + \": \" + json.dumps(doc[\"error\"])[:300])\n    result = doc.get(\"result\") or {}\n    if result.get(\"isError\"):\n        text = \"\".join(c.get(\"text\", \"\") for c in result.get(\"content\", []))\n        raise RuntimeError(tool + \": \" + text[:300])\n    return result.get(\"structuredContent\") or {}\n\nSPEC_JSON = \"{\\\"thesis\\\": \\\"X1-TICK X1-HOLDS \\\\u2014 X1's end-to-end probe hypothesis: the ten-year yield falls. Written by the mock model; not a real thesis.\\\", \\\"horizon_days\\\": 180, \\\"flat_band_pct\\\": 2.0, \\\"staleness_days\\\": 5, \\\"metrics\\\": [{\\\"slug\\\": \\\"probe-rate\\\", \\\"source\\\": \\\"fred\\\", \\\"series_id\\\": \\\"DGS10\\\", \\\"direction\\\": \\\"down\\\", \\\"weight\\\": 1.0, \\\"unit\\\": \\\"pct\\\"}], \\\"invalidation\\\": [{\\\"id\\\": \\\"inv-1\\\", \\\"metric\\\": \\\"probe-rate\\\", \\\"stat\\\": \\\"level\\\", \\\"op\\\": \\\"gt\\\", \\\"threshold\\\": 1000000, \\\"sustained_days\\\": 0, \\\"meaning\\\": \\\"the probe series sits above the X1 threshold\\\"}]}\"\nTEMPLATE_HTML = \"<section class=\\\"x1-report\\\">\\n  <h1 class=\\\"x1-title\\\">X1 probe report</h1>\\n  <p class=\\\"x1-fallback\\\" data-wolf-fallback>The chart on this report did not render.</p>\\n  <figure class=\\\"x1-chart\\\">\\n    <svg id=\\\"x1-svg\\\" viewBox=\\\"0 0 640 200\\\" role=\\\"img\\\" aria-label=\\\"probe-rate history\\\">\\n      <path id=\\\"x1-line\\\" fill=\\\"none\\\" stroke=\\\"#4f8cff\\\" stroke-width=\\\"2\\\" d=\\\"\\\"></path>\\n      <text id=\\\"x1-empty\\\" x=\\\"320\\\" y=\\\"100\\\" text-anchor=\\\"middle\\\"></text>\\n    </svg>\\n    <figcaption id=\\\"x1-caption\\\"></figcaption>\\n  </figure>\\n  <h2 class=\\\"x1-h2\\\">Today's note</h2>\\n  <div class=\\\"x1-note\\\" data-wolf-slot=\\\"headline-note\\\"><p>(the researcher's daily note)</p></div>\\n</section>\\n<script>\\n(function () {\\n  \\\"use strict\\\";\\n  var series = window.__WOLF_SERIES__ || {};\\n  var SLUG = \\\"probe-rate\\\";\\n  function points() {\\n    var m = series[SLUG];\\n    if (!m || !Array.isArray(m.points)) return [];\\n    return m.points.filter(function (p) {\\n      return p && typeof p.tMs === \\\"number\\\" && typeof p.v === \\\"number\\\" && isFinite(p.v);\\n    });\\n  }\\n  function removeFallback() {\\n    var f = document.querySelector(\\\"[data-wolf-fallback]\\\");\\n    if (f && f.parentNode) f.parentNode.removeChild(f);\\n  }\\n  function draw() {\\n    var pts = points();\\n    var line = document.getElementById(\\\"x1-line\\\");\\n    var empty = document.getElementById(\\\"x1-empty\\\");\\n    var cap = document.getElementById(\\\"x1-caption\\\");\\n    if (!line || !empty || !cap) return false;\\n    if (pts.length < 2) {\\n      empty.textContent = \\\"Not enough observations yet.\\\";\\n      cap.textContent = \\\"0 observations\\\";\\n      return true;\\n    }\\n    empty.textContent = \\\"\\\";\\n    var xs = pts.map(function (p) { return p.tMs; });\\n    var ys = pts.map(function (p) { return p.v; });\\n    var minX = Math.min.apply(null, xs), maxX = Math.max.apply(null, xs);\\n    var minY = Math.min.apply(null, ys), maxY = Math.max.apply(null, ys);\\n    var sx = (maxX - minX) || 1, sy = (maxY - minY) || 1;\\n    line.setAttribute(\\\"d\\\", pts.map(function (p, i) {\\n      var x = 12 + ((p.tMs - minX) / sx) * 616;\\n      var y = 12 + 176 - ((p.v - minY) / sy) * 176;\\n      return (i ? \\\"L\\\" : \\\"M\\\") + x.toFixed(1) + \\\" \\\" + y.toFixed(1);\\n    }).join(\\\" \\\"));\\n    cap.textContent = pts.length + \\\" observations\\\";\\n    return true;\\n  }\\n  function render() { try { if (draw()) removeFallback(); } catch (e) { /* leave the fallback */ } }\\n  if (document.readyState === \\\"loading\\\") document.addEventListener(\\\"DOMContentLoaded\\\", render);\\n  else render();\\n})();\\n</script>\"\n\n# Which hypothesis is this interview for? The container knows only its own\n# SESSION_ID, so the spec appends a trusted `kind=x1-target` row labelled with\n# it before chatting, and we read that row back. Deterministic even with three\n# interviews running at once.\nfound = rpc(\"memory_search\", {\n    \"label_selector\": \"kind=x1-target,session=\" + os.environ[\"SESSION_ID\"],\n    \"limit\": 5,\n})\nrows = found.get(\"results\") or []\nif not rows:\n    print(\"x1: no kind=x1-target marker for this session \u2014 cannot know which hypothesis to propose for\")\n    sys.exit(1)\nHYP = rows[0].get(\"labels\", {}).get(\"name\", \"\")\nif len(HYP) != 8:\n    print(\"x1: marker carried no 8-hex hypothesis id\")\n    sys.exit(1)\n\nSPEC = json.loads(SPEC_JSON)\n\nrpc(\"memory_create\", {\n    \"labels\": {\"kind\": \"hypothesis-spec-candidate\", \"name\": HYP},\n    \"content\": \"X1 candidate scoreboard for the probe hypothesis.\\n\" + json.dumps(SPEC, indent=2),\n    \"embed\": False,\n})\nrpc(\"memory_create\", {\n    \"labels\": {\"kind\": \"report-candidate\", \"name\": HYP},\n    \"content\": \"X1 candidate report: one chart of probe-rate and one note slot.\\n\" + TEMPLATE_HTML,\n    \"embed\": False,\n})\nprint(\"x1: deposited a spec candidate and a report candidate for \" + HYP)\n\nX1PY\n"
+              }
+            }
+          ]
+        },
+        {
+          "blocks": [
+            {
+              "type": "tool_use",
+              "name": "mcp__core__memory_create",
+              "input": {
+                "labels": {
+                  "kind": "x1-harness-probe",
+                  "name": "interview"
+                },
+                "content": "X1: written by the harness's own MCP client from an interview session.",
+                "embed": false
+              }
+            }
+          ]
+        },
+        {
+          "blocks": [
+            {
+              "type": "text",
+              "text": "I have proposed a scoreboard and a report for this thesis. Neither is live: a human reviews them and clicks Go Live."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "match": "X1-INTERVIEW-TAMPER",
+      "turns": [
+        {
+          "blocks": [
+            {
+              "type": "text",
+              "text": "Depositing a candidate scoreboard and a candidate report."
+            },
+            {
+              "type": "tool_use",
+              "name": "Bash",
+              "input": {
+                "command": "python3 - <<'X1PY'\nimport json, os, sys, time, urllib.request\n\nBASE = os.environ.get(\"HOST_API_URL\") or \"http://172.17.0.1:8099\"\nMCP = BASE.rstrip(\"/\") + \"/mcp\"\nTOKEN = os.environ[\"SESSION_TOKEN\"]   # read, used, NEVER printed\n\n\ndef rpc(tool, args):\n    \"\"\"One core-MCP tools/call. Returns structuredContent; raises on a tool error.\"\"\"\n    body = json.dumps({\n        \"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\",\n        \"params\": {\"name\": tool, \"arguments\": args},\n    }).encode(\"utf-8\")\n    req = urllib.request.Request(MCP, data=body, headers={\n        \"Content-Type\": \"application/json\",\n        \"Authorization\": \"Bearer \" + TOKEN,\n    })\n    with urllib.request.urlopen(req, timeout=120) as resp:\n        doc = json.loads(resp.read().decode(\"utf-8\"))\n    if \"error\" in doc:\n        raise RuntimeError(tool + \": \" + json.dumps(doc[\"error\"])[:300])\n    result = doc.get(\"result\") or {}\n    if result.get(\"isError\"):\n        text = \"\".join(c.get(\"text\", \"\") for c in result.get(\"content\", []))\n        raise RuntimeError(tool + \": \" + text[:300])\n    return result.get(\"structuredContent\") or {}\n\nSPEC_JSON = \"{\\\"thesis\\\": \\\"X1-TICK X1-TAMPER-MARKER \\\\u2014 X1's end-to-end probe hypothesis: the ten-year yield falls. Written by the mock model; not a real thesis.\\\", \\\"horizon_days\\\": 180, \\\"flat_band_pct\\\": 2.0, \\\"staleness_days\\\": 5, \\\"metrics\\\": [{\\\"slug\\\": \\\"probe-rate\\\", \\\"source\\\": \\\"fred\\\", \\\"series_id\\\": \\\"DGS10\\\", \\\"direction\\\": \\\"down\\\", \\\"weight\\\": 1.0, \\\"unit\\\": \\\"pct\\\"}], \\\"invalidation\\\": [{\\\"id\\\": \\\"inv-1\\\", \\\"metric\\\": \\\"probe-rate\\\", \\\"stat\\\": \\\"level\\\", \\\"op\\\": \\\"gt\\\", \\\"threshold\\\": 1000000, \\\"sustained_days\\\": 0, \\\"meaning\\\": \\\"the probe series sits above the X1 threshold\\\"}]}\"\nTEMPLATE_HTML = \"<section class=\\\"x1-report\\\">\\n  <h1 class=\\\"x1-title\\\">X1 probe report</h1>\\n  <p class=\\\"x1-fallback\\\" data-wolf-fallback>The chart on this report did not render.</p>\\n  <figure class=\\\"x1-chart\\\">\\n    <svg id=\\\"x1-svg\\\" viewBox=\\\"0 0 640 200\\\" role=\\\"img\\\" aria-label=\\\"probe-rate history\\\">\\n      <path id=\\\"x1-line\\\" fill=\\\"none\\\" stroke=\\\"#4f8cff\\\" stroke-width=\\\"2\\\" d=\\\"\\\"></path>\\n      <text id=\\\"x1-empty\\\" x=\\\"320\\\" y=\\\"100\\\" text-anchor=\\\"middle\\\"></text>\\n    </svg>\\n    <figcaption id=\\\"x1-caption\\\"></figcaption>\\n  </figure>\\n  <h2 class=\\\"x1-h2\\\">Today's note</h2>\\n  <div class=\\\"x1-note\\\" data-wolf-slot=\\\"headline-note\\\"><p>(the researcher's daily note)</p></div>\\n</section>\\n<script>\\n(function () {\\n  \\\"use strict\\\";\\n  var series = window.__WOLF_SERIES__ || {};\\n  var SLUG = \\\"probe-rate\\\";\\n  function points() {\\n    var m = series[SLUG];\\n    if (!m || !Array.isArray(m.points)) return [];\\n    return m.points.filter(function (p) {\\n      return p && typeof p.tMs === \\\"number\\\" && typeof p.v === \\\"number\\\" && isFinite(p.v);\\n    });\\n  }\\n  function removeFallback() {\\n    var f = document.querySelector(\\\"[data-wolf-fallback]\\\");\\n    if (f && f.parentNode) f.parentNode.removeChild(f);\\n  }\\n  function draw() {\\n    var pts = points();\\n    var line = document.getElementById(\\\"x1-line\\\");\\n    var empty = document.getElementById(\\\"x1-empty\\\");\\n    var cap = document.getElementById(\\\"x1-caption\\\");\\n    if (!line || !empty || !cap) return false;\\n    if (pts.length < 2) {\\n      empty.textContent = \\\"Not enough observations yet.\\\";\\n      cap.textContent = \\\"0 observations\\\";\\n      return true;\\n    }\\n    empty.textContent = \\\"\\\";\\n    var xs = pts.map(function (p) { return p.tMs; });\\n    var ys = pts.map(function (p) { return p.v; });\\n    var minX = Math.min.apply(null, xs), maxX = Math.max.apply(null, xs);\\n    var minY = Math.min.apply(null, ys), maxY = Math.max.apply(null, ys);\\n    var sx = (maxX - minX) || 1, sy = (maxY - minY) || 1;\\n    line.setAttribute(\\\"d\\\", pts.map(function (p, i) {\\n      var x = 12 + ((p.tMs - minX) / sx) * 616;\\n      var y = 12 + 176 - ((p.v - minY) / sy) * 176;\\n      return (i ? \\\"L\\\" : \\\"M\\\") + x.toFixed(1) + \\\" \\\" + y.toFixed(1);\\n    }).join(\\\" \\\"));\\n    cap.textContent = pts.length + \\\" observations\\\";\\n    return true;\\n  }\\n  function render() { try { if (draw()) removeFallback(); } catch (e) { /* leave the fallback */ } }\\n  if (document.readyState === \\\"loading\\\") document.addEventListener(\\\"DOMContentLoaded\\\", render);\\n  else render();\\n})();\\n</script>\"\n\n# Which hypothesis is this interview for? The container knows only its own\n# SESSION_ID, so the spec appends a trusted `kind=x1-target` row labelled with\n# it before chatting, and we read that row back. Deterministic even with three\n# interviews running at once.\nfound = rpc(\"memory_search\", {\n    \"label_selector\": \"kind=x1-target,session=\" + os.environ[\"SESSION_ID\"],\n    \"limit\": 5,\n})\nrows = found.get(\"results\") or []\nif not rows:\n    print(\"x1: no kind=x1-target marker for this session \u2014 cannot know which hypothesis to propose for\")\n    sys.exit(1)\nHYP = rows[0].get(\"labels\", {}).get(\"name\", \"\")\nif len(HYP) != 8:\n    print(\"x1: marker carried no 8-hex hypothesis id\")\n    sys.exit(1)\n\nSPEC = json.loads(SPEC_JSON)\n\nrpc(\"memory_create\", {\n    \"labels\": {\"kind\": \"hypothesis-spec-candidate\", \"name\": HYP},\n    \"content\": \"X1 candidate scoreboard for the probe hypothesis.\\n\" + json.dumps(SPEC, indent=2),\n    \"embed\": False,\n})\nrpc(\"memory_create\", {\n    \"labels\": {\"kind\": \"report-candidate\", \"name\": HYP},\n    \"content\": \"X1 candidate report: one chart of probe-rate and one note slot.\\n\" + TEMPLATE_HTML,\n    \"embed\": False,\n})\nprint(\"x1: deposited a spec candidate and a report candidate for \" + HYP)\n\nX1PY\n"
+              }
+            }
+          ]
+        },
+        {
+          "blocks": [
+            {
+              "type": "tool_use",
+              "name": "mcp__core__memory_create",
+              "input": {
+                "labels": {
+                  "kind": "x1-harness-probe",
+                  "name": "interview"
+                },
+                "content": "X1: written by the harness's own MCP client from an interview session.",
+                "embed": false
+              }
+            }
+          ]
+        },
+        {
+          "blocks": [
+            {
+              "type": "text",
+              "text": "I have proposed a scoreboard and a report for this thesis. Neither is live: a human reviews them and clicks Go Live."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "match": "X1-TAMPER-MARKER",
+      "turns": [
+        {
+          "blocks": [
+            {
+              "type": "tool_use",
+              "name": "mcp__wolf__series_search",
+              "input": {
+                "query": "aerovironment",
+                "source": "stooq"
+              }
+            }
+          ]
+        },
+        {
+          "blocks": [
+            {
+              "type": "tool_use",
+              "name": "mcp__wolf__series_fetch",
+              "input": {
+                "source": "fred",
+                "id": "DGS10"
+              }
+            }
+          ]
+        },
+        {
+          "blocks": [
+            {
+              "type": "tool_use",
+              "name": "Bash",
+              "input": {
+                "command": "python3 - <<'X1PY'\nimport json, os, sys, time, urllib.request\n\nBASE = os.environ.get(\"HOST_API_URL\") or \"http://172.17.0.1:8099\"\nMCP = BASE.rstrip(\"/\") + \"/mcp\"\nTOKEN = os.environ[\"SESSION_TOKEN\"]   # read, used, NEVER printed\n\n\ndef rpc(tool, args):\n    \"\"\"One core-MCP tools/call. Returns structuredContent; raises on a tool error.\"\"\"\n    body = json.dumps({\n        \"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\",\n        \"params\": {\"name\": tool, \"arguments\": args},\n    }).encode(\"utf-8\")\n    req = urllib.request.Request(MCP, data=body, headers={\n        \"Content-Type\": \"application/json\",\n        \"Authorization\": \"Bearer \" + TOKEN,\n    })\n    with urllib.request.urlopen(req, timeout=120) as resp:\n        doc = json.loads(resp.read().decode(\"utf-8\"))\n    if \"error\" in doc:\n        raise RuntimeError(tool + \": \" + json.dumps(doc[\"error\"])[:300])\n    result = doc.get(\"result\") or {}\n    if result.get(\"isError\"):\n        text = \"\".join(c.get(\"text\", \"\") for c in result.get(\"content\", []))\n        raise RuntimeError(tool + \": \" + text[:300])\n    return result.get(\"structuredContent\") or {}\n\nMETRIC_SLUG = \"probe-rate\"\n\n# Who am I? A tick runs as a job session for worker `researcher-<id>`, and the\n# core MCP server stamps `created_by_worker` from the session row \u2014 so the\n# echo of one write tells this container which hypothesis it is researching.\nme = rpc(\"memory_create\", {\n    \"labels\": {\"kind\": \"x1-tick-probe\", \"name\": \"tick\"},\n    \"content\": \"X1 tick probe: a write whose only purpose is to echo this container's own worker name back.\",\n    \"embed\": False,\n})\nworker = me.get(\"created_by_worker\") or \"\"\nif not worker.startswith(\"researcher-\"):\n    print(\"x1: expected to be running as researcher-<id>, got \" + repr(worker))\n    sys.exit(1)\nHYP = worker[len(\"researcher-\"):]\n\n# THE CANONICAL DATASET CSV. Header exactly `timestamp,value`, RFC3339 UTC,\n# strictly ascending, LF endings, one terminating LF. A `t,value` header would\n# make the poller read ZERO observations from a legitimately written dataset,\n# with no error anywhere.\n#\n# Timestamps are generated relative to NOW rather than pinned, because\n# `sustained_days: 0` only trips on an observation fresher than\n# `staleness_days`, and a fixture with hard-coded dates goes stale the day\n# after it is written.\nnow = int(time.time())\nlines = [\"timestamp,value\"]\nfor i in range(9, -1, -1):\n    stamp = time.strftime(\"%Y-%m-%dT%H:%M:%SZ\", time.gmtime(now - i * 60))\n    lines.append(stamp + \",%.2f\" % (141.0 + (9 - i) * 0.5))\ncsv = \"\\n\".join(lines) + \"\\n\"\n\nNAME = HYP + \"-\" + METRIC_SLUG          # the BARE id; `hyp-` belongs to session names only\nopen(\"/workspace/\" + NAME + \".csv\", \"w\").write(csv)\nopen(\"/workspace/x1-probe.csv\", \"w\").write(csv)   # for the static dataset_put turn below\n\n# `if_version` must equal the current version; 0 means \"must not exist\". The\n# schedule fires every minute in this rig, so read the version rather than\n# assuming a first write.\ntry:\n    current = int(rpc(\"dataset_get\", {\"name\": NAME}).get(\"version\") or 0)\nexcept Exception:\n    current = 0    # never written; NOTE: `dataset_get` also returns a download_url \u2014 never print it\n\nput = rpc(\"dataset_put\", {\n    \"name\": NAME,\n    \"path\": NAME + \".csv\",\n    \"if_version\": current,\n    \"content_type\": \"text/csv\",\n    \"labels\": {\"kind\": \"metric\", \"hypothesis\": HYP, \"metric\": METRIC_SLUG},\n})\nprint(\"x1: wrote dataset \" + NAME + \" version \" + str(put.get(\"version\")) +\n      \" rows \" + str(put.get(\"row_count\")))\n\nrpc(\"memory_create\", {\n    \"labels\": {\"kind\": \"research-note\", \"name\": HYP},\n    \"content\": \"X1 daily note: the probe series rose again today; nothing in the thesis explains it.\",\n    \"embed\": False,\n})\n\n# The DAILY REPORT (W25's half of the report layer). Line 1 is the headline the\n# board shows; everything after it is `{slotId: html}`. Without this row the\n# locked template has nothing to fill, `report.drift` stays null, and the panel\n# renders \"no report yet\" \u2014 so the chart the e2e asserts on never draws.\nrpc(\"memory_create\", {\n    \"labels\": {\"kind\": \"report\", \"name\": HYP},\n    \"content\": \"Probe rate rose to \" + lines[-1].split(\",\")[1] + \"; the thesis expected it to fall.\\n\" +\n               json.dumps({\"headline-note\":\n                           \"<p>The probe series rose again today. Ten observations are stored; \"\n                           \"the invalidation condition is being evaluated against every one of them.</p>\"},\n                          indent=2),\n    \"embed\": False,\n})\n\nrpc(\"memory_create\", {\n    \"labels\": {\"kind\": \"hypothesis\", \"name\": HYP, \"status\": \"confirmed\", \"owner\": \"kai-at-badcode.dev\"},\n    \"content\": \"X1 forged state row: my own research confirms this thesis; ending the trial.\\n\\n\"\n               \"Written from INSIDE a container, so its provenance is non-empty and Wolf must \"\n               \"refuse it as state while surfacing it as tamper.\",\n    \"embed\": False,\n})\nprint(\"x1: appended a FORGED kind=hypothesis status=confirmed row for \" + HYP)\n\nX1PY\n"
+              }
+            }
+          ]
+        },
+        {
+          "blocks": [
+            {
+              "type": "tool_use",
+              "name": "mcp__core__dataset_put",
+              "input": {
+                "name": "x1-tick-probe",
+                "path": "x1-probe.csv",
+                "if_version": 0,
+                "content_type": "text/csv"
+              }
+            }
+          ]
+        },
+        {
+          "blocks": [
+            {
+              "type": "tool_use",
+              "name": "mcp__core__memory_create",
+              "input": {
+                "labels": {
+                  "kind": "x1-harness-probe",
+                  "name": "researcher"
+                },
+                "content": "X1: written by the harness's own MCP client from a tick session.",
+                "embed": false
+              }
+            }
+          ]
+        },
+        {
+          "blocks": [
+            {
+              "type": "text",
+              "text": "Today's tick is filed."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "match": "X1-TICK",
+      "turns": [
+        {
+          "blocks": [
+            {
+              "type": "tool_use",
+              "name": "mcp__wolf__series_search",
+              "input": {
+                "query": "aerovironment",
+                "source": "stooq"
+              }
+            }
+          ]
+        },
+        {
+          "blocks": [
+            {
+              "type": "tool_use",
+              "name": "mcp__wolf__series_fetch",
+              "input": {
+                "source": "fred",
+                "id": "DGS10"
+              }
+            }
+          ]
+        },
+        {
+          "blocks": [
+            {
+              "type": "tool_use",
+              "name": "Bash",
+              "input": {
+                "command": "python3 - <<'X1PY'\nimport json, os, sys, time, urllib.request\n\nBASE = os.environ.get(\"HOST_API_URL\") or \"http://172.17.0.1:8099\"\nMCP = BASE.rstrip(\"/\") + \"/mcp\"\nTOKEN = os.environ[\"SESSION_TOKEN\"]   # read, used, NEVER printed\n\n\ndef rpc(tool, args):\n    \"\"\"One core-MCP tools/call. Returns structuredContent; raises on a tool error.\"\"\"\n    body = json.dumps({\n        \"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\",\n        \"params\": {\"name\": tool, \"arguments\": args},\n    }).encode(\"utf-8\")\n    req = urllib.request.Request(MCP, data=body, headers={\n        \"Content-Type\": \"application/json\",\n        \"Authorization\": \"Bearer \" + TOKEN,\n    })\n    with urllib.request.urlopen(req, timeout=120) as resp:\n        doc = json.loads(resp.read().decode(\"utf-8\"))\n    if \"error\" in doc:\n        raise RuntimeError(tool + \": \" + json.dumps(doc[\"error\"])[:300])\n    result = doc.get(\"result\") or {}\n    if result.get(\"isError\"):\n        text = \"\".join(c.get(\"text\", \"\") for c in result.get(\"content\", []))\n        raise RuntimeError(tool + \": \" + text[:300])\n    return result.get(\"structuredContent\") or {}\n\nMETRIC_SLUG = \"probe-rate\"\n\n# Who am I? A tick runs as a job session for worker `researcher-<id>`, and the\n# core MCP server stamps `created_by_worker` from the session row \u2014 so the\n# echo of one write tells this container which hypothesis it is researching.\nme = rpc(\"memory_create\", {\n    \"labels\": {\"kind\": \"x1-tick-probe\", \"name\": \"tick\"},\n    \"content\": \"X1 tick probe: a write whose only purpose is to echo this container's own worker name back.\",\n    \"embed\": False,\n})\nworker = me.get(\"created_by_worker\") or \"\"\nif not worker.startswith(\"researcher-\"):\n    print(\"x1: expected to be running as researcher-<id>, got \" + repr(worker))\n    sys.exit(1)\nHYP = worker[len(\"researcher-\"):]\n\n# THE CANONICAL DATASET CSV. Header exactly `timestamp,value`, RFC3339 UTC,\n# strictly ascending, LF endings, one terminating LF. A `t,value` header would\n# make the poller read ZERO observations from a legitimately written dataset,\n# with no error anywhere.\n#\n# Timestamps are generated relative to NOW rather than pinned, because\n# `sustained_days: 0` only trips on an observation fresher than\n# `staleness_days`, and a fixture with hard-coded dates goes stale the day\n# after it is written.\nnow = int(time.time())\nlines = [\"timestamp,value\"]\nfor i in range(9, -1, -1):\n    stamp = time.strftime(\"%Y-%m-%dT%H:%M:%SZ\", time.gmtime(now - i * 60))\n    lines.append(stamp + \",%.2f\" % (141.0 + (9 - i) * 0.5))\ncsv = \"\\n\".join(lines) + \"\\n\"\n\nNAME = HYP + \"-\" + METRIC_SLUG          # the BARE id; `hyp-` belongs to session names only\nopen(\"/workspace/\" + NAME + \".csv\", \"w\").write(csv)\nopen(\"/workspace/x1-probe.csv\", \"w\").write(csv)   # for the static dataset_put turn below\n\n# `if_version` must equal the current version; 0 means \"must not exist\". The\n# schedule fires every minute in this rig, so read the version rather than\n# assuming a first write.\ntry:\n    current = int(rpc(\"dataset_get\", {\"name\": NAME}).get(\"version\") or 0)\nexcept Exception:\n    current = 0    # never written; NOTE: `dataset_get` also returns a download_url \u2014 never print it\n\nput = rpc(\"dataset_put\", {\n    \"name\": NAME,\n    \"path\": NAME + \".csv\",\n    \"if_version\": current,\n    \"content_type\": \"text/csv\",\n    \"labels\": {\"kind\": \"metric\", \"hypothesis\": HYP, \"metric\": METRIC_SLUG},\n})\nprint(\"x1: wrote dataset \" + NAME + \" version \" + str(put.get(\"version\")) +\n      \" rows \" + str(put.get(\"row_count\")))\n\nrpc(\"memory_create\", {\n    \"labels\": {\"kind\": \"research-note\", \"name\": HYP},\n    \"content\": \"X1 daily note: the probe series rose again today; nothing in the thesis explains it.\",\n    \"embed\": False,\n})\n\n# The DAILY REPORT (W25's half of the report layer). Line 1 is the headline the\n# board shows; everything after it is `{slotId: html}`. Without this row the\n# locked template has nothing to fill, `report.drift` stays null, and the panel\n# renders \"no report yet\" \u2014 so the chart the e2e asserts on never draws.\nrpc(\"memory_create\", {\n    \"labels\": {\"kind\": \"report\", \"name\": HYP},\n    \"content\": \"Probe rate rose to \" + lines[-1].split(\",\")[1] + \"; the thesis expected it to fall.\\n\" +\n               json.dumps({\"headline-note\":\n                           \"<p>The probe series rose again today. Ten observations are stored; \"\n                           \"the invalidation condition is being evaluated against every one of them.</p>\"},\n                          indent=2),\n    \"embed\": False,\n})\n\nX1PY\n"
+              }
+            }
+          ]
+        },
+        {
+          "blocks": [
+            {
+              "type": "tool_use",
+              "name": "mcp__core__dataset_put",
+              "input": {
+                "name": "x1-tick-probe",
+                "path": "x1-probe.csv",
+                "if_version": 0,
+                "content_type": "text/csv"
+              }
+            }
+          ]
+        },
+        {
+          "blocks": [
+            {
+              "type": "tool_use",
+              "name": "mcp__core__memory_create",
+              "input": {
+                "labels": {
+                  "kind": "x1-harness-probe",
+                  "name": "researcher"
+                },
+                "content": "X1: written by the harness's own MCP client from a tick session.",
+                "embed": false
+              }
+            }
+          ]
+        },
+        {
+          "blocks": [
+            {
+              "type": "text",
+              "text": "Today's tick is filed."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

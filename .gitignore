@@ -7,3 +7,7 @@ coverage/
 .env
 .env.local
 *.tsbuildinfo
+
+# X1's Playwright rig (e2e/) keeps its own install and its own run artefacts.
+e2e/test-results/
+e2e/playwright-report/
