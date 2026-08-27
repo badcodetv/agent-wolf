@@ -55,10 +55,12 @@ function main(): void {
   // for that failure mode.
   //
   // 🔴 X1 measured `curl` exit 7 — could not connect. That is an ERROR, not
-  // a hang, but the exit code alone does not say whether it came back fast
-  // (no route) or slow (SYNs into a black hole), so do not diagnose this by
-  // how long the call took. Compare this line's `mcpUrl` against DinD's own
-  // docker0 address instead.
+  // a hang, and on this stack exit 7 is the immediate-negative case: a
+  // refusal returns in ~0.4ms, while a routable-but-dead address exhausts
+  // the kernel's SYN retries and returns exit 28 at ~131s — never 7. So an
+  // exit 7 did come back fast. Diagnose by the exit CODE all the same, not
+  // by the clock, and compare this line's `mcpUrl` against DinD's own
+  // docker0 address.
   logger.info({ mcpUrl: config.mcpUrl, mcpUrlSource: config.mcpUrlSource }, "resolved WOLF_MCP_URL");
 
   // Which of the two signing-secret paths was taken. The VALUE is never
