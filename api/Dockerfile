@@ -13,6 +13,19 @@ COPY package.json yarn.lock ./
 COPY api/package.json ./api/package.json
 COPY web/package.json ./web/package.json
 COPY tools/import-boundary/package.json ./tools/import-boundary/package.json
+# The vendored @agentkit/chat-ui tarball. This image builds no UI and imports
+# none of it — but `yarn install` at the WORKSPACE ROOT resolves every
+# workspace's dependencies, and web/package.json depends on
+# `file:./vendor/agentkit-chat-ui-<version>.tgz`. Without the file present,
+# the install dies with `Tarball is not in network and can not be located in
+# cache`, so wolf-api's image cannot be built at all.
+#
+# 🔴 Found by X1, the first ticket to build these images. W28 introduced the
+# vendored dependency; W13/R137 added this same line to web/Dockerfile and
+# nobody carried it here, so `docker compose build wolf-api` has been broken
+# ever since. Neither `yarn typecheck` nor `yarn test` can see it: both run
+# against the workspace that is already installed on the host.
+COPY web/vendor ./web/vendor
 RUN corepack enable && yarn install --frozen-lockfile
 COPY api ./api
 COPY tools/import-boundary ./tools/import-boundary
@@ -26,4 +39,19 @@ ENV NODE_ENV=production
 COPY --from=build /src/api/dist ./dist
 COPY --from=build /src/api/package.json ./package.json
 COPY --from=build /src/node_modules ./node_modules
+# 🔴 The four prompt files, at the ABSOLUTE path the code resolves to. W9 reads
+# `researcher-preamble.md` and `researcher-method.md` at go-live through
+#     new URL("../../../prompts/<name>", import.meta.url)
+# (api/src/hypothesis/provision.ts:341-344). In the repo that walks
+# api/src/hypothesis → api/src → api → repo root. In THIS image the module is
+# /app/dist/hypothesis/provision.js, so the same three steps land on `/prompts`,
+# not on /app/prompts — which is why this copies to the filesystem root rather
+# than into the working directory.
+#
+# Found by X1. Without it every `POST /api/hypotheses/:id/go-live` answers
+# 500 `internal` with `ENOENT: no such file or directory,
+# open '/prompts/researcher-preamble.md'` — i.e. NO hypothesis can be launched
+# in the shipped container, while `yarn test` passes because every unit test
+# runs from the source tree where the relative path resolves.
+COPY prompts /prompts
 CMD ["node", "dist/index.js"]
