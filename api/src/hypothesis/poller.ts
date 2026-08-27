@@ -55,6 +55,11 @@ import { validateSpec, type Spec } from "./spec.js";
 import { extractSpecJsonText, researcherWorkerFor } from "./provision.js";
 import { parseCanonicalCsvBytes } from "./points.js";
 import {
+  foreignDatasetLog,
+  isOwnDataset,
+  metricDatasetName,
+} from "./datasettrust.js";
+import {
   EVALUATION_HISTORY_LIMIT,
   evaluationLineWithoutTimestamp,
   evaluationSummaryLine,
@@ -102,7 +107,10 @@ export type ChallengeReason = "condition_tripped" | "horizon_reached";
 export type SkipReason =
   | "no_locked_spec"
   | "no_live_row"
-  | "no_datasets_yet";
+  | "no_datasets_yet"
+  /** Every metric this hypothesis declares was written by a FOREIGN worker.
+   * Not "no data" — data Wolf refuses to believe. See `datasettrust.ts`. */
+  | "forged_datasets";
 
 export interface HypothesisTickReport {
   id: string;
@@ -266,6 +274,11 @@ export function createPoller(options: CreatePollerOptions): Poller {
     series: Record<string, Point[]>;
     /** Metrics whose dataset has never been written (404 / 410). */
     missing: string[];
+    /** Metric slugs whose dataset was written by a worker other than this
+     * hypothesis's own researcher. NOT merged into `missing`: "never written"
+     * and "written by someone else" are different facts and an operator must
+     * be able to tell them apart. */
+    foreign: string[];
     downloads: number;
   }
 
@@ -276,9 +289,9 @@ export function createPoller(options: CreatePollerOptions): Poller {
    * `prompts/researcher-preamble.md` tells the researcher to `dataset_put`.
    */
   async function readSeries(id: string, spec: Spec): Promise<SeriesRead> {
-    const out: SeriesRead = { series: {}, missing: [], downloads: 0 };
+    const out: SeriesRead = { series: {}, missing: [], foreign: [], downloads: 0 };
     for (const metric of spec.metrics) {
-      const name = `${id}-${metric.slug}`;
+      const name = metricDatasetName(id, metric.slug);
       let version: number;
       try {
         // The SINGLE-NAME route, whose body is the BARE metadata object.
@@ -286,7 +299,22 @@ export function createPoller(options: CreatePollerOptions): Poller {
         // typed `invalid` error — which is why nothing here has to compare
         // `undefined !== undefined`, the comparison that would silently treat
         // a broken response as "unchanged" and re-download nothing forever.
-        version = (await client.getDataset(name)).version;
+        const meta = await client.getDataset(name);
+        // 🔴 THE DATASET HALF OF THE TRUST MODEL. Orange lets any session in
+        // the project write any dataset name, so the bytes behind this name
+        // are not evidence about `id` until their WRITER is checked. Refusing
+        // here is what stops a peer container's forged series from driving a
+        // real `challenged` transition — see `datasettrust.ts`.
+        if (!isOwnDataset(meta, id)) {
+          logger.warn(
+            foreignDatasetLog(meta, id, name),
+            "poller: dataset was written by a foreign worker — REFUSING to evaluate on it",
+          );
+          out.foreign.push(metric.slug);
+          out.series[metric.slug] = [];
+          continue;
+        }
+        version = meta.version;
       } catch (err) {
         if (isKind(err, "not_found")) {
           // "Never written yet" — the state of every dataset on day 0. A log
@@ -424,6 +452,27 @@ export function createPoller(options: CreatePollerOptions): Poller {
       }
 
       const read = await readSeries(id, spec);
+      // A foreign dataset contributes an EMPTY series, so a condition over it
+      // scores `no_observations` and cannot trip — forged numbers never enter
+      // the calculation even when only some metrics are affected. What this
+      // branch decides is whether anything BELIEVABLE is left to evaluate.
+      if (read.foreign.length > 0 && read.missing.length + read.foreign.length === spec.metrics.length) {
+        // 🔴 Not "no data yet" — data Wolf refuses to believe. Reported as its
+        // own reason because the operator response is completely different:
+        // "wait" versus "someone is writing into this hypothesis's series".
+        logger.warn(
+          { id, foreign: read.foreign, missing: read.missing },
+          "poller: every metric is missing or foreign-written — not evaluating",
+        );
+        out.skipped = "forged_datasets";
+        return out;
+      }
+      if (read.foreign.length > 0) {
+        logger.warn(
+          { id, foreign: read.foreign },
+          "poller: evaluating WITHOUT the foreign-written metrics",
+        );
+      }
       if (read.missing.length === spec.metrics.length) {
         // NOTHING has been written yet: the researcher has not run, or its
         // first tick has not finished. Evaluating would score every condition

@@ -66,6 +66,10 @@ export const CHART_HEIGHT_PX = 180;
 
 /** The caption for a dataset nothing has ever written. Exactly this string (§ 5). */
 export const NEVER_FETCHED_CAPTION = "never fetched";
+/** A dataset written by a worker that does not own this hypothesis. Said
+ * plainly: the chart is EMPTY because Wolf refused the numbers, not because
+ * none exist — the two must never look the same. */
+export const FOREIGN_WRITER_CAPTION = "refused: written by another worker";
 
 /**
  * The caption for a stale series whose dataset exists but holds no
@@ -120,6 +124,10 @@ export function lastPointOf(points: readonly Point[]): Point | undefined {
  */
 export function captionFor(state: SeriesState, points: readonly Point[]): string | null {
   if (state === "never_fetched") return NEVER_FETCHED_CAPTION;
+  // Explicit, because the `!== "stale"` line below returns null for anything
+  // it does not know — which would render a REFUSED series as a silent empty
+  // chart, the exact failure the state vocabulary exists to abolish.
+  if (state === "foreign_writer") return FOREIGN_WRITER_CAPTION;
   if (state !== "stale") return null;
   const last = lastPointOf(points);
   return last === undefined

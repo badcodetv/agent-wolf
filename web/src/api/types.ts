@@ -436,7 +436,9 @@ export const CHALLENGE_REASONS = ["condition_tripped", "horizon_reached"] as con
 export type ChallengeReason = (typeof CHALLENGE_REASONS)[number];
 
 /** `GET /api/hypotheses/:id/series/:metric` — exactly one of three, never a boolean. */
-export type SeriesState = "ok" | "never_fetched" | "stale";
+/** `foreign_writer`: the dataset exists but a foreign worker wrote it, so
+ * Wolf refuses to chart it (api `datasettrust.ts`). Not "no data". */
+export type SeriesState = "ok" | "never_fetched" | "stale" | "foreign_writer";
 
 export interface SeriesResponse {
   /** Ascending `{ tMs, v }`, unix MILLISECONDS. */
