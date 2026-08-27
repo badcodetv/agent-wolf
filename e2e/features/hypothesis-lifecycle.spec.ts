@@ -259,10 +259,21 @@ test.describe("hypothesis lifecycle", () => {
       page.locator('[data-testid="hypothesis-row"]').first(),
       "the board rendered no hypothesis-row at all",
     ).toBeVisible();
-    await expect(
-      page.locator('[data-testid="hypothesis-row"]').filter({ hasText: "X1 lifecycle" }),
-      "this hypothesis has no row on the board",
-    ).toBeVisible();
+
+    // 🔴 KEYED ON THE ID, NEVER ON THE TITLE. The `wolf` project is SHARED and
+    // long-lived: every run creates a hypothesis with this same title, so
+    // `filter({ hasText: "X1 lifecycle" })` matches every previous run's row
+    // too and Playwright fails it as a strict-mode violation —
+    // "resolved to 2 elements". Measured: three consecutive runs, identical
+    // failure, once a single earlier row survived.
+    //
+    // The row's link carries the id, which IS unique per run, so this both
+    // finds the right row and asserts there is exactly one of it.
+    const row = page.locator('[data-testid="hypothesis-row"]').filter({
+      has: page.locator(`a[href="/hypotheses/${hyp.id}"]`),
+    });
+    await expect(row, `expected exactly one board row for ${hyp.id}`).toHaveCount(1);
+    await expect(row, "this hypothesis has no row on the board").toBeVisible();
 
     await page.goto(`/hypotheses/${hyp.id}`);
     // `detail-column` is the left column W13 authors and W14 fills; there is no

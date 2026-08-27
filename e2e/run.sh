@@ -311,8 +311,25 @@ cleanup() {
   local rc=$?
   [ "${CLEANED}" = 1 ] && exit "${rc}"
   CLEANED=1
-  # Do not try to clean up a stack that never came up.
-  if curl -fsS -o /dev/null --max-time 5 "${ORANGE_BASE}/agent/sessions" -H "X-API-Key: ${WOLF_API_KEY}" 2>/dev/null; then
+  # 🔴 401 IS NOT "ORANGE IS DOWN", AND CONFLATING THEM SILENTLY LEAKS.
+  #
+  # This probe used to be `curl -fsS …`, which fails on ANY non-2xx. When a
+  # second run rotated the project API key (see the lock above), the probe got
+  # 401, `-f` made it look like a dead stack, cleanup printed "Orange is not
+  # answering; nothing to reclaim" and returned — leaking every session that run
+  # had created. That is how ~35 orphaned sessions accumulated on this host,
+  # each holding one of the 100 host ports, and it is exactly the "a failed run
+  # that leaks sessions poisons the next one" hazard this cleanup exists to
+  # prevent. The guard had a hole precisely where it mattered most.
+  local probe
+  probe="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+    "${ORANGE_BASE}/agent/sessions?user_email=*&limit=1" -H "X-API-Key: ${WOLF_API_KEY}" 2>/dev/null || echo 000)"
+  if [ "${probe}" = "401" ] || [ "${probe}" = "403" ]; then
+    echo "cleanup: 🔴 Orange REFUSED this run's project API key (HTTP ${probe})." >&2
+    echo "cleanup: 🔴 THIS RUN'S SESSIONS ARE LEAKED and still hold host ports." >&2
+    echo "cleanup:    Something recreated agentd with a different key mid-run." >&2
+    echo "cleanup:    Reclaim them with:  ./e2e/run.sh --reclaim-orphans" >&2
+  elif [ "${probe}" = "200" ]; then
     local before after ids hid sid n
     before="$(count_sessions)"
     ids="$(manifest_ids)"
@@ -351,6 +368,35 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # ── --down ──────────────────────────────────────────────────────────────────
+
+# ── --reclaim-orphans ───────────────────────────────────────────────────────
+#
+# 🔴 EXPLICIT, NEVER AUTOMATIC, AND DESTRUCTIVE BY DESIGN. Deletes every session
+# in the `wolf` project whose name is `hyp-<8 hex>` or whose worker is
+# `researcher-<8 hex>` — i.e. everything an X1 run creates — regardless of which
+# run created it. That is exactly the blast radius the manifest scoping exists
+# to avoid, which is why it is a named command an operator types and never
+# something cleanup does on its own: on a project holding REAL hypotheses this
+# deletes them. Use it only on a test project after a poisoned run.
+if [ "${1:-}" = "--reclaim-orphans" ]; then
+  log "reclaiming EVERY X1-shaped session in project wolf (explicit, destructive)"
+  before_n="$(count_sessions)"
+  api GET '/agent/sessions?user_email=*&limit=500' 2>/dev/null \
+    | python3 -c 'import json,re,sys
+try:
+    rows = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(0)
+for r in rows if isinstance(rows, list) else []:
+    name = r.get("name") or ""
+    worker = r.get("worker") or ""
+    if re.fullmatch(r"hyp-[0-9a-f]{8}", name) or re.fullmatch(r"researcher-[0-9a-f]{8}", worker):
+        print(r.get("id",""))' | grep -v '^$' | while read -r sid; do
+      api DELETE "/agent/session/${sid}" >/dev/null 2>&1 || true
+    done
+  printf 'reclaim: sessions in project wolf %s → %s\n' "${before_n}" "$(count_sessions)"
+  exit 0
+fi
 
 if [ "${1:-}" = "--down" ]; then
   log "stopping both stacks"
