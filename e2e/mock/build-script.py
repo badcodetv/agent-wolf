@@ -116,6 +116,10 @@ SPEC_TRIPPING = spec("X1-TRIPS", 100)
 # tamper and dataset specs assert against a stable status.
 SPEC_HOLDING = spec("X1-HOLDS", 1_000_000)
 SPEC_TAMPER = spec("X1-TAMPER-MARKER", 1_000_000)
+# W26's two: both hold forever, so the hypothesis stays `live` and the report
+# panel is asserted against a status that does not move under the test.
+SPEC_HOSTILE = spec("W26-HOSTILE-MARKER", 1_000_000)
+SPEC_DRIFT = spec("W26-DRIFT-MARKER", 1_000_000)
 
 # ── The report template the interviewer deposits ────────────────────────────
 #
@@ -314,13 +318,15 @@ rpc("memory_create", {
 # board shows; everything after it is `{slotId: html}`. Without this row the
 # locked template has nothing to fill, `report.drift` stays null, and the panel
 # renders "no report yet" — so the chart the e2e asserts on never draws.
+# The headline and the slot map are INJECTED (REPORT_HEADLINE,
+# REPORT_SLOTS_JSON), not literals, because W26 needs three different ticks
+# out of this one body: the clean one X1 already asserts on, one whose slot
+# content is hostile, and one that fills a slot the template does not
+# declare. `{last}` is the only templating, and it is the newest CSV value.
 rpc("memory_create", {
     "labels": {"kind": "report", "name": HYP},
-    "content": "Probe rate rose to " + lines[-1].split(",")[1] + "; the thesis expected it to fall.\\n" +
-               json.dumps({"headline-note":
-                           "<p>The probe series rose again today. Ten observations are stored; "
-                           "the invalidation condition is being evaluated against every one of them.</p>"},
-                          indent=2),
+    "content": REPORT_HEADLINE.replace("{last}", lines[-1].split(",")[1]) + "\\n" +
+               json.dumps(json.loads(REPORT_SLOTS_JSON), indent=2),
     "embed": False,
 })
 '''
@@ -338,6 +344,72 @@ rpc("memory_create", {
 })
 print("x1: appended a FORGED kind=hypothesis status=confirmed row for " + HYP)
 '''
+
+
+# ── The three report payloads (W26) ─────────────────────────────────────────
+#
+# One tick body, three reports. Each pair is (headline, {slotId: html}); the
+# headline is line 1 of the `kind=report` memory and everything after it is the
+# slot map (W15's `parseReportContent`).
+
+# 🔴 THE DEFAULT IS BYTE-FOR-BYTE WHAT X1 ALWAYS WROTE. `hypothesis-lifecycle`
+# asserts the rendered slot matches /probe series rose/i, so changing this text
+# breaks a merged, green spec — the parameterisation exists to ADD payloads,
+# never to alter this one.
+DEFAULT_REPORT_HEADLINE = "Probe rate rose to {last}; the thesis expected it to fall."
+DEFAULT_REPORT_SLOTS = {
+    "headline-note": (
+        "<p>The probe series rose again today. Ten observations are stored; "
+        "the invalidation condition is being evaluated against every one of them.</p>"
+    )
+}
+
+# ── The hostile slot (W26's sanitiser leg) ──────────────────────────────────
+#
+# Everything W26's acceptance criterion names, in ONE slot, plus prose that
+# MUST survive. The surviving prose is not decoration: "no <script> in the
+# frame" is also true of a frame that failed to render at all, so the leg
+# asserts the slot rendered AND the hostile constructs are gone.
+#
+# What each line is for, and what the pinned SLOT_PROFILE does to it
+# (api/src/report/sanitise.ts — `img` and `a` are not on ALLOWED_TAGS, no
+# `on*` attribute is on ALLOWED_ATTR, and `script` is in FORBID_CONTENTS):
+#
+#   * `<script>alert(1)</script>`        element and CONTENTS removed
+#   * `<img src="https://…" onerror>`    element removed (no `img` tag allowed)
+#   * `<p onclick="alert(3)">`           attribute removed, text kept
+#   * `<div onerror="alert(4)">`         attribute removed on an ALLOWED element
+#   * `<a href="https://…">`             element removed, text kept (KEEP_CONTENT)
+#
+# Every hostile construct spells `alert(` — which is what lets the spec assert
+# a single absence over the whole slot rather than five shaped ones. The host
+# is a `.invalid` name (RFC 2606), so nothing can resolve it even if a defect
+# let the URL through.
+HOSTILE_SLOT_HTML = (
+    '<p class="w26-keep">W26 sanitiser probe: this sentence must survive.</p>'
+    "<script>alert(1)</script>"
+    '<img src="https://w26-hostile.invalid/pixel.png" onerror="alert(2)">'
+    '<p onclick="alert(3)">W26 sanitiser probe: this handler must be removed.</p>'
+    '<div onerror="alert(4)">W26 sanitiser probe: a handler on an allowed element.</div>'
+    '<a href="https://w26-hostile.invalid/away">W26 sanitiser probe: this link must lose its href.</a>'
+)
+
+HOSTILE_REPORT_HEADLINE = "W26 hostile tick: the slot content of this report is deliberately hostile."
+HOSTILE_REPORT_SLOTS = {"headline-note": HOSTILE_SLOT_HTML}
+
+# ── The drifting slot (W26's drift leg) ─────────────────────────────────────
+#
+# `w26-orphan-note` is NOT declared by TEMPLATE_HTML, whose only slot is
+# `headline-note`. So this tick produces drift in BOTH directions at once —
+# one orphan and one unfilled slot — which is what W20's `detectDrift` names
+# separately and W23 renders in one notice.
+DRIFT_REPORT_HEADLINE = "W26 drift tick: this report fills a slot the template does not declare."
+DRIFT_REPORT_SLOTS = {
+    "w26-orphan-note": (
+        "<p>W26 drift probe: this content fills a slot the template does not declare, "
+        "so it must appear in the drift notice and nowhere in the frame.</p>"
+    )
+}
 
 
 def bash_block(command: str) -> dict:
@@ -400,7 +472,12 @@ def interview_rule(marker: str, spec_doc: dict) -> dict:
     }
 
 
-def researcher_rule(marker: str, forge: bool) -> dict:
+def researcher_rule(
+    marker: str,
+    forge: bool = False,
+    headline: str = DEFAULT_REPORT_HEADLINE,
+    slots: dict = DEFAULT_REPORT_SLOTS,
+) -> dict:
     body = TICK_BODY + (TICK_FORGERY if forge else "")
     return {
         "match": marker,
@@ -432,7 +509,18 @@ def researcher_rule(marker: str, forge: bool) -> dict:
                     }
                 ]
             },
-            {"blocks": [bash_block(python_command(body, METRIC_SLUG=METRIC_SLUG))]},
+            {
+                "blocks": [
+                    bash_block(
+                        python_command(
+                            body,
+                            METRIC_SLUG=METRIC_SLUG,
+                            REPORT_HEADLINE=headline,
+                            REPORT_SLOTS_JSON=json.dumps(slots),
+                        )
+                    )
+                ]
+            },
             {
                 # The static half again: `dataset_put` through the harness's own
                 # MCP client. The name is a constant, so this dataset is NOT the
@@ -477,10 +565,26 @@ TABLE = {
         interview_rule("X1-INTERVIEW-TRIPPING", SPEC_TRIPPING),
         interview_rule("X1-INTERVIEW-HOLDING", SPEC_HOLDING),
         interview_rule("X1-INTERVIEW-TAMPER", SPEC_TAMPER),
-        # The tamper researcher before the plain one: the tamper hypothesis's
-        # locked spec carries BOTH markers.
+        interview_rule("W26-INTERVIEW-HOSTILE", SPEC_HOSTILE),
+        interview_rule("W26-INTERVIEW-DRIFT", SPEC_DRIFT),
+        # 🔴 EVERY SPECIFIC RESEARCHER RULE GOES ABOVE `X1-TICK`, WHICH IS THE
+        # FALLBACK. `X1-TICK ` prefixes the thesis of EVERY spec this file
+        # builds (see `spec()`), so it is a substring of every tick request
+        # body; a specific marker placed below it would never be reached and
+        # its hypothesis would silently get the clean tick instead — a green
+        # sanitiser leg asserting nothing.
         researcher_rule("X1-TAMPER-MARKER", forge=True),
-        researcher_rule("X1-TICK", forge=False),
+        researcher_rule(
+            "W26-HOSTILE-MARKER",
+            headline=HOSTILE_REPORT_HEADLINE,
+            slots=HOSTILE_REPORT_SLOTS,
+        ),
+        researcher_rule(
+            "W26-DRIFT-MARKER",
+            headline=DRIFT_REPORT_HEADLINE,
+            slots=DRIFT_REPORT_SLOTS,
+        ),
+        researcher_rule("X1-TICK"),
     ]
 }
 
