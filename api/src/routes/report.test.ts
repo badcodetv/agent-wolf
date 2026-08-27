@@ -482,7 +482,13 @@ class FakeOrange {
           row_count: current.split("\n").length - 2,
           sha256: "abc",
           content_type: "text/csv",
-          created_by_worker: "researcher",
+          // 🔴 DERIVED FROM THE NAME. A dataset is `<hypothesis-id>-<slug>`
+          // and is written by THAT hypothesis's researcher. This fixture said
+          // a bare `"researcher"` — not merely the wrong hypothesis, but a
+          // worker name the real system never mints (they are all
+          // `researcher-<id>`). It was inert while nothing read the field and
+          // wrong the moment the frame started checking who wrote its numbers.
+          created_by_worker: `researcher-${name.split("-")[0] ?? ID}`,
           created_by_session: "sess-tick",
           created_at: 1787334047000,
         }),

@@ -61,10 +61,15 @@ import { parseCanonicalCsvBytes } from "../hypothesis/points.js";
 import { extractSpecJsonText } from "../hypothesis/provision.js";
 import { validateSpec, type Metric, type Spec } from "../hypothesis/spec.js";
 import { newestTrustedRow } from "../hypothesis/store.js";
+import { foreignDatasetLog, isOwnDataset } from "../hypothesis/datasettrust.js";
 import { requireHypothesisId } from "./embed.js";
 
 /** Exactly one of three. Never a boolean, never a free string. */
-export type SeriesState = "ok" | "never_fetched" | "stale";
+/** 🔴 `foreign_writer` is NOT a flavour of "no data": the dataset exists and
+ * Wolf refuses it, because a worker other than this hypothesis's own
+ * researcher wrote it. Any session in the project can write any dataset
+ * name, so the writer is what makes bytes evidence. See `datasettrust.ts`. */
+export type SeriesState = "ok" | "never_fetched" | "stale" | "foreign_writer";
 
 export interface SeriesResponse {
   /** Ascending, `{ tMs, v }`, unix MILLISECONDS — the pinned `Point`. */
@@ -190,7 +195,27 @@ export function createSeriesRouter(options: CreateSeriesRouterOptions): Router {
         try {
           // The SINGLE-NAME route, whose body is the BARE metadata object
           // (the LIST route is the one that wraps in `{"datasets":[…]}`).
-          version = (await client.getDataset(name)).version;
+          const meta = await client.getDataset(name);
+          // 🔴 Same gate as the poller and the report frame: any session in
+          // the project can write this name, so the writer decides whether
+          // these bytes are this hypothesis's series at all. A foreign write
+          // is surfaced as its own state, never drawn — see `datasettrust.ts`.
+          if (!isOwnDataset(meta, id)) {
+            logger.warn(
+              foreignDatasetLog(meta, id, name),
+              "series: dataset was written by a foreign worker — REFUSING to serve it",
+            );
+            const body: SeriesResponse = {
+              points: [],
+              unit: metric.unit,
+              version: 0,
+              fetched_at_ms: fetchedAtMs,
+              state: "foreign_writer",
+            };
+            res.status(200).json(body);
+            return;
+          }
+          version = meta.version;
         } catch (err) {
           if (err instanceof WolfError && err.kind === "not_found") {
             // Never written. A 200 with an empty series and a state that says

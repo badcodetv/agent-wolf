@@ -78,6 +78,7 @@ import {
   type Tamper,
 } from "../hypothesis/store.js";
 import { codeOrigins, composeFrame, type SlotContent } from "../report/frame.js";
+import { foreignDatasetLog, isOwnDataset } from "../hypothesis/datasettrust.js";
 import {
   AMENDMENT_LABEL,
   AMENDMENT_STATUS_PROPOSED,
@@ -522,6 +523,19 @@ export function createReportRouter(options: CreateReportRouterOptions): ReportRo
         const name = `${id}-${metric.slug}`;
         try {
           const metadata = await client.getDataset(name);
+          // 🔴 A dataset any session in the project may have written is not
+          // evidence about THIS hypothesis until its writer is checked. A
+          // foreign series is dropped rather than charted: the report frame
+          // is a trusted surface and must not draw another container's
+          // numbers under this hypothesis's name. See `datasettrust.ts`.
+          if (!isOwnDataset(metadata, id)) {
+            logger.warn(
+              foreignDatasetLog(metadata, id, name),
+              "report: dataset was written by a foreign worker — REFUSING to chart it",
+            );
+            seriesCache.delete(name);
+            return;
+          }
           versions.set(metric.slug, metadata.version);
         } catch (err) {
           if (err instanceof WolfError && err.kind === "not_found") {

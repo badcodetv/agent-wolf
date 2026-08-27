@@ -120,6 +120,9 @@ interface DatasetRow {
   csv?: string;
   /** Serve a metadata body with NO `version` field at all. */
   versionless?: boolean;
+  /** The worker the metadata reports as the writer. Defaults to this
+   * hypothesis's OWN researcher; set it to forge a foreign write. */
+  writtenBy?: string;
 }
 
 interface SessionRow {
@@ -363,7 +366,14 @@ class Stub {
         row_count: Math.max(0, (row.csv ?? CSV_EMPTY).split("\n").length - 2),
         sha256: "sha-" + String(row.version),
         content_type: "text/csv",
-        created_by_worker: WORKER,
+        // 🔴 DERIVED FROM THE NAME, not a constant. A dataset is named
+        // `<hypothesis-id>-<slug>` and in reality is written by THAT
+        // hypothesis's researcher. The old fixture reported one hard-coded
+        // worker for every dataset, so `2b3c4d5e-basket` claimed to be written
+        // by `researcher-1a2b3c4d` — a combination the real system cannot
+        // produce. Harmless while nothing checked the writer; wrong the moment
+        // anything did. `writtenBy` remains the explicit forgery override.
+        created_by_worker: row.writtenBy ?? researcherWorkerFor(name.split("-")[0] ?? ID),
         created_by_session: "sess-tick",
         created_at: 1787334047000,
       };
@@ -1227,6 +1237,64 @@ describe("poller_failures", () => {
     });
     const report = await h.poller.tick();
     expect(report.hypotheses[0]?.skipped).toBe("no_locked_spec");
+  });
+
+  // ── The DATASET half of the trust model ───────────────────────────────
+  //
+  // 🔴 Memories were provenance-checked at every read and datasets were not,
+  // while BOTH decide status. Orange lets any session in the project write any
+  // dataset name (measured 2026-08-27: a container wrote and read
+  // `hyp-victim-fable-probe-rate`, a name it did not own, and got version 2),
+  // so a peer container could write TRIPPING values into this hypothesis's
+  // series and Wolf would append a genuine `challenged` transition. No tamper
+  // flag would fire, because the state row really was Wolf's.
+
+  it("poller_failures: a FOREIGN-written dataset never drives a transition", async () => {
+    const h = harness({
+      memories: [stateRow(ID, "live", LIVE_AT_MS), lockedSpec(ID)],
+      sessions: [hypSession(ID)],
+      // Values that WOULD trip the condition — written by another hypothesis's
+      // researcher. The numbers are hostile; the point is that the writer is.
+      datasets: {
+        [DATASET]: { version: 1, csv: CSV_TRIPPED, writtenBy: "researcher-deadbeef" },
+      },
+    });
+    const report = await h.poller.tick();
+
+    // THE SECURITY CLAIM, asserted first: no state was written.
+    expect(report.hypotheses[0]?.transitionedTo).toBeNull();
+    expect(report.hypotheses[0]?.evaluated).toBe(false);
+    // And it is reported as REFUSED, not as absent — an operator must be able
+    // to tell "nobody has written yet" from "someone else is writing here".
+    expect(report.hypotheses[0]?.skipped).toBe("forged_datasets");
+  });
+
+  // THE POSITIVE HALF. Without this, a check that refused EVERY dataset would
+  // pass the test above and silently stop every legitimate hypothesis.
+  it("poller_failures: the hypothesis's OWN researcher still trips the condition", async () => {
+    const h = harness({
+      memories: [stateRow(ID, "live", LIVE_AT_MS), lockedSpec(ID)],
+      sessions: [hypSession(ID)],
+      datasets: { [DATASET]: { version: 1, csv: CSV_TRIPPED, writtenBy: WORKER } },
+    });
+    const report = await h.poller.tick();
+    expect(report.hypotheses[0]?.evaluated).toBe(true);
+    expect(report.hypotheses[0]?.transitionedTo).toBe("challenged");
+  });
+
+  it("poller_failures: an EMPTY writer is foreign, not the application", async () => {
+    // `dataset_put` refuses an unidentified caller, so every dataset carries a
+    // session; an empty WORKER is a human chat session inside a container. The
+    // "the application wrote it" rule needs BOTH provenance fields empty, and
+    // no MCP dataset write can produce that.
+    const h = harness({
+      memories: [stateRow(ID, "live", LIVE_AT_MS), lockedSpec(ID)],
+      sessions: [hypSession(ID)],
+      datasets: { [DATASET]: { version: 1, csv: CSV_TRIPPED, writtenBy: "" } },
+    });
+    const report = await h.poller.tick();
+    expect(report.hypotheses[0]?.transitionedTo).toBeNull();
+    expect(report.hypotheses[0]?.skipped).toBe("forged_datasets");
   });
 });
 
