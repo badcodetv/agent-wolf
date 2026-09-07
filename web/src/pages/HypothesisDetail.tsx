@@ -69,12 +69,14 @@ import { Link as RouterLink, useParams } from "react-router";
 import Link from "@mui/material/Link";
 import Severity from "../components/trust/Severity.js";
 import AmendmentList from "../components/AmendmentList.js";
+import ArchiveButton from "../components/ArchiveButton.js";
 import ArtifactsPanel from "../components/ArtifactsPanel.js";
 import ChallengedCase from "../components/ChallengedCase.js";
 import ChatRail from "../components/ChatRail.js";
 import ConditionTable from "../components/ConditionTable.js";
 import GoLiveButton from "../components/GoLiveButton.js";
 import MetricCharts from "../components/MetricCharts.js";
+import NextStep from "../components/NextStep.js";
 import Provenance from "../components/trust/Provenance.js";
 import ReportDrift from "../components/ReportDrift.js";
 import ReportFrameHost from "../components/ReportFrameHost.js";
@@ -141,10 +143,48 @@ export default function HypothesisDetail() {
     return (conditionId: string): string | undefined => byId.get(conditionId);
   }, [detail]);
 
+  // Both are DRAFT-only, and both are about layout, never about truth: nothing
+  // that carries information is hidden by either. A draft is the one state in
+  // which every analysis block is empty by definition — the spec is not locked,
+  // so there is no series, no condition and no reading to have.
+  const isDraft = detail?.hypothesis.status === "draft";
+  const reportFrameSuppressed = isDraft && detail?.report?.has_template !== true;
+  const analysisEmpty =
+    isDraft &&
+    (detail?.evaluation === null || detail?.evaluation === undefined) &&
+    (detail?.amendments ?? []).length === 0;
+
   return (
-    <Box sx={{ display: "flex", alignItems: "flex-start", gap: 2, flexWrap: { xs: "wrap", md: "nowrap" } }}>
-      {/* Left column: scrolls normally, ~1fr. */}
-      <Box data-testid="detail-column" sx={{ flex: "1 1 0", minWidth: 0 }}>
+    // 🔴 At `md` and up this page IS the viewport below the app bar, and its
+    // two columns scroll independently. `overflow: hidden` here is what stops
+    // the shell's scroll region from also producing a scrollbar, so there is
+    // exactly one scrollbar per column and the rail's input is always on
+    // screen. Below `md` the rail becomes a tab in the flow and the page goes
+    // back to being a normal document — a fixed-height wrapper there would
+    // trap the content in a box with no way to reach its bottom.
+    <Box
+      sx={{
+        display: "flex",
+        alignItems: { xs: "flex-start", md: "stretch" },
+        gap: 2,
+        flexWrap: { xs: "wrap", md: "nowrap" },
+        height: { md: "100%" },
+        minHeight: 0,
+        overflow: { md: "hidden" },
+      }}
+    >
+      {/* Left column: its OWN scroller at `md` and up, ~1fr. */}
+      <Box
+        data-testid="detail-column"
+        sx={{
+          flex: "1 1 0",
+          minWidth: 0,
+          height: { md: "100%" },
+          overflowY: { md: "auto" },
+          // Room for the scrollbar so it does not sit on the text.
+          pr: { md: 1 },
+        }}
+      >
         <Link component={RouterLink} to="/" underline="hover" sx={{ fontSize: 13 }}>
           ← Board
         </Link>
@@ -165,7 +205,29 @@ export default function HypothesisDetail() {
               <Typography variant="mono" sx={{ fontSize: 12, color: "text.secondary" }}>
                 {detail.hypothesis.owner ?? "—"}
               </Typography>
+              {/* Pushed to the far end: it is the one destructive-looking
+                  control on the page and it must not sit beside Go Live.
+                  Renders nothing where `→ archived` is not a legal
+                  transition. */}
+              <Box sx={{ ml: "auto" }}>
+                <ArchiveButton
+                  hypothesisId={id}
+                  status={detail.hypothesis.status}
+                  onDone={() => void load()}
+                />
+              </Box>
             </Box>
+
+            {/* 🔴 FIRST, above every refusal sentence. The blocking reasons
+                below say why an action is unavailable; this says which action
+                to take instead, and a reader who only reads one line must get
+                that one. */}
+            <NextStep
+              hypothesisId={id}
+              status={detail.hypothesis.status}
+              specValidation={detail.spec_validation}
+              templateAccepted={detail.report?.has_template}
+            />
 
             {/* R141: the board shows an ellipsis, the detail page says why. */}
             {detail.hypothesis.title_truncated === true ? (
@@ -223,7 +285,27 @@ export default function HypothesisDetail() {
                 stamp would be claiming an author for an empty state.
                 `Provenance kind="machine"` renders no wrapper at all, which
                 is exactly what that case wants. */}
-            <Box data-testid="report-section">
+            {/* 🔴 THE FRAME IS NOT RENDERED BEFORE THERE IS A TEMPLATE.
+                `ReportFrameHost` is `clamp(480px, 70vh, 900px)` by design —
+                an explicit height, never a negotiated one — and on a fresh
+                draft that is 480–900px of empty box between the top of the
+                page and everything below it. It pushed the whole page off the
+                first screen to say one sentence, which is now the sentence
+                itself. Once a template exists, or once the hypothesis has left
+                draft, the frame is back and unchanged: an empty report on a
+                LIVE hypothesis is a real finding and keeps its full box. */}
+            {reportFrameSuppressed ? (
+              <Box data-testid="report-section" data-report-frame="suppressed">
+                <Typography sx={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", mb: 0.5 }}>
+                  REPORT
+                </Typography>
+                <Typography sx={{ fontSize: 13, color: "text.secondary" }}>
+                  No report template yet — one is written during the interview and locked when the
+                  hypothesis goes live.
+                </Typography>
+              </Box>
+            ) : (
+            <Box data-testid="report-section" data-report-frame="shown">
               <Provenance
                 kind={detail.report?.has_template === true ? "model" : "machine"}
                 // ⚠️ The pinned report block carries NO writer — not
@@ -238,7 +320,22 @@ export default function HypothesisDetail() {
                 </ReportFrameHost>
               </Provenance>
             </Box>
+            )}
 
+            {/* 🔴 Collapsed to ONE line while nothing has ever been measured.
+                Four headings each saying "not evaluated yet" is four times the
+                noise of saying it once, and it buried the two things on a
+                draft that do matter. This is a DRAFT-only collapse: the moment
+                a hypothesis goes live, every section renders whether or not it
+                has content, because an empty section on a live hypothesis is
+                itself the finding. */}
+            {analysisEmpty ? (
+              <Typography data-testid="analysis-empty" sx={{ fontSize: 13, color: "text.secondary" }}>
+                No scoreboard, conditions or charts yet — they appear once the spec is locked at
+                go-live and the researcher has produced its first reading.
+              </Typography>
+            ) : (
+              <>
             <Section title="SCOREBOARD">
               <Scoreboard evaluation={detail.evaluation ?? null} />
             </Section>
@@ -259,6 +356,9 @@ export default function HypothesisDetail() {
                 specSource={detail.spec_source}
               />
             </Section>
+
+              </>
+            )}
 
             {/* W29. § 2 maps artifact METADATA to `machine`: it is Orange's
                 record of what a container wrote, not model prose — so the

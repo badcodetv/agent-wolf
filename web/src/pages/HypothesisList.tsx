@@ -23,13 +23,14 @@
  * anything, and `owner` is a byline (§ 4, D5).
  */
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Typography from "@mui/material/Typography";
 import Skeleton from "@mui/material/Skeleton";
 import { Link as RouterLink } from "react-router";
 import Severity from "../components/trust/Severity.js";
+import ArchiveButton from "../components/ArchiveButton.js";
 import HypothesisRow from "../components/HypothesisRow.js";
 import { ApiError, fetchBoard } from "../api/client.js";
 import type { BoardRow } from "../api/types.js";
@@ -47,7 +48,16 @@ const EMPTY_TEXT: Record<AttentionTier, string> = {
   holding: "Nothing holding.",
 };
 
-function Section({ tier, rows }: { tier: AttentionTier; rows: TieredRow[] }) {
+function Section({
+  tier,
+  rows,
+  onChanged,
+}: {
+  tier: AttentionTier;
+  rows: TieredRow[];
+  /** A row archived itself; the board must re-read rather than guess. */
+  onChanged: () => void;
+}) {
   const [open, setOpen] = useState(!COLLAPSED_BY_DEFAULT.has(tier));
 
   return (
@@ -81,7 +91,17 @@ function Section({ tier, rows }: { tier: AttentionTier; rows: TieredRow[] }) {
       ) : (
         rows.map((tiered) => (
           <Box key={tiered.row.id} data-testid={`board-row-${tiered.row.id}`}>
-            <HypothesisRow row={tiered.row} unclassified={tiered.unclassified} />
+            {/* The row's own `children` slot — the same one `/archive` uses for
+                lineage. `ArchiveButton` renders nothing at all for a status
+                whose `→ archived` transition is illegal, so this adds no
+                control to a row the server would refuse. */}
+            <HypothesisRow row={tiered.row} unclassified={tiered.unclassified}>
+              <ArchiveButton
+                hypothesisId={tiered.row.id}
+                status={tiered.row.status}
+                onDone={onChanged}
+              />
+            </HypothesisRow>
           </Box>
         ))
       )}
@@ -93,20 +113,22 @@ export default function HypothesisList() {
   const [rows, setRows] = useState<BoardRow[] | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
 
-  useEffect(() => {
-    let mounted = true;
-    void (async () => {
-      try {
-        const board = await fetchBoard();
-        if (mounted) setRows(board);
-      } catch (err) {
-        if (mounted) setFailure(err instanceof ApiError ? err.message : "could not read the board");
-      }
-    })();
-    return () => {
-      mounted = false;
-    };
+  // Reloadable, because a row can now archive itself. The board re-READS
+  // rather than dropping the row locally: `attention_tier` and every count on
+  // every other row are computed server-side, and a local splice would leave
+  // the rest of the board describing a state that no longer exists.
+  const load = useCallback(async (): Promise<void> => {
+    try {
+      setRows(await fetchBoard());
+      setFailure(null);
+    } catch (err) {
+      setFailure(err instanceof ApiError ? err.message : "could not read the board");
+    }
   }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   if (failure !== null) {
     return <Severity level="degraded" cause={`the board could not be read — ${failure}`} />;
@@ -135,7 +157,7 @@ export default function HypothesisList() {
       </Box>
 
       {ATTENTION_TIERS.map((tier) => (
-        <Section key={tier} tier={tier} rows={groups[tier]} />
+        <Section key={tier} tier={tier} rows={groups[tier]} onChanged={() => void load()} />
       ))}
     </Box>
   );

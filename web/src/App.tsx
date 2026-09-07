@@ -72,7 +72,28 @@ export interface AppShellProps {
 
 export function AppShell({ email, onSignOut }: AppShellProps) {
   return (
-    <Box sx={{ minHeight: "100vh", backgroundColor: "background.default" }}>
+    // 🔴 A FIXED-HEIGHT SHELL, not a `minHeight` that lets the document grow.
+    //
+    // The document used to scroll, and the detail page's rail is a full-height
+    // column inside it — so the two fought. The rail sat below a ~48px toolbar
+    // with `height: 100vh`, which put its last 48px (the message input) below
+    // the fold; scrolling to reach it slid the sticky rail up over where the
+    // header had been and clipped the rail's own heading. Three scrollbars —
+    // document, rail, iframe — and none of them where the reader was looking.
+    //
+    // Now the shell is exactly the viewport, the toolbar is a flex item, and
+    // the region below it is the only scroll container the app has. `100dvh`
+    // rather than `100vh` because mobile browsers' `vh` includes retracting
+    // chrome, which is how a "full height" layout ends up 60px too tall.
+    <Box
+      sx={{
+        height: "100dvh",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+        backgroundColor: "background.default",
+      }}
+    >
       <AppBar position="static" color="transparent" elevation={0}>
         <Toolbar variant="dense" sx={{ gap: 2 }}>
           <Link component={RouterLink} to="/" underline="none" sx={{ fontWeight: 700, fontSize: 14 }}>
@@ -91,8 +112,18 @@ export function AppShell({ email, onSignOut }: AppShellProps) {
         </Toolbar>
       </AppBar>
       {/* `maxWidth: false` — the detail page is two columns and the rail needs
-          the width; a centred 1200px column would squeeze it to nothing. */}
-      <Container maxWidth={false} sx={{ py: 2 }}>
+          the width; a centred 1200px column would squeeze it to nothing.
+
+          `flex: 1; minHeight: 0` makes this the app's single scroll region:
+          `minHeight: 0` is the load-bearing half, because a flex item's
+          default `min-height: auto` refuses to shrink below its content and
+          the overflow would escape to the document again. A page that manages
+          its own scrolling (the detail page) sets `height: 100%` and overflows
+          nothing, so no scrollbar appears here for it. */}
+      <Container
+        maxWidth={false}
+        sx={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden", py: 2 }}
+      >
         <AppRoutes />
       </Container>
     </Box>

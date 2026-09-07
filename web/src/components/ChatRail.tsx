@@ -30,8 +30,19 @@ import useMediaQuery from "@mui/material/useMediaQuery";
 import { useTheme } from "@mui/material/styles";
 import OrangeChatFrame from "./OrangeChatFrame.js";
 
-/** § 5: "Width `400px` (`clamp(340px, 28vw, 460px)`)". */
-export const RAIL_WIDTH = "clamp(340px, 28vw, 460px)";
+/**
+ * § 5 pinned `clamp(340px, 28vw, 460px)`. WIDENED 2026-09-07 after measuring
+ * the real thing: at 460px the embed frame is 459px of usable width, and the
+ * interviewer's replies — numbered questions with nested bullets — wrapped
+ * every few words. The left column on the screen that reported this was
+ * 1400px wide and almost entirely empty, so the panel that holds the only
+ * conversation in the product was the one starved of room.
+ *
+ * Still a clamp, never a pixel constant: 360px keeps it usable on a small
+ * laptop, and the 620px ceiling stops it eating the detail column on an
+ * ultrawide.
+ */
+export const RAIL_WIDTH = "clamp(360px, 32vw, 620px)";
 
 /** The thin edge a collapsed rail leaves behind, so the restore control stays reachable. */
 export const RAIL_COLLAPSED_WIDTH = "44px";
@@ -99,11 +110,20 @@ export default function ChatRail({ hypothesisId, heading = "Conversation" }: Cha
       data-rail-mode="rail"
       data-rail-open={open ? "true" : "false"}
       sx={{
-        position: "sticky",
-        top: 0,
-        // The viewport's height, which is what makes the frame's `100%` mean
-        // something. Not a pixel count, and not a measurement.
-        height: "100vh",
+        // 🔴 `100%` OF THE COLUMN, not `100vh` of the viewport, and no longer
+        // sticky (2026-09-07). The rail is now a flex child of a page that is
+        // exactly the height of the area below the app bar, so `100%` is the
+        // right height and it is already always on screen — which is what
+        // sticky was compensating for.
+        //
+        // `100vh` was wrong by the height of the app bar: the rail's last
+        // 48px, which is the message input, sat below the fold. Scrolling to
+        // reach it slid the sticky rail over the header and clipped the rail's
+        // own heading — both visible in the screenshots that reported this.
+        // The frame's `height: 100%` still means something, for the same
+        // reason it did before: the parent's height is known without
+        // measuring a cross-origin document.
+        height: "100%",
         flex: "0 0 auto",
         width: open ? RAIL_WIDTH : RAIL_COLLAPSED_WIDTH,
         display: "flex",

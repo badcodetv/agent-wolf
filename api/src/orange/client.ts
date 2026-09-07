@@ -89,6 +89,28 @@ export interface DownloadDatasetParams {
 export interface OrangeClient {
   createSession(params: { name: string; worker?: string }): Promise<CreateSessionResult>;
   getSessionByName(name: string): Promise<SessionByName>;
+  /**
+   * `POST /agent/session/{id}/message` — one turn, streamed back as SSE.
+   *
+   * 🔴 **This resolves when the TURN ends, not when the message is accepted**,
+   * because Orange's handler streams the whole turn down this response and
+   * `r.Context()` cancels the turn if the client goes away
+   * (`go/httpapi/stream.go:105-137`: "disconnect teardown via r.Context()").
+   * So a caller that wants to seed a conversation without waiting must run
+   * this in the background and MUST NOT abort it — hanging up early kills the
+   * very turn it started. The SSE body is read to completion for exactly that
+   * reason and then thrown away; the events are persisted on Orange's side and
+   * the browser reads them from the session's own stream.
+   */
+  sendMessage(sessionId: string, content: string): Promise<void>;
+  /**
+   * `GET /agent/session/{id}/status` — is a turn in flight?
+   *
+   * `activeQueryId` is the id of the turn currently running, or `null` when
+   * Orange says nothing is running. Those two are DIFFERENT from "the probe
+   * failed", which throws: a caller must never read a failed probe as "idle".
+   */
+  getSessionStatus(sessionId: string): Promise<{ activeQueryId: string | null }>;
   deleteSession(id: string): Promise<void>;
   listSessions(params?: ListSessionsParams): Promise<SessionListRow[]>;
 
@@ -685,6 +707,35 @@ function getSessionByName(ctx: ClientContext, name: string): Promise<SessionByNa
   });
 }
 
+function getSessionStatus(
+  ctx: ClientContext,
+  id: string,
+): Promise<{ activeQueryId: string | null }> {
+  return doRequest(ctx, {
+    method: "GET",
+    path: `/agent/session/${encodeURIComponent(id)}/status`,
+  }).then(({ json }) => {
+    if (!isRecord(json)) throw invalidShape("GET /agent/session/{id}/status", "expected an object");
+    const active = json["activeQuery"];
+    if (!isRecord(active)) return { activeQueryId: null };
+    const queryId = strField(active, "queryId");
+    return { activeQueryId: queryId === "" ? null : queryId };
+  });
+}
+
+async function sendMessage(ctx: ClientContext, id: string, content: string): Promise<void> {
+  // `parse: "bytes"` is what drains the stream: it reads the body to the end,
+  // which is how the turn is allowed to finish. `parse: "none"` would return
+  // the moment the headers arrived and leave the socket undrained — and
+  // cancelling the body would cancel the turn.
+  await doRequest(ctx, {
+    method: "POST",
+    path: `/agent/session/${encodeURIComponent(id)}/message`,
+    jsonBody: { content },
+    parse: "bytes",
+  });
+}
+
 async function deleteSession(ctx: ClientContext, id: string): Promise<void> {
   await doRequest(ctx, {
     method: "DELETE",
@@ -1032,6 +1083,8 @@ export function createOrangeClient(options: CreateOrangeClientOptions): OrangeCl
   return {
     createSession: (params) => createSession(ctx, params),
     getSessionByName: (name) => getSessionByName(ctx, name),
+    sendMessage: (id, content) => sendMessage(ctx, id, content),
+    getSessionStatus: (id) => getSessionStatus(ctx, id),
     deleteSession: (id) => deleteSession(ctx, id),
     listSessions: (params) => listSessions(ctx, params),
 

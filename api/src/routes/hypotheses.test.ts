@@ -151,6 +151,13 @@ interface Answer {
 
 interface StubConfig {
   sessions?: Record<string, unknown>[];
+  /** `POST /agent/session/{id}/message` — the interview seed. */
+  sendMessage?: Answer;
+  /**
+   * `GET /agent/session/{id}/status`, one answer per call — so a test can make
+   * the turn appear on the Nth poll and prove the create route waited.
+   */
+  status?: Answer[];
   /** `latest_per=name` + `selector=kind=hypothesis`. */
   board?: string;
   /** `latest_per=name` + `selector=kind=evaluation`. */
@@ -206,6 +213,7 @@ function applyListParams(body: string, url: URL): string {
 class Stub {
   readonly requests: Recorded[] = [];
   private byNameCalls = 0;
+  private statusCalls = 0;
 
   constructor(
     private readonly pool: Interceptable,
@@ -218,6 +226,18 @@ class Stub {
   get appendRequests(): Recorded[] {
     return this.requests.filter((r) => r.method === "POST" && r.path === "/agent/memories");
   }
+  get statusRequests(): Recorded[] {
+    return this.requests.filter(
+      (r) => r.method === "GET" && /^\/agent\/session\/[^/]+\/status$/.test(r.path),
+    );
+  }
+
+  get messageRequests(): Recorded[] {
+    return this.requests.filter(
+      (r) => r.method === "POST" && /^\/agent\/session\/[^/]+\/message$/.test(r.path),
+    );
+  }
+
   get createSessionRequests(): Recorded[] {
     return this.requests.filter((r) => r.method === "POST" && r.path === "/agent/session");
   }
@@ -363,6 +383,29 @@ class Stub {
     if (path === "/agent/schedules") {
       return { status: 200, body: this.config.schedules ?? '{"schedules":[]}' };
     }
+    // 🔴 `GET /agent/session/{id}/status` — the probe the create route waits on.
+    //
+    // Until this branch existed the stub 404'd it, the client threw, and the
+    // create route took its "could not confirm; answering anyway" escape
+    // hatch. Every create test passed WITHOUT EVER EXERCISING THE WAIT that
+    // exists to close the race. That is the permissive-fake failure this
+    // project's log is full of: the test suite was green on a code path it
+    // never entered.
+    if (method === "GET" && /^\/agent\/session\/[^/]+\/status$/.test(path)) {
+      const answers = this.config.status ?? [
+        { status: 200, body: JSON.stringify({ activeQuery: { queryId: "q-1" } }) },
+      ];
+      const answer = answers[Math.min(this.statusCalls, answers.length - 1)];
+      this.statusCalls += 1;
+      return answer ?? { status: 500, body: "no status answer configured" };
+    }
+    // The interview seed. Answered 200 with an SSE-shaped body: the client
+    // reads it to completion, which is what lets the turn finish (a cancelled
+    // body cancels the turn), so a stub that 404s here would make every create
+    // test log a seed failure and prove nothing about the seed.
+    if (method === "POST" && /^\/agent\/session\/[^/]+\/message$/.test(path)) {
+      return this.config.sendMessage ?? { status: 200, body: "event: done\ndata: {}\n\n" };
+    }
     return { status: 404, body: `unrouted in the stub: ${path}` };
   }
 }
@@ -421,6 +464,22 @@ function config(): WolfConfig {
   );
 }
 
+/**
+ * Wait until the fire-and-forget interview seed has reached the stub.
+ *
+ * Polls rather than sleeps: a fixed sleep is either flaky or slow, and this
+ * resolves on the first tick where the request exists. It THROWS on timeout
+ * instead of returning quietly — a helper that gives up silently would turn
+ * "the seed never fired" into a passing test with an empty array.
+ */
+async function waitForMessage(h: Harness, tries = 100): Promise<void> {
+  for (let i = 0; i < tries; i += 1) {
+    if (h.stub.messageRequests.length > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("the interview seed never reached the stub");
+}
+
 interface Harness {
   base: string;
   stub: Stub;
@@ -472,6 +531,9 @@ async function harness(stubConfig: StubConfig, opts: HarnessOptions = {}): Promi
       // The create poll must not take real seconds in a unit test.
       sessionPollIntervalMs: 1,
       sessionPollTimeoutMs: 40,
+      // Same reason, for the wait on the seeded turn being registered.
+      seedPollIntervalMs: 1,
+      seedRegisterTimeoutMs: 40,
       ...(opts.composeReportStats === undefined
         ? {}
         : {
@@ -1361,10 +1423,13 @@ describe("hypotheses_board", () => {
 
 // ── POST /api/hypotheses ────────────────────────────────────────────────
 
+/** Every create test's thesis. Required since 2026-09-07: it is the interview's first message. */
+const THESIS = "Hard assets rise as the currency is debased.";
+
 describe("hypotheses_create", () => {
   it("hypotheses_create: answers 201 { id }, creates hyp-<id> with the interviewer, then appends the draft memory", async () => {
     const h = await harness({});
-    const res = await post(h, "/api/hypotheses", { title: "Copper is the new oil" });
+    const res = await post(h, "/api/hypotheses", { title: "Copper is the new oil", thesis: THESIS });
 
     expect(res.status).toBe(201);
     expect(res.json.id).toMatch(/^[0-9a-f]{8}$/);
@@ -1400,7 +1465,7 @@ describe("hypotheses_create", () => {
         { status: 200, body: JSON.stringify({ id: "s1", status: "running" }) },
       ],
     });
-    const res = await post(h, "/api/hypotheses", { title: "Patience" });
+    const res = await post(h, "/api/hypotheses", { title: "Patience", thesis: THESIS });
     expect(res.status).toBe(201);
     const polls = h.stub.requests.filter((r) => r.path.startsWith("/agent/sessions/by-name/"));
     expect(polls).toHaveLength(3);
@@ -1409,17 +1474,115 @@ describe("hypotheses_create", () => {
 
   it("hypotheses_create: no cookie is 401 and creates nothing", async () => {
     const h = await harness({});
-    const res = await post(h, "/api/hypotheses", { title: "nope" }, false);
+    const res = await post(h, "/api/hypotheses", { title: "nope", thesis: THESIS }, false);
     expect(res.status).toBe(401);
     expect(h.stub.createSessionRequests).toHaveLength(0);
   });
 
   it("hypotheses_create: an empty title is 400 invalid and creates nothing", async () => {
     const h = await harness({});
-    const res = await post(h, "/api/hypotheses", { title: "   " });
+    const res = await post(h, "/api/hypotheses", { title: "   ", thesis: THESIS });
     expect(res.status).toBe(400);
     expect(res.json.kind).toBe("invalid");
     expect(h.stub.createSessionRequests).toHaveLength(0);
+  });
+
+  it("hypotheses_create: a missing thesis is 400 invalid and creates nothing", async () => {
+    const h = await harness({});
+    const res = await post(h, "/api/hypotheses", { title: "Debasement trade" });
+    expect(res.status).toBe(400);
+    expect(res.json.kind).toBe("invalid");
+    // Nothing at all: no session, no memory, no seed.
+    expect(h.stub.createSessionRequests).toHaveLength(0);
+    expect(h.stub.appendRequests).toHaveLength(0);
+    expect(h.stub.messageRequests).toHaveLength(0);
+  });
+
+  it("hypotheses_create: a whitespace-only thesis is 400 invalid", async () => {
+    const h = await harness({});
+    const res = await post(h, "/api/hypotheses", { title: "Debasement trade", thesis: "   " });
+    expect(res.status).toBe(400);
+    expect(res.json.kind).toBe("invalid");
+    expect(h.stub.createSessionRequests).toHaveLength(0);
+  });
+
+  it("hypotheses_create: the thesis is sent into the session as the interview's first message, VERBATIM", async () => {
+    const h = await harness({
+      byName: [{ status: 200, body: JSON.stringify({ id: "sess-42", status: "running" }) }],
+    });
+    const res = await post(h, "/api/hypotheses", { title: "Debasement trade", thesis: THESIS });
+    expect(res.status).toBe(201);
+
+    // 🔴 The seed is deliberately NOT awaited by the route — the response is
+    // sent first, because Orange streams the whole model turn down the message
+    // response. So the assertion has to wait for it rather than read straight
+    // after the response, and a test written without this wait would pass on a
+    // seed that never happened.
+    await waitForMessage(h);
+
+    const sent = h.stub.messageRequests;
+    expect(sent).toHaveLength(1);
+    // The session id from the by-name lookup, not the name and not the hyp- id.
+    expect(sent[0]?.path).toBe("/agent/session/sess-42/message");
+    // Verbatim: no "the user says", no title prepended. The interviewer's
+    // prompt asks the user to state their thesis; this IS that answer.
+    expect(JSON.parse(sent[0]?.body ?? "{}")).toEqual({ content: THESIS });
+  });
+
+  it("🔴 the 201 is NOT sent until Orange reports the interview turn in flight", async () => {
+    // THE RACE THIS CLOSES: the browser navigates on the 201, mounts the chat
+    // frame, asks Orange "is a turn running?" — and asks ONCE. Answered before
+    // the turn was registered, it never asks again: the reader sees their own
+    // message and then silence while the turn streams to nobody. Reloading
+    // showed a finished answer, which is the tell that the events were being
+    // persisted the whole time.
+    const h = await harness({
+      byName: [{ status: 200, body: JSON.stringify({ id: "sess-42", status: "running" }) }],
+      status: [
+        // Not registered yet, twice — exactly the window the browser used to
+        // land in.
+        { status: 200, body: JSON.stringify({ activeQuery: null }) },
+        { status: 200, body: JSON.stringify({ activeQuery: null }) },
+        { status: 200, body: JSON.stringify({ activeQuery: { queryId: "q-sess-42-1" } }) },
+      ],
+    });
+    const res = await post(h, "/api/hypotheses", { title: "Debasement trade", thesis: THESIS });
+
+    expect(res.status).toBe(201);
+    // It polled until the turn appeared rather than answering on the first no.
+    expect(h.stub.statusRequests.length).toBeGreaterThanOrEqual(3);
+    // And the message really was sent — the wait is not a substitute for it.
+    expect(h.stub.messageRequests).toHaveLength(1);
+  });
+
+  it("answers anyway when no turn is ever reported — a confirmation is not a gate", async () => {
+    // The hypothesis and its session are real. Blocking the create on a
+    // convenience would turn a cosmetic problem into a broken product.
+    const h = await harness({
+      status: [{ status: 200, body: JSON.stringify({ activeQuery: null }) }],
+    });
+    const res = await post(h, "/api/hypotheses", { title: "Debasement trade", thesis: THESIS });
+    expect(res.status).toBe(201);
+    expect(h.stub.appendRequests).toHaveLength(1);
+  });
+
+  it("🔴 a FAILED status probe is not read as 'idle' — it ends the wait, it does not loop", async () => {
+    // `reachable: false` and "nothing is running" are different facts. Looping
+    // on an unreachable session would burn the whole window on every create.
+    const h = await harness({ status: [{ status: 503, body: "unavailable" }] });
+    const res = await post(h, "/api/hypotheses", { title: "Debasement trade", thesis: THESIS });
+    expect(res.status).toBe(201);
+    expect(h.stub.statusRequests).toHaveLength(1);
+  });
+
+  it("hypotheses_create: a seed that fails does NOT fail the create", async () => {
+    const h = await harness({ sendMessage: { status: 500, body: "boom" } });
+    const res = await post(h, "/api/hypotheses", { title: "Debasement trade", thesis: THESIS });
+    // The hypothesis and its session are both real; only the convenience of a
+    // pre-started conversation is lost, and the user can type.
+    expect(res.status).toBe(201);
+    expect(h.stub.appendRequests).toHaveLength(1);
+    await waitForMessage(h);
   });
 
   // The five enumerated create-failure surfaces, each mapped — and NOT ONE of
@@ -1488,7 +1651,7 @@ describe("hypotheses_create", () => {
   for (const failure of failures) {
     it(`hypotheses_create: ${failure.name}, and appends NO memory`, async () => {
       const h = await harness(failure.stub);
-      const res = await post(h, "/api/hypotheses", { title: "Doomed" });
+      const res = await post(h, "/api/hypotheses", { title: "Doomed", thesis: THESIS });
 
       expect(res.status).toBe(failure.status);
       expect(res.json.kind).toBe(failure.kind);
@@ -1506,7 +1669,7 @@ describe("hypotheses_create", () => {
     const h = await harness({
       createSession: { status: 403, body: "host port pool is exhausted\n" },
     });
-    const res = await post(h, "/api/hypotheses", { title: "No ports" });
+    const res = await post(h, "/api/hypotheses", { title: "No ports", thesis: THESIS });
 
     expect(res.status).toBe(503);
     expect(res.json.kind).toBe("unavailable");
@@ -1520,7 +1683,7 @@ describe("hypotheses_create", () => {
     const h = await harness({
       byName: [{ status: 200, body: JSON.stringify({ id: "s1", status: "creating" }) }],
     });
-    const res = await post(h, "/api/hypotheses", { title: "Stuck" });
+    const res = await post(h, "/api/hypotheses", { title: "Stuck", thesis: THESIS });
 
     expect(res.status).toBe(503);
     expect(res.json.kind).toBe("unavailable");

@@ -35,6 +35,15 @@ export interface StubResponse {
   json?: unknown;
   /** Raw body, for the non-JSON bodies Express answers unmounted routes with. */
   text?: string;
+  /**
+   * Held until this resolves, so a test can observe the IN-FLIGHT state — the
+   * spinner, the disabled control, the "why this is slow" caption.
+   *
+   * Without it a stubbed fetch resolves within the same act() as the click and
+   * the busy state is never observable, so a "shows a spinner" test would
+   * assert on the settled UI and pass whether or not a spinner exists.
+   */
+  wait?: Promise<unknown>;
 }
 
 /**
@@ -90,7 +99,9 @@ export function stubFetchRoutes(routes: FetchRoutes): FetchStub {
       // what its subject does, and returning a default would hide it.
       throw new Error(`no stubbed route for ${key}; stubbed: ${Object.keys(routes).join(", ")}`);
     }
-    return toResponse(typeof route === "function" ? route(index, init) : route);
+    const resolved = typeof route === "function" ? route(index, init) : route;
+    if (resolved.wait !== undefined) await resolved.wait;
+    return toResponse(resolved);
   });
 
   vi.stubGlobal("fetch", mock);

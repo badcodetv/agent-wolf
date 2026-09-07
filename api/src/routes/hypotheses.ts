@@ -82,6 +82,20 @@ const DETAIL_ROW_LIMIT = 50;
 export const DEFAULT_SESSION_POLL_INTERVAL_MS = 500;
 export const DEFAULT_SESSION_POLL_TIMEOUT_MS = 30_000;
 
+/**
+ * How long `POST /api/hypotheses` waits for the seeded interview turn to be
+ * REGISTERED with Orange before answering anyway.
+ *
+ * Short on purpose. Registration happens within milliseconds of the message
+ * POST reaching agentd (`beginActiveQuery`, before the sandbox is dispatched),
+ * so this is a guard against a lost race, not a budget for real work. Waiting
+ * longer would add latency to the one route in the product that is already
+ * slow, to confirm something that is a convenience: if the confirmation never
+ * comes, the hypothesis is still real and the user can type.
+ */
+export const DEFAULT_SEED_REGISTER_TIMEOUT_MS = 5_000;
+export const DEFAULT_SEED_POLL_INTERVAL_MS = 150;
+
 // ── Response shapes ─────────────────────────────────────────────────────
 //
 // snake_case on the wire, matching the plan's own field list
@@ -432,6 +446,9 @@ export interface CreateHypothesesRouterOptions {
   /** Overridable so tests do not wait real seconds on the create poll. */
   sessionPollIntervalMs?: number;
   sessionPollTimeoutMs?: number;
+  /** Same, for the wait on the seeded interview turn being registered. */
+  seedRegisterTimeoutMs?: number;
+  seedPollIntervalMs?: number;
   sleep?: (ms: number) => Promise<void>;
   /**
    * W9's four human routes need `WOLF_SCHEDULE_CRON` and
@@ -474,8 +491,20 @@ export interface CreateHypothesesRouterOptions {
 
 const createBody = z.object({
   title: z.string().trim().min(1).max(500),
-  /** Optional prose thesis; line 1 of the memory is always the title. */
-  thesis: z.string().max(20_000).optional(),
+  /**
+   * The thesis prose. Line 1 of the memory is always the title; this is
+   * everything after it.
+   *
+   * 🔴 **REQUIRED since 2026-09-07, and the reason is a workflow one.** It was
+   * optional, and a hypothesis created without it produced a detail page with
+   * a title, a disabled GO LIVE, eight empty sections and an interviewer
+   * sitting in the rail asking the user to state a thesis they believed they
+   * had already stated — because they had, into a field nothing read. The
+   * thesis is now the interview's FIRST MESSAGE (see `seedInterview` below),
+   * so an empty one is not a thinner hypothesis, it is a conversation that
+   * cannot start.
+   */
+  thesis: z.string().trim().min(1).max(20_000),
 });
 
 /**
@@ -703,6 +732,8 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
   const { store, client, logger } = options;
   const pollIntervalMs = options.sessionPollIntervalMs ?? DEFAULT_SESSION_POLL_INTERVAL_MS;
   const pollTimeoutMs = options.sessionPollTimeoutMs ?? DEFAULT_SESSION_POLL_TIMEOUT_MS;
+  const seedRegisterTimeoutMs = options.seedRegisterTimeoutMs ?? DEFAULT_SEED_REGISTER_TIMEOUT_MS;
+  const seedPollIntervalMs = options.seedPollIntervalMs ?? DEFAULT_SEED_POLL_INTERVAL_MS;
   const sleep = options.sleep ?? defaultSleep;
 
   const router = Router();
@@ -947,6 +978,92 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
     return { ...row, attention_tier: attentionTierFor(row, attentionRequested) };
   }
 
+  /**
+   * Send the user's own thesis prose into the interview as its first message.
+   *
+   * The text is passed VERBATIM and unframed. It is the user's sentence, and
+   * the interviewer's prompt opens by asking for exactly this ("To get
+   * started, I need you to state your thesis") — so a wrapper like "The user
+   * says:" would put words in their mouth and change what the model is
+   * replying to.
+   *
+   * Fire-and-forget by design; see the call site.
+   */
+  async function seedInterview(
+    id: string,
+    sessionName: string,
+    sessionId: string,
+    thesis: string,
+  ): Promise<void> {
+    // 🔴 THE TURN IS STARTED HERE AND DELIBERATELY NOT AWAITED TO COMPLETION,
+    // but this function DOES wait for it to be REGISTERED. Those are different
+    // moments and the difference was a real race.
+    //
+    // Orange's message route streams the whole model turn down its response,
+    // so awaiting it would add the turn's duration to the create. But
+    // returning the instant the request is dispatched was worse: the browser
+    // navigated, the chat frame mounted, asked Orange "is a turn in flight?",
+    // was told no — because the POST had not yet reached
+    // `beginActiveQuery` — and never asked again. The reader saw their own
+    // message and then silence, while the turn streamed to nobody. Reloading
+    // showed a completed answer, which is the tell: the events were being
+    // persisted all along.
+    //
+    // `sessionId` comes from the create route's own `waitForSession`, which
+    // already returns it. Looking it up again cost a fourth by-name request
+    // and broke the poll-count assertion that proves the wait loop works.
+    let failed: unknown = null;
+    const turn = client.sendMessage(sessionId, thesis).catch((err: unknown) => {
+      // Held, not thrown: this promise outlives the wait below, and an
+      // unhandled rejection would take the process down.
+      failed = err;
+    });
+    void turn;
+
+    const deadline = Date.now() + seedRegisterTimeoutMs;
+    for (;;) {
+      if (failed !== null) {
+        logger.warn(
+          {
+            id,
+            session: sessionName,
+            err: failed instanceof Error ? failed.message : String(failed),
+          },
+          "interview seed failed — the hypothesis is fine; the user can type the thesis themselves",
+        );
+        return;
+      }
+      // A FAILED probe is not "idle". It is thrown by the client, and it must
+      // not be read as "no turn is running" — so it ends the wait the same way
+      // the deadline does, rather than looping on an unreachable session.
+      let activeQueryId: string | null = null;
+      try {
+        ({ activeQueryId } = await client.getSessionStatus(sessionId));
+      } catch (err: unknown) {
+        logger.warn(
+          { id, session: sessionName, err: err instanceof Error ? err.message : String(err) },
+          "could not confirm the interview turn started; answering anyway",
+        );
+        return;
+      }
+      if (activeQueryId !== null) {
+        logger.info({ id, session: sessionName, activeQueryId }, "interview turn is in flight");
+        return;
+      }
+      if (Date.now() >= deadline) {
+        // Not an error: the turn may simply have been very fast, or Orange may
+        // never have registered it. Either way the hypothesis is real and the
+        // create must not fail on a confirmation that is a convenience.
+        logger.warn(
+          { id, session: sessionName },
+          "no in-flight turn appeared within the seed window; answering anyway",
+        );
+        return;
+      }
+      await sleep(seedPollIntervalMs);
+    }
+  }
+
   // ── POST /api/hypotheses ──────────────────────────────────────────────
 
   router.post("/api/hypotheses", (req: Request, res: Response, next) => {
@@ -970,17 +1087,26 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
       // behind — an id in the memory bus with no session behind it can never
       // be trusted (clause 3) and would sit on the board forever as an
       // anomaly nobody created.
-      await waitForSession(sessionName);
+      const session = await waitForSession(sessionName);
 
       await store.appendState({
         id,
         status: "draft",
         title: body.title,
-        ...(body.thesis !== undefined ? { thesis: body.thesis } : {}),
+        thesis: body.thesis,
         ownerEmail: user.email,
       });
 
       logger.info({ id, session: sessionName, owner: user.email }, "hypothesis created");
+
+      // ── The interview starts itself, and is IN FLIGHT before we answer ─
+      //
+      // Awaited, but only as far as the turn being registered — see
+      // `seedInterview`. The browser must not be able to mount the chat frame
+      // and ask "is a turn running?" before the answer is yes. It never
+      // throws: a hypothesis whose seed failed is still a real hypothesis the
+      // user can type into.
+      await seedInterview(id, sessionName, session.id, body.thesis);
       res.status(201).json({ id });
     })().catch(next);
   });

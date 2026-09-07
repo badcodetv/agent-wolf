@@ -29,6 +29,21 @@ function detailBody(over: Record<string, unknown> = {}) {
   };
 }
 
+/**
+ * The same payload past `draft`.
+ *
+ * The detail page collapses its empty analysis sections and its empty report
+ * FRAME on a draft only (2026-09-07): a draft has no locked spec, so those
+ * blocks are empty by definition and eight headings saying so buried the two
+ * things that mattered. Every resilience assertion about "a missing block
+ * costs a region, never the page" therefore renders a LIVE hypothesis, where
+ * an empty region is a real finding and is still shown.
+ */
+function livePayload(over: Record<string, unknown> = {}) {
+  const base = detailBody(over);
+  return { ...base, hypothesis: { ...base.hypothesis, status: "live" } };
+}
+
 /** W22's report block, with only the field under test varying. */
 function reportBlock(over: Record<string, unknown> = {}) {
   return {
@@ -498,15 +513,80 @@ describe("🔴 R141 — the truncated title carries its sentence HERE", () => {
 
 describe("🔴 a missing block costs a region, never the page", () => {
   it("renders the whole page from a payload carrying ONLY W13's fields", async () => {
-    // No spec, no evaluation, no notes, no amendments, no verdict, no atoms.
-    // This is the payload of a hypothesis created ten seconds ago.
-    await renderDetail({ [DETAIL]: { json: detailBody() }, [TOKEN]: tokenRoute });
+    // No spec, no evaluation, no notes, no amendments, no verdict, no atoms —
+    // on a LIVE hypothesis, where every empty region is still rendered. (On a
+    // draft these same blocks collapse; that is asserted separately below.)
+    await renderDetail({ [DETAIL]: { json: livePayload() }, [TOKEN]: tokenRoute });
     expect(screen.getByTestId("detail-column")).toBeInTheDocument();
     expect(screen.getByTestId("scoreboard")).toHaveAttribute("data-evaluated", "false");
     expect(screen.getByTestId("condition-table-empty")).toBeInTheDocument();
     expect(screen.getByTestId("charts-no-spec")).toBeInTheDocument();
     expect(screen.getByTestId("amendments-empty")).toBeInTheDocument();
     expect(screen.getByTestId("timeline")).toBeInTheDocument();
+  });
+
+  // ── The draft-only layout collapse (2026-09-07) ─────────────────────────
+  //
+  // A fresh draft opened on a title, a disabled GO LIVE, two refusal
+  // sentences, eight empty sections and a 480–900px empty report box, and the
+  // reader's own report was "I'm not sure what to do". These four assert the
+  // fix AND its limit: nothing is hidden once the hypothesis has left draft.
+
+  it("🔴 a draft does NOT render the empty 480-900px report frame", async () => {
+    await renderDetail({ [DETAIL]: { json: detailBody() }, [TOKEN]: tokenRoute });
+    expect(screen.getByTestId("report-section")).toHaveAttribute("data-report-frame", "suppressed");
+    expect(screen.queryByTestId("report-frame-host")).toBeNull();
+    // The sentence the box existed to say is still said.
+    expect(screen.getByTestId("report-section")).toHaveTextContent("No report template yet");
+  });
+
+  it("a draft WITH an accepted template gets the frame back", async () => {
+    await renderDetail({
+      [DETAIL]: { json: detailBody({ report: reportBlock() }) },
+      [TOKEN]: tokenRoute,
+    });
+    expect(screen.getByTestId("report-section")).toHaveAttribute("data-report-frame", "shown");
+    expect(screen.getByTestId("report-frame-host")).toBeInTheDocument();
+  });
+
+  it("🔴 a draft collapses the four empty analysis sections into one line", async () => {
+    await renderDetail({ [DETAIL]: { json: detailBody() }, [TOKEN]: tokenRoute });
+    expect(screen.getByTestId("analysis-empty")).toBeInTheDocument();
+    expect(screen.queryByTestId("scoreboard")).toBeNull();
+    expect(screen.queryByTestId("condition-table-empty")).toBeNull();
+    // ARTIFACTS and TIMELINE are one line each and are meaningful on a draft:
+    // they are NOT collapsed, and hiding them would be hiding a fact.
+    expect(screen.getByTestId("timeline")).toBeInTheDocument();
+  });
+
+  it("🔴 THE LIMIT: a LIVE hypothesis collapses nothing, however empty", async () => {
+    // An empty scoreboard on a live hypothesis is a real finding — the
+    // researcher has not produced a reading — and must stay on the page.
+    await renderDetail({ [DETAIL]: { json: livePayload() }, [TOKEN]: tokenRoute });
+    expect(screen.queryByTestId("analysis-empty")).toBeNull();
+    expect(screen.getByTestId("scoreboard")).toBeInTheDocument();
+    expect(screen.getByTestId("report-section")).toHaveAttribute("data-report-frame", "shown");
+  });
+
+  it("a draft mid-interview shows NO next-step banner", async () => {
+    await renderDetail({
+      [DETAIL]: { json: detailBody({ spec_validation: { valid: false, errors: [] } }) },
+      [TOKEN]: tokenRoute,
+    });
+    expect(screen.queryByTestId("next-step")).toBeNull();
+  });
+
+  it("a draft whose spec validates DOES get one — the template is a real next step", async () => {
+    await renderDetail({
+      [DETAIL]: { json: detailBody({ spec_validation: { valid: true, errors: [] } }) },
+      [TOKEN]: tokenRoute,
+    });
+    expect(screen.getByTestId("next-step-say")).toHaveTextContent("report template");
+  });
+
+  it("a draft offers Archive; the transition is legal from draft", async () => {
+    await renderDetail({ [DETAIL]: { json: detailBody() }, [TOKEN]: tokenRoute });
+    expect(screen.getByTestId("archive-open")).toBeInTheDocument();
   });
 
   it("renders when `evaluation` is explicitly null", async () => {
@@ -763,7 +843,7 @@ describe("W23's report panel, in its host", () => {
   it("renders the panel's empty state for a payload with no report block at all", async () => {
     // Every existing fixture on this page omits it; a missing block costs the
     // panel, never the page (R140).
-    await renderDetail({ [DETAIL]: { json: detailBody() }, [TOKEN]: tokenRoute });
+    await renderDetail({ [DETAIL]: { json: livePayload() }, [TOKEN]: tokenRoute });
     expect(screen.getByTestId("report-frame-host")).toBeInTheDocument();
     expect(screen.getByTestId("report-empty")).toBeInTheDocument();
     expect(screen.queryByTestId("report-frame")).toBeNull();

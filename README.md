@@ -27,13 +27,47 @@ first; this README only covers running what's here.
 
 ## Running it locally
 
-**Order matters: bring Agent Orange up first.** Agent Wolf's compose file joins Orange's compose
-network as `external` and shares Orange's `dind` container's network namespace — both must
-already exist before `docker compose up` here can succeed. This isn't a convenience choice: in
-the standalone stack `agentd` shares DinD's network namespace, so nested session containers
-cannot resolve compose DNS names and a `wolf-api` sitting on an ordinary compose network would be
-unreachable from them. See `design/2026-08-20-agent-wolf.md` § "Local topology and networking"
-for the full picture.
+**Use agent-orange's `./stack wolf up`.** It is the supported development
+workflow and it does every step below for you, in order, against the real
+providers — real model, session image pulled from Artifact Registry, real Google
+sign-in:
+
+```sh
+cd ../agent-orange
+./stack publish-base dev     # once, if you never have: the base Wolf builds FROM
+./stack wolf up              # BILLABLE. `./stack wolf up mock` is the free twin
+# → Wolf http://localhost:8081   Orange http://localhost:8080
+./stack wolf down
+```
+
+It publishes Wolf's session image, merges a `wolf` project into Orange's project
+map (API key + allowed origins), starts both stacks, bootstraps the project, and
+prints what it resolved. Local dev secrets are generated once into
+agent-orange's gitignored `.stack-wolf-secrets.env`. Full description, including
+the table of what still differs from a deployment and the **one manual step**
+(registering `http://localhost:8081` as an authorized JavaScript origin on the
+Google OAuth client): agent-orange's `README-stack.md` § "Agent Wolf: the joint
+development workflow".
+
+Two commands here are useful on their own:
+
+```sh
+./scripts/publish-image.sh          # build + push session-wolf (REGISTRY=… required)
+./scripts/load-image-into-dind.sh   # the OFFLINE alternative: build into DinD
+                                    #   instead of publishing. Only works when
+                                    #   Orange was started in `local` image mode.
+```
+
+### By hand
+
+**Order matters: bring Agent Orange up first.** Agent Wolf's compose file joins
+Orange's compose network as `external` and shares Orange's `dind` container's
+network namespace — both must already exist before `docker compose up` here can
+succeed. This isn't a convenience choice: in the standalone stack `agentd` shares
+DinD's network namespace, so nested session containers cannot resolve compose DNS
+names and a `wolf-api` sitting on an ordinary compose network would be
+unreachable from them. See `design/2026-08-20-agent-wolf.md` § "Local topology
+and networking" for the full picture.
 
 ```sh
 # 1. Agent Orange first — its compose network and dind container must exist

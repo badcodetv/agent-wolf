@@ -28,18 +28,30 @@ afterEach(() => {
 });
 
 describe("ChatRail", () => {
-  it("is a sticky, full-viewport-height rail whose width is a clamp, not a pixel constant", async () => {
+  it("fills its column's height, and its width is a clamp not a pixel constant", async () => {
     renderWithProviders(<ChatRail hypothesisId={ID} />);
     await flush();
 
     const rail = screen.getByTestId("chat-rail");
     expect(rail).toHaveAttribute("data-rail-mode", "rail");
     const style = window.getComputedStyle(rail);
-    expect(style.position).toBe("sticky");
-    expect(style.top).toBe("0px");
-    expect(style.height).toBe("100vh");
+    // 🔴 NOT sticky, and not `100vh` — changed 2026-09-07. The rail is a flex
+    // child of a page that is exactly the height of the area below the app
+    // bar, so `100%` is the right height and it is always on screen already,
+    // which is what sticky was compensating for. `100vh` was wrong by the app
+    // bar's height: the rail's last 48px is the message input, and it sat
+    // below the fold; scrolling to reach it slid the sticky rail over the
+    // header and clipped the rail's own heading.
+    expect(style.position).not.toBe("sticky");
+    // No `top` either: it was only meaningful for a sticky element.
+    expect(style.top).toBe("");
+    expect(style.height).toBe("100%");
     expect(style.width).toBe(RAIL_WIDTH);
-    expect(RAIL_WIDTH).toBe("clamp(340px, 28vw, 460px)");
+    // Widened 2026-09-07 — see the constant's comment. The assertion that
+    // matters is that it stays a CLAMP: a pixel constant here is what makes a
+    // chat panel unusable on one screen size or another.
+    expect(RAIL_WIDTH).toBe("clamp(360px, 32vw, 620px)");
+    expect(RAIL_WIDTH).toMatch(/^clamp\(/);
   });
 
   it("collapses to a thin edge and leaves a restore control", async () => {

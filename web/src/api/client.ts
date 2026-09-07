@@ -179,11 +179,38 @@ export function fetchBoard(): Promise<BoardRow[]> {
   return getJson<BoardRow[]>("/api/hypotheses");
 }
 
-/** `POST /api/hypotheses` — `{ title }`, 201 `{ id }`. */
-export function createHypothesis(title: string, thesis?: string): Promise<{ id: string }> {
+/**
+ * `POST /api/hypotheses` — `{ title, thesis }`, 201 `{ id }`.
+ *
+ * 🔴 **`thesis` is REQUIRED** (`createBody` is `z.string().trim().min(1)`),
+ * because the server sends it into the new session as the interview's first
+ * message. It is not a longer description of the title — it is the opening
+ * turn of the conversation, and an empty one is a conversation that cannot
+ * start. Both are sent trimmed, so what the form showed and what the memory
+ * stores are the same bytes.
+ */
+export function createHypothesis(title: string, thesis: string): Promise<{ id: string }> {
   return postJson<{ id: string }>("/api/hypotheses", {
-    title,
-    ...(thesis !== undefined && thesis.trim() !== "" ? { thesis } : {}),
+    title: title.trim(),
+    thesis: thesis.trim(),
+  });
+}
+
+/**
+ * `POST /api/hypotheses/:id/retire` — `{ rationale }`, 200.
+ *
+ * Named `archive` on this side because that is what it does and what the user
+ * is told: the hypothesis transitions to **`archived`**, which takes it off the
+ * board (`partitionBoard`) and puts it on `/archive`, still readable. Nothing
+ * is deleted — the memory bus is append-only, so there is no route that could.
+ *
+ * Legal from `draft`, `live` and `challenged` (W5's `LEGAL_TRANSITIONS`); the
+ * server refuses anything else, and the affordance is only offered where the
+ * transition exists.
+ */
+export function archiveHypothesis(id: string, rationale: string): Promise<unknown> {
+  return postJson<unknown>(`/api/hypotheses/${encodeURIComponent(id)}/retire`, {
+    rationale: rationale.trim(),
   });
 }
 
