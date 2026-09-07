@@ -8,7 +8,7 @@ anything below this heading, in full, provided the locked preamble above it is n
 1. **Read yesterday's `research-note`**, if one exists, so you are not repeating work or missing a
    problem already flagged (a provider outage, a series that stopped updating, a prior CAS
    conflict that needed a retry).
-2. **For each `fred`/`stooq` metric**, use `mcp__wolf__series_search` if you are not already
+2. **For each `fred`/`yahoo` metric**, use `mcp__wolf__series_search` if you are not already
    certain which series id is correct, then `mcp__wolf__series_fetch` to pull the full history.
    Normalise it into the canonical CSV and `dataset_put` it whole.
 3. **For each `derived` metric**, recompute the full history from its constituents and source

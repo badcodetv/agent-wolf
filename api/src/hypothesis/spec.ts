@@ -21,8 +21,17 @@ import { WolfError, type WolfErrorKind } from "../errors.js";
 /* enums and constants                                                 */
 /* ------------------------------------------------------------------ */
 
-/** V9 — the only providers that exist (§ Out of Scope). */
-export const METRIC_SOURCES = ["fred", "stooq", "derived"] as const;
+/**
+ * V9 — the only providers that exist (§ Out of Scope).
+ *
+ * `yahoo` was added 2026-09-07: `stooq` is dead (it answers every request
+ * with a browser-verification page — see marketdata/guard.ts) and FRED has
+ * no daily gold series, so without it a hard-asset thesis had no price
+ * source. `stooq` is KEPT in the enum rather than removed: specs already
+ * locked with a stooq metric must stay valid, and the connector now fails
+ * loudly instead of inventing data.
+ */
+export const METRIC_SOURCES = ["fred", "stooq", "yahoo", "derived"] as const;
 export type MetricSource = (typeof METRIC_SOURCES)[number];
 
 /** V10 — the enum § "The support score" reads. */

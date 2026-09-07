@@ -22,6 +22,7 @@
  */
 
 import { WolfError } from "../errors.js";
+import { classifyBody, raiseBodyProblem } from "./guard.js";
 import type { RawMarketDataRow } from "./normalise.js";
 import type { MarketDataSearchResult } from "./stooq.js";
 
@@ -111,6 +112,25 @@ export function createFredClient(options: FredClientOptions): MarketDataConnecto
     }
 
     const text = await response.text();
+
+    // A provider that stops serving DATA must fail loudly and legibly, not
+    // as a generic "internal error" whose message is thrown away — see
+    // guard.ts's header for the Stooq defect this closes.
+    //
+    // Only the Stooq-class problems are reclassified here: an HTML page, a
+    // browser-verification interstitial, a 429, or an EMPTY body (which the
+    // `text ? JSON.parse(text) : {}` below would otherwise turn into `{}`,
+    // then `observations ?? []`, then a successfully-written empty series —
+    // the same silent-success shape). A body that is merely malformed JSON
+    // still falls through to the `internal` classification R39 chose for
+    // it, which `fred.test.ts` pins.
+    const problem = classifyBody(text, {
+      provider: "FRED",
+      status: response.status,
+      contentType: response.headers.get("content-type"),
+      expected: "json",
+    });
+    if (problem) raiseBodyProblem(problem, text);
 
     if (!response.ok) {
       let body: FredErrorBody = {};

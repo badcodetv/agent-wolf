@@ -35,21 +35,39 @@ import {
   type MarketDataConnector,
   type MarketDataSearchResult,
 } from "../marketdata/stooq.js";
+import { createYahooClient } from "../marketdata/yahoo.js";
 import {
   DEFAULT_SERIES_URL_TTL_SEC,
   seriesDownloadUrl,
   signSeriesToken,
 } from "./seriesdownload.js";
 
-export type SeriesSource = "fred" | "stooq";
+export type SeriesSource = "fred" | "stooq" | "yahoo";
 
-export const SERIES_SOURCES = ["fred", "stooq"] as const;
+export const SERIES_SOURCES = ["fred", "stooq", "yahoo"] as const;
+
+/**
+ * The unit `series_fetch` reports per source, when the provider pins one for
+ * every series it serves.
+ *
+ * `stooq` is a US-only ticker table, so every series is in USD. `fred`'s
+ * observations endpoint carries no units at all, and `yahoo`'s carries a
+ * per-series `meta.currency` that `MarketDataConnector.fetch`'s return type
+ * cannot express today — both report `null` here, and the tool description
+ * points the model at `series_search`'s `unit` instead. See yahoo.ts's
+ * `searchUnit` for the deferred fix.
+ */
+const UNIT_BY_SOURCE: Record<SeriesSource, string | null> = {
+  fred: null,
+  stooq: "USD",
+  yahoo: null,
+};
 
 /** One resolved series: the canonical CSV bytes, plus the unit if the provider pins one. */
 export interface SeriesResolution {
   csv: string;
-  /** `"USD"` for Stooq (always). `null` for FRED, whose observations
-   * endpoint carries no units — use `series_search`'s `unit` for those. */
+  /** `"USD"` for Stooq (always). `null` for FRED and Yahoo — see
+   * `UNIT_BY_SOURCE`; use `series_search`'s `unit` for those. */
   unit: string | null;
 }
 
@@ -106,7 +124,9 @@ export function createMarketDataAccess(
     const client =
       source === "fred"
         ? createFredClient({ apiKey: options.fredApiKey ?? "", fetchImpl: options.fetchImpl, timeoutMs })
-        : createStooqClient({ fetchImpl: options.fetchImpl, timeoutMs });
+        : source === "yahoo"
+          ? createYahooClient({ fetchImpl: options.fetchImpl, timeoutMs })
+          : createStooqClient({ fetchImpl: options.fetchImpl, timeoutMs });
     built.set(source, client);
     return client;
   }
@@ -139,7 +159,7 @@ export function createMarketDataAccess(
       const rows = await connector(source).fetch(id, from, to);
       return normalise(rows);
     });
-    return { csv, unit: source === "stooq" ? "USD" : null };
+    return { csv, unit: UNIT_BY_SOURCE[source] };
   }
 
   return { search, resolve };
@@ -150,10 +170,17 @@ export function createMarketDataAccess(
 const SEARCH_DESCRIPTION = [
   "Search for a market-data series by free text and get its identifier, unit and coverage.",
   "Use this before series_fetch when you do not already know the exact series id.",
-  "Sources: 'fred' is US macro data from the St. Louis Fed (keyed API);",
-  "'stooq' is daily US equity and ETF closes, matched against a fixed ticker table.",
-  "Stooq results always report unit 'USD' and frequency 'daily', and omit coverage:",
-  "their 'first' and 'last' are null. Omit 'source' to search both;",
+  "Sources:",
+  "'fred' is US macro data from the St. Louis Fed (keyed API) — money supply, yields, dollar index,",
+  "and daily Bitcoin as CBBTCUSD. It has NO daily gold series.",
+  "'yahoo' is daily prices for almost everything else: gold futures (GC=F), other commodity futures,",
+  "crypto (BTC-USD), equities, ETFs and indices. Use it for any price series FRED does not carry.",
+  "'stooq' is DEAD — it now answers every request with a browser-verification page and cannot",
+  "return data. It remains a valid value only so that specs locked before it died stay valid.",
+  "Never choose 'stooq' for a new metric; use 'yahoo' instead.",
+  "Yahoo and Stooq results omit coverage: their 'first' and 'last' are null, and Yahoo's search",
+  "does not report a currency, so its 'unit' may be empty.",
+  "Omit 'source' to search all of them;",
   "if one source is unavailable or misconfigured the call fails, so retry with an explicit source.",
   "This tool returns metadata only, never observations: to get the data, pass the id to series_fetch",
   "and curl the download URL it returns to a FILE — do NOT print the URL and do NOT print the rows.",
@@ -172,8 +199,12 @@ const FETCH_DESCRIPTION = [
   "The URL expires at 'expires_at_sec' (unix seconds); call this tool again to mint a new one.",
 ].join(" ");
 
-const SOURCE_DESCRIPTION =
-  "Which provider the series comes from: 'fred' (US macro, St. Louis Fed) or 'stooq' (daily US equity/ETF closes).";
+const SOURCE_DESCRIPTION = [
+  "Which provider the series comes from:",
+  "'fred' (US macro from the St. Louis Fed, plus daily Bitcoin as CBBTCUSD; no daily gold),",
+  "'yahoo' (daily prices for commodity futures such as GC=F gold, crypto, equities, ETFs, indices),",
+  "or 'stooq' (DEAD — answers with a browser-verification page; never choose it for new work).",
+].join(" ");
 
 export interface SeriesToolsOptions {
   access: MarketDataAccess;

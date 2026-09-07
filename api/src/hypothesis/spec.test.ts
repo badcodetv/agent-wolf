@@ -293,9 +293,28 @@ describe("validateSpec — metrics", () => {
   });
 
   it("V9 rejects a source no provider implements", () => {
+    // This test used to use "yahoo" as its example. Yahoo is now a real
+    // provider (marketdata/yahoo.ts, added when Stooq died), so the example
+    // had to move to something genuinely unimplemented — which is the point
+    // of the test: the enum, not a hard-coded name, is the gate.
+    const s = base();
+    s.metrics[0].source = "quandl";
+    reject(s, "metrics[0].source");
+  });
+
+  it("V9 accepts yahoo, the provider that replaced dead Stooq", () => {
     const s = base();
     s.metrics[0].source = "yahoo";
-    reject(s, "metrics[0].source");
+    expect(accept(s).metrics[0]!.source).toBe("yahoo");
+  });
+
+  it("V9 still accepts stooq, so specs locked before it died stay valid", () => {
+    // Stooq is kept in the enum deliberately. Removing it would invalidate
+    // every already-locked spec that names a stooq metric; the connector
+    // now fails loudly instead of fabricating rows.
+    const s = base();
+    s.metrics[0].source = "stooq";
+    expect(accept(s).metrics[0]!.source).toBe("stooq");
   });
 
   it("V10 accepts up, down and flat directions", () => {

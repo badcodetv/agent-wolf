@@ -19,20 +19,31 @@
  * `readFileSync` against `__fixtures__/stooq-tickers.json` does not survive
  * `yarn build` + `api/Dockerfile`.
  *
- * NOTE on the fetch() happy path (see the sibling __fixtures__/README.md
- * and this ticket's Discovered Issues Log entry): stooq.com now sits
- * behind a client-side JavaScript proof-of-work challenge that returns
- * HTTP 200 with a challenge PAGE instead of CSV bytes for every plain HTTP
- * request (verified directly during this ticket, superseding an earlier
- * "HTTP 200 confirms it's reachable" check that only looked at the status
- * code). Recording a real CSV fixture is therefore blocked in this
- * environment for the same reason FRED's is — see the README. The parsing
- * logic below is written against Stooq's PUBLICLY DOCUMENTED CSV shape
- * (`Date,Open,High,Low,Close,Volume`), not verified against a live
- * response.
+ * 🔴 **THIS PROVIDER IS DEAD, AND THE ENUM VALUE ONLY SURVIVES FOR OLD
+ * SPECS.** stooq.com sits behind a client-side JavaScript proof-of-work
+ * challenge and answers HTTP 200 with a challenge PAGE, not CSV, for every
+ * plain HTTP request. Re-verified 2026-09-07 and RECORDED at
+ * `__fixtures__/stooq-challenge-page.html`. `yahoo.ts` is the replacement;
+ * `METRIC_SOURCES` keeps `"stooq"` so specs locked before it died stay
+ * valid, and every prompt now tells the model never to choose it for new
+ * work.
+ *
+ * What made this dangerous was not the outage but what the code did with
+ * it. The challenge page's inline `<script>` contains commas, so
+ * `parseStooqCsv` below read it as a DATA ROW — column 0 as a timestamp,
+ * column 4 as a value — and the pipeline stored a fragment of the
+ * challenge's own JavaScript as an observation, reporting success. That is
+ * measured, not asserted: see `guard.test.ts`'s first test, and R262.
+ * `fetchSeries` now calls `guardCsvBody` BEFORE the parser (see guard.ts).
+ *
+ * Recording a real CSV fixture remains impossible in this environment, so
+ * the parsing logic below is still written against Stooq's PUBLICLY
+ * DOCUMENTED CSV shape (`Date,Open,High,Low,Close,Volume`) and has never
+ * been verified against a live successful response.
  */
 
 import { WolfError } from "../errors.js";
+import { guardCsvBody } from "./guard.js";
 import type { RawMarketDataRow } from "./normalise.js";
 import { DEFAULT_STOOQ_TICKERS } from "./stooq-tickers.js";
 
@@ -43,7 +54,7 @@ export interface StooqTicker {
 }
 
 export interface MarketDataSearchResult {
-  source: "fred" | "stooq";
+  source: "fred" | "stooq" | "yahoo";
   id: string;
   title: string;
   unit: string;
@@ -164,9 +175,27 @@ export function createStooqClient(options: StooqClientOptions = {}): MarketDataC
     // literal "No data" body rather than a 404. Not verified against a live
     // response in this environment (see the file-level note) — best-effort
     // per public documentation.
+    //
+    // This check must stay BEFORE the guard: "No data" is a comma-free
+    // plain-text body, so the guard would otherwise classify a genuinely
+    // unknown symbol as `unavailable` (a provider outage, retryable)
+    // instead of `not_found`.
     if (text.trim().toLowerCase().startsWith("no data")) {
       throw new WolfError("not_found", `stooq series ${id} not found`);
     }
+
+    // The fix for the defect this file's header describes. stooq.com now
+    // answers HTTP 200 with a JavaScript proof-of-work challenge PAGE, and
+    // `parseStooqCsv` below parses that page into ZERO ROWS rather than
+    // failing — which the rest of the pipeline reports as a successful,
+    // empty series. Guard before parsing, never after: once an HTML page
+    // has been through a lenient parser there is nothing left to tell it
+    // apart from a real day with no observations.
+    guardCsvBody(text, {
+      provider: "stooq",
+      status: response.status,
+      contentType: response.headers.get("content-type"),
+    });
 
     return parseStooqCsv(text);
   }

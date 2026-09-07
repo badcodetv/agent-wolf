@@ -121,3 +121,81 @@ plan's own Spec JSON example names) — see this ticket's Discovered Issues
 Log entry and its `guesses` for the exact list and the reasoning. Extend
 it, rather than replace it, if a later ticket finds `prompts/interviewer.md`
 names symbols this table lacks.
+
+## Stooq — RECORDED 2026-09-07: `stooq-challenge-page.html`
+
+The thing that was previously only described in prose is now a committed
+fixture. `guard.test.ts` runs the real connector over these exact bytes and
+asserts it fails.
+
+```sh
+curl -sS "https://stooq.com/q/d/l/?s=spy.us&i=d" \
+  -o api/src/marketdata/__fixtures__/stooq-challenge-page.html
+```
+
+Captured **2026-09-07**. What came back: **HTTP 200**,
+`Content-Type: text/html; charset=utf-8`, 796 bytes, and a body containing
+
+> This site requires JavaScript to verify your browser. Please enable
+> JavaScript and reload.
+
+plus an inline `<script>` doing a SHA-256 proof-of-work and POSTing the
+result to `/__verify`. The `nonce` in it is Stooq's, per-response, and
+carries nothing of ours.
+
+**Why it is worth committing.** Fed to the old code path, this page did not
+produce an empty series — it produced a DATA ROW. Its `<script>` line
+contains commas, so `parseStooqCsv` read column 0 as a timestamp and column
+4 as a value, and `normalise` emitted:
+
+```
+timestamp,value
+(async()=>{const c="AAAAAGqe___IOLYlp2YVPrEyb…",e.encode(c+n))
+```
+
+One row, `rows: 1`, reported as a success. `guard.test.ts`'s first test
+measures exactly that, so the reason `guard.ts` exists cannot be lost.
+
+## Yahoo Finance — `yahoo-429-body.txt` RECORDED, chart/search fixtures NOT YET
+
+`yahoo-429-body.txt` is the verbatim body Yahoo returns when it refuses a
+request — 18 bytes, `Too Many Requests`, served as `text/html` with HTTP
+429. Recorded **2026-09-07** from both `query1` and `query2`. It is what a
+missing browser-style `User-Agent` provokes, and also what a genuine per-IP
+throttle returns.
+
+🔴 **The chart and search fixtures are NOT recorded.** Yahoo throttled this
+IP for the entire duration of the ticket that added `yahoo.ts`, so
+`yahoo.test.ts` tests our own logic against the observed response SHAPE and
+says so in its header. The shape was verified live earlier the same day
+(`GC=F` returned 1,261 daily bars for 2021-09-07→2026-09-07, adjusted-close
+column present, last close 4476.60) but those bytes were not kept, so
+nothing may be described as recorded.
+
+**To record them once the throttle clears** (all four, with a browser
+User-Agent, `period1`/`period2` spanning Christmas and New Year so the
+holiday-gap handling is pinned):
+
+```sh
+UA='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+P1=$(python3 -c "import datetime;print(int(datetime.datetime(2025,12,19,tzinfo=datetime.timezone.utc).timestamp()))")
+P2=$(python3 -c "import datetime;print(int(datetime.datetime(2026,1,7,tzinfo=datetime.timezone.utc).timestamp()))")
+D=api/src/marketdata/__fixtures__
+
+curl -sS -H "User-Agent: $UA" -o $D/yahoo-chart-gcf.json \
+  "https://query2.finance.yahoo.com/v8/finance/chart/GC=F?interval=1d&period1=$P1&period2=$P2"
+curl -sS -H "User-Agent: $UA" -o $D/yahoo-chart-btcusd.json \
+  "https://query2.finance.yahoo.com/v8/finance/chart/BTC-USD?interval=1d&period1=$P1&period2=$P2"
+curl -sS -H "User-Agent: $UA" -o $D/yahoo-search-gold.json \
+  "https://query2.finance.yahoo.com/v1/finance/search?q=gold&quotesCount=6&newsCount=0"
+curl -sS -H "User-Agent: $UA" -o $D/yahoo-chart-notfound.json \
+  "https://query2.finance.yahoo.com/v8/finance/chart/NOTAREALTICKER123?interval=1d&range=5d"
+```
+
+Then add a `yahoo-recorded.test.ts` pinning, against those bytes: the
+`meta.gmtoffset`-to-trading-date mapping on a real GC=F bar; that
+`indicators.adjclose` is present for `GLD` and absent for `GC=F`/`BTC-USD`;
+whether a search quote carries a `currency` field (`searchUnit` reads one if
+it is there and reports `""` if not — the real response settles which);
+and the exact `chart.error` shape for an unknown symbol.
+

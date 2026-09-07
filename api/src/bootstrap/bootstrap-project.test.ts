@@ -418,4 +418,26 @@ describe("prompt contract — the literals every other ticket depends on", () =>
   it("hypothesis-spec-candidate occurs in interviewer.md", () => {
     expect(INTERVIEWER_PROMPT.includes("hypothesis-spec-candidate")).toBe(true);
   });
+
+  it("interviewer.md names mcp__ui__ask_user, the tool that renders a question card", () => {
+    // Without this instruction the interviewer asks in prose — typically
+    // four questions in one message, which a person answers partially or
+    // not at all. The card is built into Orange's chat UI and available to
+    // every session by default; the ONLY thing that was missing was the
+    // prompt telling the model to use it. The exact name matters: Orange's
+    // reducer only looks for the question-card marker on a tool whose name
+    // contains `ask_user` (agent-orange web/src/agentEventReducer.ts:243).
+    expect(INTERVIEWER_PROMPT.includes("mcp__ui__ask_user")).toBe(true);
+  });
+
+  it("interviewer.md tells the model to ask ONE question and then stop", () => {
+    // The half of the instruction that is easy to lose in an edit. The
+    // answer arrives as a NEW user message, so a second card in the same
+    // turn gets one answer, and prose after the card buries it.
+    expect(/ask ONE question/i.test(INTERVIEWER_PROMPT)).toBe(true);
+  });
+
+  it("researcher-preamble.md forbids ask_user — nobody is watching a daily tick", () => {
+    expect(RESEARCHER_PREAMBLE.includes("ask_user")).toBe(true);
+  });
 });

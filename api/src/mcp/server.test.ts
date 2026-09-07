@@ -17,7 +17,7 @@ import { WolfError } from "../errors.js";
 import type { MarketDataConnector, MarketDataSearchResult } from "../marketdata/stooq.js";
 import type { RawMarketDataRow } from "../marketdata/normalise.js";
 import { SERIES_DOWNLOAD_PATH, verifySeriesToken } from "./seriesdownload.js";
-import { createMarketDataAccess, type MarketDataAccess } from "./tools.js";
+import { createMarketDataAccess, SERIES_SOURCES, type MarketDataAccess } from "./tools.js";
 import { createWolfMcp, MCP_PATH, MCP_SERVER_NAME, originFromMcpUrl } from "./server.js";
 
 const TOKEN = "wolf-mcp-token-for-tests-0123456789abcdef";
@@ -56,6 +56,31 @@ function connectorDouble(): MarketDataConnector & { searchCalls: string[]; fetch
     async fetch(id: string, from?: string, to?: string) {
       fetchCalls.push([id, from ?? "", to ?? ""].join("|"));
       return FRED_ROWS;
+    },
+  };
+}
+
+/** A yahoo double. Without one, `search` with no `source` builds a REAL
+ * yahoo client and reaches the network from a unit test. */
+function yahooDouble(): MarketDataConnector {
+  return {
+    async search() {
+      return {
+        results: [
+          {
+            source: "yahoo" as const,
+            id: "GC=F",
+            title: "Gold (Future, COMEX)",
+            unit: "USD",
+            frequency: "daily",
+            first: null,
+            last: null,
+          },
+        ],
+      };
+    },
+    async fetch() {
+      return [{ timestamp: "2026-01-02", value: "4476.6" }];
     },
   };
 }
@@ -101,7 +126,7 @@ async function harness(
   const fred = connectorDouble();
   const access =
     options.access ??
-    createMarketDataAccess({ connectors: { fred, stooq: stooqDouble() } });
+    createMarketDataAccess({ connectors: { fred, stooq: stooqDouble(), yahoo: yahooDouble() } });
   const { mcpRouter, seriesDownloadRouter } = createWolfMcp({
     mcpOrigin: options.mcpOrigin ?? "http://172.17.0.1:8100",
     mcpToken: TOKEN,
@@ -266,9 +291,9 @@ describe("mcp_tools_list schema", () => {
     expect(byName.series_search.inputSchema.required).toEqual(["query"]);
     expect([...byName.series_fetch.inputSchema.required].sort()).toEqual(["id", "source"]);
 
-    // `source` is an enum of exactly ["fred","stooq"] on both tools.
-    expect(byName.series_search.inputSchema.properties.source.enum).toEqual(["fred", "stooq"]);
-    expect(byName.series_fetch.inputSchema.properties.source.enum).toEqual(["fred", "stooq"]);
+    // `source` is an enum of exactly ["fred","stooq","yahoo"] on both tools.
+    expect(byName.series_search.inputSchema.properties.source.enum).toEqual(["fred", "stooq", "yahoo"]);
+    expect(byName.series_fetch.inputSchema.properties.source.enum).toEqual(["fred", "stooq", "yahoo"]);
 
     // from/to document their format as YYYY-MM-DD.
     expect(byName.series_fetch.inputSchema.properties.from.description).toContain("YYYY-MM-DD");
@@ -310,11 +335,18 @@ describe("mcp_series_search", () => {
     expect(payload.results[0].last).toBeNull();
   });
 
-  it("searches both sources when source is omitted", async () => {
+  it("searches EVERY source when source is omitted, in SERIES_SOURCES order", async () => {
     const { base } = await harness();
     const res = await rpc(base, callTool("series_search", { query: "a" }));
     const payload = toolPayload(res.json);
-    expect(payload.results.map((r: any) => r.source)).toEqual(["fred", "stooq"]);
+    expect(payload.results.map((r: any) => r.source)).toEqual([...SERIES_SOURCES]);
+  });
+
+  it("searches yahoo alone when asked for it", async () => {
+    const { base } = await harness();
+    const res = await rpc(base, callTool("series_search", { query: "gold", source: "yahoo" }));
+    const payload = toolPayload(res.json);
+    expect(payload.results.map((r: any) => r.id)).toEqual(["GC=F"]);
   });
 });
 
