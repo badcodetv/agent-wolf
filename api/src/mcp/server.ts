@@ -4,6 +4,10 @@
  * design/2026-08-20-agent-wolf.md § "The MCP server name and its auth
  * header" (agent-orange repo):
  *
+ * Three tools: `series_search` and `series_fetch` (market data) and
+ * `spec_validate` (the interviewer's schema check before it deposits a
+ * candidate — read-only, writes nothing).
+ *
  *   "Server name is `wolf`, so tools are mcp__wolf__series_fetch and
  *   friends — the researcher prompt, X1's mock-model script and W7 must all
  *   use that exact form. The header is X-Wolf-Mcp-Token, carrying the BARE
@@ -40,6 +44,7 @@ import {
   DEFAULT_SERIES_URL_TTL_SEC,
 } from "./seriesdownload.js";
 import { constantTimeEquals } from "./seriesdownload.js";
+import { registerSpecValidateTool } from "./specvalidate.js";
 import { registerSeriesTools, type MarketDataAccess } from "./tools.js";
 
 /** The MCP server's name. `mcp__<name>__<tool>` is how Orange derives the
@@ -137,6 +142,10 @@ export function createWolfMcp(options: WolfMcpOptions): WolfMcp {
       seriesUrlTtlSec: options.seriesUrlTtlSec ?? DEFAULT_SERIES_URL_TTL_SEC,
       now: options.now,
     });
+    // `spec_validate` — the interviewer's feedback loop on the spec schema.
+    // Read-only and pure; see specvalidate.ts for the thirteen-error
+    // interview that made it necessary.
+    registerSpecValidateTool(server);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,

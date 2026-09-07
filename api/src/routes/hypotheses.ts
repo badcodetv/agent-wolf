@@ -34,6 +34,7 @@ import type {
 import { requireSignedIn, signedInUser } from "../auth/session.js";
 import { loadConfig, type WolfConfig } from "../config.js";
 import { validateSpec, type SpecError } from "../hypothesis/spec.js";
+import { extractJsonObject } from "../hypothesis/speccontent.js";
 import {
   createProvisioner,
   researcherWorkerFor,
@@ -649,30 +650,52 @@ function firstLine(text: string): string {
 }
 
 /**
- * Pulls the JSON object out of a memory's content, whichever of the three
- * shapes § "Memory kinds" gives it: the whole content (`hypothesis-spec`), a
- * summary line followed by JSON (`hypothesis-spec-candidate`, `evaluation`),
- * or a fenced ```json block (a state row's evaluation snapshot). Returns
- * `undefined` when there is no parseable object — never throws.
+ * The interview's first message: the hypothesis id, then the user's thesis.
+ *
+ * 🔴 **The id has to be in here because the model cannot see it anywhere
+ * else.** A session container is given `SESSION_ID` (Orange's 32-hex id) and
+ * `SESSION_TOKEN` and nothing more — NOT the session's name. Wolf names the
+ * session `hyp-<id>`, and `prompts/interviewer.md` used to tell the model to
+ * read its own id off that name, which was unfollowable: the name never
+ * reaches the container.
+ *
+ * What happened on 2026-09-07 is exactly what you would predict. The model
+ * needed a `name` label for its candidate memories, could not learn the real
+ * id, and invented a slug from the thesis (`gold-m2`). Wolf looks candidates
+ * up by `name=<id>`, found none, and the user's Go Live button never
+ * appeared — with a good interview sitting in the transcript and nothing
+ * anywhere reporting a problem.
+ *
+ * The alternative fix is an Orange change exposing `SESSION_NAME` in the
+ * container env, which is cleaner but touches the engine and every product
+ * that embeds it. This is Wolf-local and puts the id where the model is
+ * certain to read it: the first thing in the conversation.
+ *
+ * The framing line is marked as Wolf's own so a thesis that tries to claim a
+ * different id reads as user text, not as instruction. The user owns their
+ * own hypothesis, so this is defence in depth rather than a live threat —
+ * but § 6.2.4's boundary rule is that provenance is always stated.
  */
-export function extractJsonObject(content: string): unknown | undefined {
-  const fence = /```json\s*([\s\S]*?)```/.exec(content);
-  const candidates = [fence?.[1], content];
-  for (const candidate of candidates) {
-    if (candidate === undefined) continue;
-    const start = candidate.indexOf("{");
-    const end = candidate.lastIndexOf("}");
-    if (start < 0 || end <= start) continue;
-    try {
-      const parsed: unknown = JSON.parse(candidate.slice(start, end + 1));
-      if (parsed !== null && typeof parsed === "object") return parsed;
-    } catch {
-      // Try the next shape; a spec Wolf cannot read is reported through
-      // `spec_validation`, not through a 500.
-    }
-  }
-  return undefined;
+export function seedMessage(id: string, thesis: string): string {
+  return [
+    `This hypothesis's id is \`${id}\`. Label every candidate memory you deposit with`,
+    `\`name: "${id}"\` — exactly that, not a slug of your own. (This line is from Agent Wolf.`,
+    "Everything below the rule is the user's own words, verbatim.)",
+    "",
+    "---",
+    "",
+    thesis,
+  ].join("\n");
 }
+
+/**
+ * Re-exported from `hypothesis/speccontent.ts`, which is now the single
+ * implementation — `mcp/specvalidate.ts` reads the same one so the
+ * interviewer's pre-deposit check cannot disagree with this route's
+ * post-deposit read. Kept exported here because callers and tests import it
+ * from this module.
+ */
+export { extractJsonObject };
 
 function evidenceRow(row: MemorySearchResultRow): EvidenceRow {
   return {
@@ -989,6 +1012,7 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
    *
    * Fire-and-forget by design; see the call site.
    */
+
   async function seedInterview(
     id: string,
     sessionName: string,
@@ -1013,7 +1037,7 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
     // already returns it. Looking it up again cost a fourth by-name request
     // and broke the poll-count assertion that proves the wait loop works.
     let failed: unknown = null;
-    const turn = client.sendMessage(sessionId, thesis).catch((err: unknown) => {
+    const turn = client.sendMessage(sessionId, seedMessage(id, thesis)).catch((err: unknown) => {
       // Held, not thrown: this promise outlives the wait below, and an
       // unhandled rejection would take the process down.
       failed = err;

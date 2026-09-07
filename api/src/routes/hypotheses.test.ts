@@ -32,6 +32,7 @@ import {
   mergeTamper,
   type AttentionInputs,
   type AttentionTier,
+  seedMessage,
 } from "./hypotheses.js";
 import type { ReportComposeStats } from "./report.js";
 
@@ -1524,9 +1525,46 @@ describe("hypotheses_create", () => {
     expect(sent).toHaveLength(1);
     // The session id from the by-name lookup, not the name and not the hyp- id.
     expect(sent[0]?.path).toBe("/agent/session/sess-42/message");
-    // Verbatim: no "the user says", no title prepended. The interviewer's
-    // prompt asks the user to state their thesis; this IS that answer.
-    expect(JSON.parse(sent[0]?.body ?? "{}")).toEqual({ content: THESIS });
+
+    // The thesis is still VERBATIM — no rewording, no title prepended — but
+    // it now sits under a framing line carrying the hypothesis id.
+    //
+    // 🔴 That line is load-bearing. A session container gets SESSION_ID and
+    // SESSION_TOKEN and NOT its session's name, so the model cannot learn the
+    // hypothesis id any other way. On 2026-09-07 an interview that could not
+    // learn it invented a slug (`gold-m2`), Wolf looks candidates up by
+    // `name=<id>`, found none, and the user's Go Live button never appeared.
+    const { content } = JSON.parse(sent[0]?.body ?? "{}") as { content: string };
+    expect(content).toContain(THESIS);
+    expect(content.endsWith(THESIS)).toBe(true);
+  });
+
+  it("hypotheses_create: the first message carries the hypothesis id, which the model cannot get elsewhere", async () => {
+    const h = await harness({
+      byName: [{ status: 200, body: JSON.stringify({ id: "sess-42", status: "running" }) }],
+    });
+    const res = await post(h, "/api/hypotheses", { title: "Debasement trade", thesis: THESIS });
+    const { id } = res.json as { id: string };
+    await waitForMessage(h);
+
+    const { content } = JSON.parse(h.stub.messageRequests[0]?.body ?? "{}") as { content: string };
+    // The bare id, and the exact label the model must write.
+    expect(content).toContain(id);
+    expect(content).toContain(`name: "${id}"`);
+    // And it is attributed, so a thesis claiming a different id reads as user
+    // text rather than as instruction (§ 6.2.4).
+    expect(content).toContain("from Agent Wolf");
+    // The id comes BEFORE the user's words, so no thesis can shadow it.
+    expect(content.indexOf(id)).toBeLessThan(content.indexOf(THESIS));
+  });
+
+  it("hypotheses_create: seedMessage puts the id first and the thesis last, unaltered", () => {
+    // Driven directly so the ordering rule is pinned without a whole route.
+    const msg = seedMessage("abcd1234", "gold up because money printer");
+    expect(msg).toContain("`abcd1234`");
+    expect(msg).toContain('name: "abcd1234"');
+    expect(msg.endsWith("gold up because money printer")).toBe(true);
+    expect(msg.indexOf("abcd1234")).toBeLessThan(msg.indexOf("gold up"));
   });
 
   it("🔴 the 201 is NOT sent until Orange reports the interview turn in flight", async () => {

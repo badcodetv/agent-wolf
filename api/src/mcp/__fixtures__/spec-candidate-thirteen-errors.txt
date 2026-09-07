@@ -1,0 +1,44 @@
+Gold rises with currency debasement (M2); spread must not lag by 20 ppts
+{
+  "thesis": "Gold rises with currency debasement as measured by M2 money supply growth. Over a 6-month horizon, gold should at least keep pace with M2 expansion.",
+  "horizon_days": 180,
+  "metrics": [
+    {
+      "slug": "m2",
+      "source": "fred",
+      "series_id": "WM2NS",
+      "direction": "up",
+      "weight": 0.3
+    },
+    {
+      "slug": "gold",
+      "source": "yahoo",
+      "series_id": "GC=F",
+      "direction": "up",
+      "weight": 0.3
+    },
+    {
+      "slug": "gold-m2-spread",
+      "source": "derived",
+      "direction": "up",
+      "weight": 0.4,
+      "method": {
+        "description": "Percentage-point spread between gold's return and M2's return, both measured from trial start. A negative spread means gold is lagging M2.",
+        "formula": "((gold / gold_0) - 1) * 100 - ((m2 / m2_0) - 1) * 100",
+        "constituents": ["gold", "m2"],
+        "source_series": {
+          "gold": { "source": "yahoo", "id": "GC=F" },
+          "m2": { "source": "fred", "id": "WM2NS" }
+        }
+      }
+    }
+  ],
+  "invalidation": [
+    {
+      "metric": "gold-m2-spread",
+      "statistic": "value",
+      "comparison": "lte",
+      "threshold": -20
+    }
+  ]
+}

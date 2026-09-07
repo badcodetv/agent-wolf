@@ -268,13 +268,20 @@ describe("mcp_auth rejects an unauthenticated or wrongly-authenticated call", ()
 });
 
 describe("mcp_tools_list schema", () => {
-  it("lists both tools with complete JSON Schema", async () => {
+  it("lists all three tools with complete JSON Schema", async () => {
     const { base } = await harness();
     const res = await rpc(base, { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
     const tools: any[] = res.json.result.tools;
     const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
 
-    expect(Object.keys(byName).sort()).toEqual(["series_fetch", "series_search"]);
+    // `spec_validate` joined the two market-data tools when the interviewer
+    // turned out to have no way to check a spec before depositing it — see
+    // specvalidate.ts. Listed here so a fourth tool cannot arrive unnoticed.
+    expect(Object.keys(byName).sort()).toEqual([
+      "series_fetch",
+      "series_search",
+      "spec_validate",
+    ]);
 
     for (const tool of tools) {
       expect(tool.description).toBeTruthy();
@@ -299,13 +306,22 @@ describe("mcp_tools_list schema", () => {
     expect(byName.series_fetch.inputSchema.properties.from.description).toContain("YYYY-MM-DD");
     expect(byName.series_fetch.inputSchema.properties.to.description).toContain("YYYY-MM-DD");
 
-    // Both descriptions tell the model to curl the URL to a FILE rather
-    // than echo it or print the bytes.
-    for (const tool of tools) {
+    // The two MARKET-DATA descriptions tell the model to curl the URL to a
+    // FILE rather than echo it or print the bytes. Scoped to those two by
+    // name: this loop used to run over every tool, so adding `spec_validate`
+    // — which hands back no URL and no bytes — failed it. The rule is about
+    // the byte path, not about being a tool.
+    for (const tool of [byName.series_search, byName.series_fetch]) {
       expect(tool.description).toContain("curl");
       expect(tool.description).toContain("FILE");
       expect(tool.description.toLowerCase()).toContain("do not print");
     }
+
+    // `spec_validate` has its own contract: one string parameter, and a
+    // description that tells the model to run it BEFORE depositing.
+    expect(byName.spec_validate.inputSchema.required).toEqual(["content"]);
+    expect(byName.spec_validate.description).toContain("BEFORE you deposit");
+    expect(byName.spec_validate.description).toContain("writes nothing");
     // …and series_search states that Stooq results omit first/last.
     expect(byName.series_search.description).toContain("null");
   });

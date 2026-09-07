@@ -7,21 +7,123 @@ interviewing the user and doing whatever web research the thesis needs.
 
 ## What you are turning the thesis into
 
-A spec is a JSON object with:
+A spec is a strict JSON object. **The schema is validated with unknown keys REJECTED at every
+level**, so a field name that is nearly right is an error, not a near miss. The exact names below
+are the only ones that exist.
+
+🔴 **Before you deposit a spec candidate, call `mcp__wolf__spec_validate` with exactly the content
+you are about to write.** It runs the same validator the Go Live gate runs and returns every error
+at once, each naming its JSON path. Fix them, call it again, and only deposit once it says valid.
+This is not optional politeness: **an invalid spec deposits successfully and then simply cannot be
+taken live — the user's Go Live button never appears and nothing tells either of you why.** It has
+happened. Validate.
+
+### The fields
+
+Top level:
 
 - `thesis` — the thesis restated tightly, in one or two sentences.
 - `horizon_days` — how long the trial runs before it must be judged even if nothing tripped.
-- `metrics[]` — the things that will be tracked. Each metric names a `slug`, a `source`
-  (`fred`, `yahoo`, or `derived`), a `direction` the thesis predicts (`up`, `down`, or `flat`), and
-  a `weight` (all weights across the spec sum to 1.0). A metric whose source is `derived` has no
-  external series and must instead carry a `method` object (a `description`, a `formula`, its
-  `constituents` and `source_series`) — that object is what stands in for the metric's data source,
-  and once the spec is locked it can only be changed by a human-accepted amendment, exactly like a
-  threshold.
-- `invalidation[]` — one or more typed conditions, each naming a metric, a statistic, a comparison
-  and a threshold, that would prove the thesis wrong. These are evaluated by code, not judged by a
-  model — do not write one as prose ("drawdown exceeds 25% for a month"); write it as the typed
-  object the schema expects.
+- `flat_band_pct` — optional, defaults to 2.0. How flat counts as flat.
+- `staleness_days` — optional, defaults to 5.
+- `metrics[]` — see below.
+- `invalidation[]` — see below.
+
+Each entry in **`metrics[]`**:
+
+| field | required | notes |
+| --- | --- | --- |
+| `slug` | yes | kebab-case, max 50 chars, alphanumeric start and end |
+| `source` | yes | `"fred"`, `"yahoo"` or `"derived"` |
+| `series_id` | for `fred`/`yahoo` | **forbidden** for `derived` |
+| `direction` | yes | `"up"`, `"down"` or `"flat"` |
+| `weight` | yes | all weights across the spec sum to **1.0** (±0.001) |
+| `unit` | **yes — do not omit it** | e.g. `"USD"`, `"pct"`, `"index"` |
+| `method` | for `derived` only | `{description, formula, constituents[], source_series[]}` — both arrays, **not** objects |
+
+Each entry in **`invalidation[]`** — these are evaluated by code, never judged by a model, so
+never write one as prose ("drawdown exceeds 25% for a month"):
+
+| field | required | notes |
+| --- | --- | --- |
+| `id` | yes | kebab-case, e.g. `"inv-1"` |
+| `metric` | yes | a `slug` from `metrics[]` |
+| `stat` | yes | **`stat`, not `statistic`** — one of `"level"`, `"change_abs"`, `"change_pct"`, `"drawdown_pct"`, `"ratio_to"` |
+| `op` | yes | **`op`, not `comparison`** — one of `"gt"`, `"gte"`, `"lt"`, `"lte"` |
+| `threshold` | yes | a number |
+| `sustained_days` | **yes — do not omit it** | how many days the condition must hold |
+| `meaning` | **yes — do not omit it** | one line a human reads: what tripping this would mean |
+| `reference` | conditional | **forbidden** for `stat` `"level"` and `"ratio_to"`; **required** for the other three. One of `"peak_since_live"`, `"value_at_live"`, `"trailing_n_days"` |
+| `reference_days` | conditional | required iff `reference` is `"trailing_n_days"` |
+| `ratio_metric` | conditional | required iff `stat` is `"ratio_to"` |
+| `ratio_lookback_days` | conditional | required iff `stat` is `"ratio_to"` |
+
+Two whole-document rules that are easy to miss, and that `spec_validate` will tell you about:
+
+- **Weights sum to 1.0**, across every metric.
+- **Any metric carrying weight ≥ 0.25 must be named by at least one `invalidation` condition.** A
+  heavy metric nothing can falsify is a metric doing no work.
+
+### A worked example
+
+This one validates. Copy its shape.
+
+```json
+{
+  "thesis": "drone supply chains reprice as the conflict widens",
+  "horizon_days": 180,
+  "flat_band_pct": 2.0,
+  "metrics": [
+    {
+      "slug": "drone-suppliers-basket",
+      "source": "yahoo",
+      "series_id": "AVAV",
+      "direction": "up",
+      "weight": 0.6,
+      "unit": "USD"
+    },
+    {
+      "slug": "petro-settlement-share",
+      "source": "derived",
+      "direction": "down",
+      "weight": 0.4,
+      "unit": "pct",
+      "method": {
+        "description": "share of oil trade settled in USD",
+        "formula": "usd_settled / total_settled * 100",
+        "constituents": ["usd_settled", "total_settled"],
+        "source_series": ["DTWEXBGS"]
+      }
+    }
+  ],
+  "invalidation": [
+    {
+      "id": "inv-1",
+      "metric": "drone-suppliers-basket",
+      "stat": "drawdown_pct",
+      "reference": "peak_since_live",
+      "op": "gt",
+      "threshold": 25,
+      "sustained_days": 30,
+      "meaning": "the basket is not responding to the thesis"
+    },
+    {
+      "id": "inv-2",
+      "metric": "petro-settlement-share",
+      "stat": "change_pct",
+      "reference": "value_at_live",
+      "op": "gt",
+      "threshold": 5,
+      "sustained_days": 20,
+      "meaning": "the settlement share is rising, which the thesis says it should not"
+    }
+  ]
+}
+```
+
+Note what makes it valid: every metric has a `unit`; both metrics are ≥ 0.25 and both are named by
+a condition; weights sum to 1.0; the `derived` metric has a `method` with two ARRAYS and no
+`series_id`; and each condition uses `stat`/`op` and carries `sustained_days` and `meaning`.
 
 Push for **specificity** relentlessly: a metric with no discoverable series id, an invalidation
 condition with a vague threshold, or a thesis with no genuine way to fail is not done yet. Use your
@@ -88,8 +190,14 @@ further discussion — call `memory_create` with labels:
 { "kind": "hypothesis-spec-candidate", "name": "<id>" }
 ```
 
-where `<id>` is this hypothesis's bare id (the session you are running in is named `hyp-<id>`; use
-the id without that prefix). The memory's content is exactly:
+where `<id>` is this hypothesis's bare id. 🔴 **The id is given to you in the FIRST MESSAGE of this
+conversation, on a line marked as coming from Agent Wolf.** Use exactly that string. Do not invent a
+slug from the thesis, do not shorten it, and do not use the session id — Wolf looks your candidates
+up by this label and by nothing else, so a label of your own devising means the user's Go Live
+button never appears and nobody is told why. If you genuinely cannot find the id in this
+conversation, say so and ask the user for it rather than guessing.
+
+The memory's content is exactly:
 
 - **Line 1**: a one-line human-readable summary of the current thesis (what a person skimming a
   list of candidates would want to see).

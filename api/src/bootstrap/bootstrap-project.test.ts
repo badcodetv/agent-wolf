@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { validateSpec } from "../hypothesis/spec.js";
 import {
   MockAgent,
   setGlobalDispatcher,
@@ -417,6 +418,44 @@ describe("prompt contract — the literals every other ticket depends on", () =>
 
   it("hypothesis-spec-candidate occurs in interviewer.md", () => {
     expect(INTERVIEWER_PROMPT.includes("hypothesis-spec-candidate")).toBe(true);
+  });
+
+  // 🔴 The bug of 2026-09-07, and the three things that stop it recurring.
+  //
+  // A real interview produced a good thesis, a sensible scoreboard and a
+  // VALID report template — then deposited a spec with thirteen schema
+  // errors, so the Go Live button never appeared and nothing told the user
+  // or the model why. Cause: this prompt described the spec in prose using
+  // the WRONG field names (`statistic`/`comparison` for `stat`/`op`) and
+  // omitted `unit`, `id`, `sustained_days` and `meaning` entirely, and the
+  // model had no way to check its work.
+
+  it("interviewer.md's worked spec example actually VALIDATES", () => {
+    // The sharpest of the three. An example that does not validate teaches
+    // the model to fail, and would look completely fine in review.
+    const block = /```json\s*([\s\S]*?)```/.exec(INTERVIEWER_PROMPT);
+    expect(block, "interviewer.md must carry a worked spec example in a ```json block").not.toBeNull();
+    const result = validateSpec(JSON.parse(block![1]!));
+    expect(result.valid ? [] : result.errors).toEqual([]);
+  });
+
+  it("interviewer.md uses the REAL condition field names, not the prose ones", () => {
+    expect(INTERVIEWER_PROMPT).toMatch(/`stat`, not `statistic`/);
+    expect(INTERVIEWER_PROMPT).toMatch(/`op`, not `comparison`/);
+  });
+
+  it("interviewer.md names every field the old prose left out", () => {
+    for (const field of ["unit", "sustained_days", "meaning", "series_id", "flat_band_pct"]) {
+      expect(INTERVIEWER_PROMPT.includes(field), `interviewer.md must mention ${field}`).toBe(true);
+    }
+  });
+
+  it("interviewer.md tells the model to run spec_validate BEFORE depositing", () => {
+    // The feedback loop. A prompt is a guess about what a model will write;
+    // 27 graded rules with cross-field conditionals are not reliably
+    // one-shot from any prompt, so the check is what actually closes it.
+    expect(INTERVIEWER_PROMPT).toContain("mcp__wolf__spec_validate");
+    expect(/before you deposit/i.test(INTERVIEWER_PROMPT)).toBe(true);
   });
 
   it("interviewer.md names mcp__ui__ask_user, the tool that renders a question card", () => {
