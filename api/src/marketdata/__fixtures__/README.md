@@ -156,46 +156,78 @@ timestamp,value
 One row, `rows: 1`, reported as a success. `guard.test.ts`'s first test
 measures exactly that, so the reason `guard.ts` exists cannot be lost.
 
-## Yahoo Finance — `yahoo-429-body.txt` RECORDED, chart/search fixtures NOT YET
+## Yahoo Finance — ALL RECORDED 2026-09-07
 
 `yahoo-429-body.txt` is the verbatim body Yahoo returns when it refuses a
 request — 18 bytes, `Too Many Requests`, served as `text/html` with HTTP
-429. Recorded **2026-09-07** from both `query1` and `query2`. It is what a
-missing browser-style `User-Agent` provokes, and also what a genuine per-IP
-throttle returns.
+429.
 
-🔴 **The chart and search fixtures are NOT recorded.** Yahoo throttled this
-IP for the entire duration of the ticket that added `yahoo.ts`, so
-`yahoo.test.ts` tests our own logic against the observed response SHAPE and
-says so in its header. The shape was verified live earlier the same day
-(`GC=F` returned 1,261 daily bars for 2021-09-07→2026-09-07, adjusted-close
-column present, last close 4476.60) but those bytes were not kept, so
-nothing may be described as recorded.
+🔴 **That 429 is a User-Agent blocklist, not a rate limit.** Measured five
+trials per value against the same URL, in both orderings:
 
-**To record them once the throttle clears** (all four, with a browser
-User-Agent, `period1`/`period2` spanning Christmas and New Year so the
-holiday-gap handling is pinned):
+| `User-Agent` | Status |
+| --- | --- |
+| `agent-wolf/0.1 (+https://github.com/…)` | **200** |
+| `Mozilla/5.0` | 200 |
+| `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36` | 200 |
+| `Mozilla/5.0 (…) Chrome/126.0.0.0 Safari/537.36` | **429** |
+| `curl/8.5.0` | 429 |
+| `python-requests/2.32.3` | 429 |
+| *(none)* | 429 |
+
+An honest identifier is accepted; a spoofed browser string and the two
+best-known generic HTTP clients are refused. `yahoo.ts` originally shipped
+the Chrome string as its default, on the belief that a browser UA was
+*required* — the exact opposite, and it meant every call would fail. R264.
+**Record fixtures with the honest UA below; a browser UA gets you a 429 and
+a false story about throttling.**
+
+### The five recorded bodies
 
 ```sh
-UA='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
-P1=$(python3 -c "import datetime;print(int(datetime.datetime(2025,12,19,tzinfo=datetime.timezone.utc).timestamp()))")
-P2=$(python3 -c "import datetime;print(int(datetime.datetime(2026,1,7,tzinfo=datetime.timezone.utc).timestamp()))")
+UA='agent-wolf/0.1 (+https://github.com/binocarlos/badcode-agent-orange)'
+P1=1766102400   # 2025-12-19T00:00:00Z
+P2=1767744000   # 2026-01-07T00:00:00Z
 D=api/src/marketdata/__fixtures__
 
-curl -sS -H "User-Agent: $UA" -o $D/yahoo-chart-gcf.json \
+curl -sS -H "User-Agent: $UA" -H "Accept: application/json" -o $D/yahoo-chart-gcf.json \
   "https://query2.finance.yahoo.com/v8/finance/chart/GC=F?interval=1d&period1=$P1&period2=$P2"
-curl -sS -H "User-Agent: $UA" -o $D/yahoo-chart-btcusd.json \
+curl -sS -H "User-Agent: $UA" -H "Accept: application/json" -o $D/yahoo-chart-gld.json \
+  "https://query2.finance.yahoo.com/v8/finance/chart/GLD?interval=1d&period1=$P1&period2=$P2"
+curl -sS -H "User-Agent: $UA" -H "Accept: application/json" -o $D/yahoo-chart-btcusd.json \
   "https://query2.finance.yahoo.com/v8/finance/chart/BTC-USD?interval=1d&period1=$P1&period2=$P2"
-curl -sS -H "User-Agent: $UA" -o $D/yahoo-search-gold.json \
+curl -sS -H "User-Agent: $UA" -H "Accept: application/json" -o $D/yahoo-search-gold.json \
   "https://query2.finance.yahoo.com/v1/finance/search?q=gold&quotesCount=6&newsCount=0"
-curl -sS -H "User-Agent: $UA" -o $D/yahoo-chart-notfound.json \
+curl -sS -H "User-Agent: $UA" -H "Accept: application/json" -o $D/yahoo-chart-notfound.json \
   "https://query2.finance.yahoo.com/v8/finance/chart/NOTAREALTICKER123?interval=1d&range=5d"
 ```
 
-Then add a `yahoo-recorded.test.ts` pinning, against those bytes: the
-`meta.gmtoffset`-to-trading-date mapping on a real GC=F bar; that
-`indicators.adjclose` is present for `GLD` and absent for `GC=F`/`BTC-USD`;
-whether a search quote carries a `currency` field (`searchUnit` reads one if
-it is there and reports `""` if not — the real response settles which);
-and the exact `chart.error` shape for an unknown symbol.
+The window 2025-12-19 → 2026-01-07 is chosen to span Christmas Day and New
+Year's Day, so the holiday behaviour is pinned: the equity and futures
+series simply have **no bar** on those days (not a null one), while
+`BTC-USD` has one every calendar day — 11 bars vs 20 over the same range.
+
+`yahoo-chart-notfound.json` came back on **HTTP 404** with exactly
+`{"chart":{"result":null,"error":{"code":"Not Found","description":"No data
+found, symbol may be delisted"}}}`.
+
+### What these fixtures established, that a shape test could not
+
+`yahoo-recorded.test.ts` asserts all of it. Two of these contradicted what
+`yahoo.ts` claimed when it was written (R265):
+
+- **Futures and crypto DO carry `indicators.adjclose`.** The header said
+  they do not. All three symbols have it, and over this window it is
+  byte-identical to `close` (no dividend or split falls inside).
+- **A search hit has no `currency` field at all** — absent, not null, on all
+  six hits. So `searchUnit` reporting `""` is right and guessing `"USD"`
+  would have been a fabrication. (A first draft of the test asserted
+  "present and null", because `dict.get()` in Python returns `None` for both
+  a missing key and a null value. `Object.hasOwn` corrected it.)
+- **`meta.gmtoffset` is load-bearing and non-uniform.** `GC=F` bars sit at
+  05:00 UTC on most days and 14:30 UTC on the Christmas Eve half-day;
+  `GLD` sits at 14:30 UTC; `BTC-USD` has `gmtoffset: 0` and sits at 00:00.
+  The exchange-local conversion puts all of them on the right date.
+- **Yahoo sends full float precision** — `4361.39990234375` for GC=F on
+  2025-12-19 — and the connector stores it unrounded.
 

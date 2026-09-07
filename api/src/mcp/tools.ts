@@ -29,6 +29,7 @@ import { z } from "zod";
 import { WolfError, type WolfErrorKind } from "../errors.js";
 import { createCache, DEFAULT_TTL_MS, type MarketDataCache } from "../marketdata/cache.js";
 import { createFredClient, DEFAULT_TIMEOUT_MS } from "../marketdata/fred.js";
+import { SERIES_SOURCES, type SeriesSource } from "../marketdata/sources.js";
 import { countDataRows, normalise } from "../marketdata/normalise.js";
 import {
   createStooqClient,
@@ -42,9 +43,10 @@ import {
   signSeriesToken,
 } from "./seriesdownload.js";
 
-export type SeriesSource = "fred" | "stooq" | "yahoo";
-
-export const SERIES_SOURCES = ["fred", "stooq", "yahoo"] as const;
+// The provider list lives in ONE place — see marketdata/sources.ts for the
+// bug that made that necessary. Re-exported here because every existing
+// caller imports it from this module.
+export { SERIES_SOURCES, type SeriesSource } from "../marketdata/sources.js";
 
 /**
  * The unit `series_fetch` reports per source, when the provider pins one for

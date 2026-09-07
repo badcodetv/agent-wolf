@@ -1,27 +1,18 @@
 /**
  * The Yahoo Finance connector.
  *
- * 🔴 **Fixture provenance — read this before trusting a green run.**
+ * **Fixture provenance.** The chart and search bodies used below are
+ * **constructed to the response shape, not recorded** — they exist to drive
+ * individual branches (a null value, a length mismatch, a missing value
+ * column) that a real response does not conveniently contain.
  *
- * The chart and search bodies used below are **constructed to the observed
- * response shape, not recorded**. Yahoo throttles per IP for tens of
- * minutes at a time, and this environment was inside such a window for the
- * whole of this ticket: every request to `query1`/`query2` answered HTTP
- * 429 with the body `Too Many Requests` (that 429 body IS recorded, at
- * `__fixtures__/yahoo-429-body.txt`, and is used by `guard.test.ts`).
+ * The recorded half lives in **`yahoo-recorded.test.ts`**, against five real
+ * bodies captured 2026-09-07. Read that file for anything you want to
+ * believe about what Yahoo actually returns; two claims in this connector's
+ * first draft were guesses and both were wrong (R264).
  *
- * The shape they are built to was verified against the live endpoint
- * earlier the same day — `GC=F` returned 1,261 daily bars for
- * 2021-09-07→2026-09-07 with an adjusted-close column present and a last
- * close of 4476.60 — but the bytes were not kept, so nothing here may be
- * described as a recorded fixture. This is the same honesty `stooq.ts`'s
- * header applies to its own parser: these are unit tests of OUR logic
- * against a documented shape, and they cannot catch Yahoo changing that
- * shape.
- *
- * `__fixtures__/README.md` § Yahoo carries the exact commands to record
- * the real thing, and `yahoo-recorded.test.ts` is the file to add when the
- * throttle clears. Until then the live-shape claim is testimony.
+ * These are unit tests of OUR logic. They cannot catch Yahoo changing its
+ * shape — that is the recorded file's job.
  */
 
 import { describe, expect, it } from "vitest";
@@ -123,7 +114,10 @@ describe("yahoo_pickValueSeries prefers adjusted close", () => {
     expect(picked).toEqual({ values: [5, 10], adjusted: true });
   });
 
-  it("falls back to close when there is no adjusted column (futures, crypto)", () => {
+  it("falls back to close when there is no adjusted column at all", () => {
+    // The parenthetical here used to read "(futures, crypto)". The recorded
+    // fixtures show both DO carry one, so this branch is defensive rather
+    // than routinely hit — which is why it is driven directly here.
     const picked = pickValueSeries({ indicators: { quote: [{ close: [10, 20] }] } });
     expect(picked).toEqual({ values: [10, 20], adjusted: false });
   });
@@ -236,13 +230,17 @@ describe("yahoo_fetch builds the right request", () => {
     indicators: { quote: [{ close: [4476.6] }] },
   };
 
-  it("sends a browser-style User-Agent — without it Yahoo answers 429", () => {
+  it("sends the honest User-Agent — a spoofed browser one is what Yahoo 429s", () => {
+    // This assertion used to require /Mozilla/, on the belief that Yahoo
+    // needs a browser UA. Measured: the opposite. A full Chrome string gets
+    // 429 five times out of five and an honest identifier gets 200. R264.
     const { impl, calls } = recordingFetch(chart(ONE_BAR));
     return createYahooClient({ fetchImpl: impl, baseUrl: BASE })
       .fetch("GC=F")
       .then(() => {
         expect(calls[0]!.headers["user-agent"]).toBe(DEFAULT_USER_AGENT);
-        expect(calls[0]!.headers["user-agent"]).toMatch(/Mozilla/);
+        expect(calls[0]!.headers["user-agent"]).toContain("agent-wolf");
+        expect(calls[0]!.headers["user-agent"]).not.toMatch(/Chrome\/|KHTML/);
       });
   });
 

@@ -44,6 +44,7 @@
 
 import { WolfError } from "../errors.js";
 import { guardCsvBody } from "./guard.js";
+import type { SeriesSource } from "./sources.js";
 import type { RawMarketDataRow } from "./normalise.js";
 import { DEFAULT_STOOQ_TICKERS } from "./stooq-tickers.js";
 
@@ -54,7 +55,8 @@ export interface StooqTicker {
 }
 
 export interface MarketDataSearchResult {
-  source: "fred" | "stooq" | "yahoo";
+  /** Derived — never written out as a union here. See ./sources.ts. */
+  source: SeriesSource;
   id: string;
   title: string;
   unit: string;

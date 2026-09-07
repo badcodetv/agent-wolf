@@ -34,7 +34,8 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { z } from "zod";
-import type { MarketDataAccess, SeriesSource } from "./tools.js";
+import { SERIES_SOURCES, type SeriesSource } from "../marketdata/sources.js";
+import type { MarketDataAccess } from "./tools.js";
 
 /** The path the route is mounted at, and the path minted URLs carry. Defined
  * once here so the minter and the router cannot disagree. */
@@ -60,7 +61,10 @@ export interface SeriesTokenPayload {
 }
 
 const payloadSchema = z.object({
-  source: z.enum(["fred", "stooq"]),
+  // Derived, NEVER written out again. A stale copy here mints tokens that
+  // this same route then rejects as "invalid or expired" — see
+  // marketdata/sources.ts.
+  source: z.enum(SERIES_SOURCES),
   id: z.string().min(1),
   from: z.string().optional(),
   to: z.string().optional(),

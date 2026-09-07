@@ -18,13 +18,38 @@
  *    rather than by returning an error. That is why every response goes
  *    through `guardJsonBody` before any field is read — see `guard.ts`.
  *
- * 2. **It requires a browser-style `User-Agent` or it returns HTTP 429**
- *    with the body `Too Many Requests` (recorded at
- *    `__fixtures__/yahoo-429-body.txt`). This is not a rate limit you have
- *    earned; it is how the endpoint refuses a client it does not like. It
- *    ALSO rate-limits per IP for real, for tens of minutes at a time, which
- *    a caller must expect: the guard reports both as `unavailable`, the one
- *    retryable kind.
+ * 2. **It refuses SOME `User-Agent` values with HTTP 429** and the body
+ *    `Too Many Requests` (recorded at `__fixtures__/yahoo-429-body.txt`).
+ *    That status is a lie: it is not a rate limit you have earned, it is a
+ *    User-Agent blocklist, and it is *deterministic* — the same UA gets the
+ *    same answer minutes apart, in either order, five times running.
+ *
+ *    🔴 **A realistic browser UA is BLOCKED. An honest one is not.**
+ *    Measured 2026-09-07 against the live chart endpoint, 5/5 and 2/2:
+ *
+ *        agent-wolf/0.1 (+https://github.com/…)                → 200
+ *        Mozilla/5.0                                           → 200
+ *        Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36    → 200
+ *        Mozilla/5.0 (…) Chrome/126.0.0.0 Safari/537.36        → 429
+ *        curl/8.5.0                                            → 429
+ *        python-requests/2.32.3                                → 429
+ *
+ *    This file originally shipped the full Chrome string as its default,
+ *    on the belief — stated in this header and in a commit message — that
+ *    Yahoo *requires* a browser UA. **It is the exact opposite, and every
+ *    call the connector made would have failed.** The 429s that produced
+ *    that belief were caused BY the UA, and were then misread as a per-IP
+ *    throttle because the honest-UA control was never run. See R264.
+ *
+ *    So `DEFAULT_USER_AGENT` identifies this software truthfully. That is
+ *    also the only defensible thing to send an unofficial endpoint whose
+ *    operator has not agreed to serve us: if they want to block Agent Wolf
+ *    they should be able to, and pretending to be Chrome takes that choice
+ *    away from them. If the honest UA is blocked one day, the answer is a
+ *    different data source, not a better disguise.
+ *
+ *    Genuine per-IP throttling is presumably possible too; the guard
+ *    reports either as `unavailable`, the one retryable kind.
  *
  * ── The value column ────────────────────────────────────────────────────
  *
@@ -33,8 +58,15 @@
  * equity or ETF series comparable with itself across a split or a dividend;
  * an unadjusted close silently steps on the split date and any invalidation
  * condition written as a percentage change reads that step as a real move.
- * Not every instrument has an adjusted column (futures and crypto do not),
- * so `close` is the documented fallback, never a co-equal choice.
+ * `close` is the fallback, never a co-equal choice.
+ *
+ * In the RECORDED fixtures the adjusted column is present for all three of
+ * `GC=F`, `GLD` and `BTC-USD`, and is byte-identical to `close` across
+ * their three-week window (no dividend or split falls in it). An earlier
+ * draft of this header asserted that futures and crypto carry no adjusted
+ * column; that was a guess and it is false. So the fallback branch is
+ * defensive rather than routinely exercised in production — which is
+ * exactly why `yahoo.test.ts` drives it directly.
  *
  * ── Dates ───────────────────────────────────────────────────────────────
  *
@@ -60,13 +92,14 @@ import type { MarketDataConnector, MarketDataSearchResult } from "./stooq.js";
 export const DEFAULT_TIMEOUT_MS = 10_000;
 
 /**
- * The `User-Agent` sent by default. Without a browser-style value the
- * endpoint answers 429 — see the file header. Overridable, but never empty:
+ * The `User-Agent` sent by default: an honest identification of this
+ * software, which the endpoint accepts where a spoofed Chrome string is
+ * refused with a 429 (see the file header for the measurements, and R264 for
+ * how the opposite belief got shipped). Overridable, but never empty:
  * `createYahooClient` refuses an empty one rather than making every call
  * fail with a rate-limit error that has nothing to do with rate limits.
  */
-export const DEFAULT_USER_AGENT =
-  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+export const DEFAULT_USER_AGENT = "agent-wolf/0.1 (+https://github.com/binocarlos/badcode-agent-orange)";
 
 /** How many search hits to ask for. Yahoo's own default is larger and noisier. */
 export const DEFAULT_QUOTES_COUNT = 10;
@@ -228,14 +261,19 @@ export function rowsFromChartResult(result: YahooChartResult, symbol: string): R
 /**
  * The unit a search hit reports.
  *
- * Yahoo's search endpoint does not reliably carry a currency, so this reads
- * one when present and otherwise reports the empty string rather than
- * guessing `"USD"` — a gold-in-GBP or a European ETF would make that guess
- * wrong in exactly the case where the unit matters. The authoritative
- * currency for a series is `meta.currency` on the CHART response;
- * surfacing it through `series_fetch` needs a change to
- * `MarketDataConnector.fetch`'s return type, which is deliberately not part
- * of this change (see this ticket's Discovered Issues Log entry).
+ * Yahoo's search endpoint carries a `currency` KEY and, in the recorded
+ * response, its value is `null` on every hit — equity, futures and ETF
+ * alike (`__fixtures__/yahoo-search-gold.json`). So the field exists, is
+ * never populated, and this reports the empty string rather than guessing
+ * `"USD"`: a gold-in-GBP or a European ETF would make that guess wrong in
+ * exactly the case where the unit matters. The `typeof === "string"` branch
+ * is kept for the day Yahoo starts filling it in.
+ *
+ * The authoritative currency for a series is `meta.currency` on the CHART
+ * response — `"USD"` for all three recorded symbols — and surfacing it
+ * through `series_fetch` needs a change to `MarketDataConnector.fetch`'s
+ * return type, which is deliberately not part of this change (see this
+ * ticket's Discovered Issues Log entry).
  */
 export function searchUnit(quote: YahooSearchQuote): string {
   return typeof quote.currency === "string" && quote.currency.length > 0 ? quote.currency : "";

@@ -16,6 +16,7 @@
 
 import { z } from "zod";
 import { WolfError, type WolfErrorKind } from "../errors.js";
+import { SERIES_SOURCES } from "../marketdata/sources.js";
 
 /* ------------------------------------------------------------------ */
 /* enums and constants                                                 */
@@ -24,14 +25,20 @@ import { WolfError, type WolfErrorKind } from "../errors.js";
 /**
  * V9 — the only providers that exist (§ Out of Scope).
  *
+ * DERIVED from `marketdata/sources.ts` — the fetchable providers plus
+ * `derived`, which is what this list always meant. It used to be written
+ * out by hand, which is how a third hand-written copy of the same list (in
+ * `mcp/seriesdownload.ts`) got missed when `yahoo` was added; read that
+ * module's header before adding a provider.
+ *
  * `yahoo` was added 2026-09-07: `stooq` is dead (it answers every request
  * with a browser-verification page — see marketdata/guard.ts) and FRED has
  * no daily gold series, so without it a hard-asset thesis had no price
- * source. `stooq` is KEPT in the enum rather than removed: specs already
- * locked with a stooq metric must stay valid, and the connector now fails
- * loudly instead of inventing data.
+ * source. `stooq` is KEPT rather than removed: specs already locked with a
+ * stooq metric must stay valid, and the connector now fails loudly instead
+ * of inventing data.
  */
-export const METRIC_SOURCES = ["fred", "stooq", "yahoo", "derived"] as const;
+export const METRIC_SOURCES = [...SERIES_SOURCES, "derived"] as const;
 export type MetricSource = (typeof METRIC_SOURCES)[number];
 
 /** V10 — the enum § "The support score" reads. */
@@ -339,7 +346,13 @@ function semanticErrors(input: unknown): SpecError[] {
             'a "derived" metric requires method, with a non-empty description and a non-empty formula (V15)',
         });
       }
-    } else if (source === "fred" || source === "stooq") {
+    } else if ((SERIES_SOURCES as readonly string[]).includes(source as string)) {
+      // Was `source === "fred" || source === "stooq"` — a FOURTH hand-written
+      // copy of the provider list, and it silently excluded `yahoo`: a yahoo
+      // metric with no series_id validated, went live, and left the daily
+      // researcher with nothing to fetch. Derived from SERIES_SOURCES now, so
+      // "a fetchable source needs a series id" is the rule rather than a list
+      // of names. See marketdata/sources.ts and R266.
       if (typeof seriesId !== "string" || seriesId.length === 0) {
         errors.push({
           path: `${at}.series_id`,

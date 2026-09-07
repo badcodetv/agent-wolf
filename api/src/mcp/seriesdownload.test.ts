@@ -19,6 +19,7 @@ import {
   verifySeriesToken,
   type SeriesTokenPayload,
 } from "./seriesdownload.js";
+import { SERIES_SOURCES } from "../marketdata/sources.js";
 import { createMarketDataAccess, type MarketDataAccess } from "./tools.js";
 
 const SECRET = "test-series-secret-value-not-a-real-credential";
@@ -131,6 +132,49 @@ describe("mcp_series_download route", () => {
 
     expect(res.status).toBe(200);
     expect(access.calls).toEqual(["stooq|avav.us|2026-01-01|2026-02-01"]);
+  });
+
+  // 🔴 THE TEST THAT WAS MISSING, and the bug it would have caught.
+  //
+  // This route's token payload schema carried its OWN hand-written
+  // `z.enum(["fred", "stooq"])`, a third copy of the provider list. When
+  // `yahoo` was added, `series_fetch` minted a perfectly valid yahoo
+  // download URL and this route rejected it with `invalid or expired
+  // token` — the signature-shaped message, for what was really an
+  // unknown-enum-value rejection. It read like a crypto or clock fault and
+  // was a stale list, and it was found by fetching a real gold series
+  // through the deployed stack, not by any test.
+  //
+  // Iterating SERIES_SOURCES is the fix that stays fixed: adding a fourth
+  // provider extends this loop automatically, so the next one cannot be
+  // half-wired. Do NOT rewrite this as a literal list.
+  it.each([...SERIES_SOURCES])("accepts a token for source '%s'", async (source) => {
+    const access = accessReturning(CSV);
+    const base = await listen(
+      appAround(createSeriesDownloadRouter({ secret: SECRET, access, nowSec: () => nowSec })),
+    );
+
+    const scoped = token({ source, id: "SOME-ID", from: "2026-01-01", to: "2026-02-01" });
+    const res = await fetch(`${base}${SERIES_DOWNLOAD_PATH}?token=${encodeURIComponent(scoped)}`);
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe(CSV);
+    expect(access.calls).toEqual([`${source}|SOME-ID|2026-01-01|2026-02-01`]);
+  });
+
+  it("still rejects a source that is not a provider at all", async () => {
+    // The enum is doing real work, not just passing everything through.
+    const access = accessReturning(CSV);
+    const base = await listen(
+      appAround(createSeriesDownloadRouter({ secret: SECRET, access, nowSec: () => nowSec })),
+    );
+
+    const bogus = token({ source: "quandl" as never, id: "X" });
+    const res = await fetch(`${base}${SERIES_DOWNLOAD_PATH}?token=${encodeURIComponent(bogus)}`);
+
+    expect(res.status).toBe(403);
+    // And the provider was never reached.
+    expect(access.calls).toEqual([]);
   });
 
   // The four graded rejection cases. All four bodies must be byte-identical:

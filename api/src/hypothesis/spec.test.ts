@@ -1,8 +1,10 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { WolfError } from "../errors.js";
+import { SERIES_SOURCES } from "../marketdata/sources.js";
 import {
   LABEL_VALUE_PATTERN,
+  METRIC_SOURCES,
   present,
   specValidationError,
   validateSpec,
@@ -19,6 +21,35 @@ import {
 //   grep -oE '\bV[0-9]+\b' | sort -V -u    ->  V1 .. V27, no gaps
 // so nothing outside the 54 `it(...)` title lines may match the first regex,
 // and no rule token outside 1..27 may appear anywhere in the file.
+
+/* ------------------------------------------------------------------ */
+/* the two invariants that used to be a comment                        */
+/* ------------------------------------------------------------------ */
+
+// The header above documents two greps W3's Validation block runs against
+// this file, and asks a reader to keep them true by hand. I broke both
+// while adding `yahoo` — three extra titles matching the first regex — and
+// nothing failed, because a documented invariant nobody executes is a
+// decoration (this repo's own rule). So it executes now.
+describe("spec_test_invariants", () => {
+  const source = readFileSync(new URL(import.meta.url), "utf8");
+
+  it("has exactly 54 rule-case titles: one accepting and one rejecting per rule", () => {
+    // Built from parts so this file's own assertion cannot match its own
+    // regex and inflate the count it is checking.
+    const re = new RegExp(`V[0-9]+ (${"accepts"}|${"rejects"})`, "g");
+    expect(source.match(re)?.length).toBe(2 * 27);
+  });
+
+  it("mentions rule tokens V1 through V27 and no others", () => {
+    const tokens = new Set(
+      (source.match(new RegExp(`\\bV[0-9]+\\b`, "g")) ?? []).map((t) => Number(t.slice(1))),
+    );
+    expect([...tokens].sort((a, b) => a - b)).toEqual(
+      Array.from({ length: 27 }, (_, i) => i + 1),
+    );
+  });
+});
 
 /* ------------------------------------------------------------------ */
 /* fixtures                                                            */
@@ -302,13 +333,41 @@ describe("validateSpec — metrics", () => {
     reject(s, "metrics[0].source");
   });
 
-  it("V9 accepts yahoo, the provider that replaced dead Stooq", () => {
+  // 🔴 The V14 gap R266 found by grepping for the VALUES rather than the
+  // constant name. `else if (source === "fred" || source === "stooq")` was a
+  // fourth hand-written copy of the provider list, and it left `yahoo` out:
+  // a yahoo metric with no series_id validated, could go live, and left the
+  // daily researcher with nothing to fetch.
+  //
+  // Iterating SERIES_SOURCES is what makes it stay fixed — a fourth provider
+  // extends this automatically. Do NOT rewrite as a literal list.
+  it.each([...SERIES_SOURCES])("V14 requires a series_id for source '%s'", (source) => {
+    const s = base();
+    s.metrics[0].source = source;
+    delete s.metrics[0].series_id;
+    const errs = errorsOf(s);
+    expect(errs.some((e) => e.path === "metrics[0].series_id")).toBe(true);
+  });
+
+  it.each([...SERIES_SOURCES])("V14 also permits source '%s' when a series_id is present", (source) => {
+    const s = base();
+    s.metrics[0].source = source;
+    s.metrics[0].series_id = "SOME-ID";
+    expect(accept(s).metrics[0]!.source).toBe(source);
+  });
+
+  it("METRIC_SOURCES is exactly the fetchable providers plus 'derived'", () => {
+    // The derivation itself, so nobody re-hand-writes it.
+    expect([...METRIC_SOURCES]).toEqual([...SERIES_SOURCES, "derived"]);
+  });
+
+  it("V9 also permits yahoo, the provider that replaced dead Stooq", () => {
     const s = base();
     s.metrics[0].source = "yahoo";
     expect(accept(s).metrics[0]!.source).toBe("yahoo");
   });
 
-  it("V9 still accepts stooq, so specs locked before it died stay valid", () => {
+  it("V9 still permits stooq, so specs locked before it died stay valid", () => {
     // Stooq is kept in the enum deliberately. Removing it would invalidate
     // every already-locked spec that names a stooq metric; the connector
     // now fails loudly instead of fabricating rows.
