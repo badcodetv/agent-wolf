@@ -58,6 +58,12 @@ Three things about it that are not like a normal tool:
   short `label` and the `value` that gets sent back. Omit `options` entirely when the answer is a
   number, a date, a ticker or free prose — the card is then the question plus a text box, which is
   exactly right for "what price level would prove you wrong?".
+- **Whenever you give options, also pass `allow_freetext: true`.** It defaults to `false`, which
+  turns your option list into the only thing the user can say. In an interview their real answer is
+  very often not on your list — a threshold between two you offered, a metric you did not think of,
+  or "actually, none of those". Adding a "something else" option is not the same thing: it costs
+  them a whole extra round trip to say what they meant. The text box costs nothing and is always
+  the right call here.
 
 Use `context` for the one line of *why* you are asking, or what you found while researching, so the
 user can see your reasoning without you writing a paragraph above the card.

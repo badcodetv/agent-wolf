@@ -430,6 +430,15 @@ describe("prompt contract — the literals every other ticket depends on", () =>
     expect(INTERVIEWER_PROMPT.includes("mcp__ui__ask_user")).toBe(true);
   });
 
+  it("interviewer.md tells the model to pass allow_freetext with its options", () => {
+    // Observed against the real model on 2026-09-07: told to use the card,
+    // it gave four options and left `allow_freetext` at its default false —
+    // trapping the user in the list. The tool cannot default it to true when
+    // options are present without changing every existing Orange product's
+    // cards, so the interviewer prompt is where this belongs.
+    expect(INTERVIEWER_PROMPT.includes("allow_freetext: true")).toBe(true);
+  });
+
   it("interviewer.md tells the model to ask ONE question and then stop", () => {
     // The half of the instruction that is easy to lose in an edit. The
     // answer arrives as a NEW user message, so a second card in the same
