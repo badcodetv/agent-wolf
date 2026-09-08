@@ -138,7 +138,7 @@ describe("the sign-in gate", () => {
     stubFetchRoutes({ [ME]: { status: 401, json: { kind: "forbidden", message: "not signed in" } } });
     renderWithProviders(<AuthenticatedApp />);
     await settle();
-    expect(screen.getByTestId("dev-submit")).toBeInTheDocument();
+    expect(screen.getByTestId("sign-in")).toBeInTheDocument();
     expect(screen.queryByTestId("sign-out")).toBeNull();
   });
 
@@ -166,6 +166,6 @@ describe("the sign-in gate", () => {
 
     expect(stub.countFor("POST /api/auth/logout")).toBe(1);
     expect(stub.calls.some((call) => call === "GET /api/auth/logout")).toBe(false);
-    expect(screen.getByTestId("dev-submit")).toBeInTheDocument();
+    expect(screen.getByTestId("sign-in")).toBeInTheDocument();
   });
 });
