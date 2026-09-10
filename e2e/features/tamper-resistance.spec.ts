@@ -190,8 +190,8 @@ print(json.dumps({"id": created.get("id"),
     expect(retraction.created_by_session).toBe(hyp.sessionId);
     expect(retraction.created_by_worker).toBe("interviewer");
 
-    // 4. Orange really did hide the row from the default read — the attack
-    //    landed, and it is Wolf that refuses to be fooled by it, not Orange.
+    // 4. Bob really did hide the row from the default read — the attack
+    //    landed, and it is Wolf that refuses to be fooled by it, not Bob.
     const defaultRead = await listMemories(`kind=hypothesis,name=${hyp.id}`);
     expect(
       defaultRead.some((r) => r.id === trusted!.id),

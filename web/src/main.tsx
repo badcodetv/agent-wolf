@@ -6,7 +6,7 @@ import { useWolfTheme } from "./theme.js";
 
 /**
  * The colour mode follows the OS and cannot be told otherwise — `useWolfTheme`
- * reads `prefers-color-scheme`, exactly as the Orange rail Wolf iframes does
+ * reads `prefers-color-scheme`, exactly as the Bob rail Wolf iframes does
  * (`examples/web/src/EmbedSession.tsx:77-80`). A toggle here would let the page
  * and the rail inside it disagree, with no way to reconcile them. See
  * design/2026-08-24-agent-wolf-ui.md § 2b principle 5 (agent-bob repo).

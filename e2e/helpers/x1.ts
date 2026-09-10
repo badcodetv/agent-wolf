@@ -57,7 +57,7 @@ export const METRIC_SLUG = "probe-rate";
 /**
  * 🔴 THE RUN MANIFEST — what makes `run.sh`'s cleanup safe.
  *
- * Cleanup deletes only the Orange atoms whose hypothesis ids appear here, so
+ * Cleanup deletes only the Bob atoms whose hypothesis ids appear here, so
  * every id MUST be recorded the instant `POST /api/hypotheses` returns it — the
  * session already exists by then, and a crash one line later would otherwise
  * leak a container and a host port with nothing recording that it was ours.
@@ -86,7 +86,7 @@ if (API_KEY === "") {
   throw new Error("WOLF_API_KEY is not set — run these specs through e2e/run.sh");
 }
 
-// ── Orange, with the project API key ────────────────────────────────────────
+// ── Bob, with the project API key ────────────────────────────────────────
 
 export interface BobResponse<T> {
   status: number;
@@ -94,7 +94,7 @@ export interface BobResponse<T> {
   text: string;
 }
 
-export async function orange<T = unknown>(
+export async function bob<T = unknown>(
   method: string,
   path: string,
   body?: unknown,
@@ -124,7 +124,7 @@ export async function orange<T = unknown>(
   // reported immediately, never absorbed by a poll.
   if (res.status === 401 || res.status === 403 || text.trim() === "unauthorized") {
     throw new UnretryableError(
-      `Orange refused this run's project API key on ${method} ${path} (HTTP ${res.status}). ` +
+      `Bob refused this run's project API key on ${method} ${path} (HTTP ${res.status}). ` +
         "The key is minted per run and baked into agentd at boot, so this almost always means " +
         "ANOTHER e2e/run.sh started and recreated agentd with a different key. " +
         "run.sh now takes an exclusive lock to prevent it; if you see this, something " +
@@ -157,13 +157,13 @@ export async function listMemories(
   const q = new URLSearchParams({ selector, limit: String(opts.limit ?? 50) });
   if (opts.latestPer !== undefined) q.set("latest_per", opts.latestPer);
   if (opts.includeRetracted === true) q.set("include_retracted", "1");
-  const res = await orange<{ memories: MemoryRow[] }>("GET", `/agent/memories?${q.toString()}`);
+  const res = await bob<{ memories: MemoryRow[] }>("GET", `/agent/memories?${q.toString()}`);
   expect(res.status, `GET /agent/memories?${q.toString()} → ${res.text.slice(0, 200)}`).toBe(200);
   return res.body.memories ?? [];
 }
 
 export async function getMemory(id: string): Promise<MemoryRow & { content: string }> {
-  const res = await orange<MemoryRow & { content: string }>("GET", `/agent/memories/${id}`);
+  const res = await bob<MemoryRow & { content: string }>("GET", `/agent/memories/${id}`);
   expect(res.status, `GET /agent/memories/${id} → ${res.text.slice(0, 200)}`).toBe(200);
   return res.body;
 }
@@ -180,7 +180,7 @@ export interface DatasetMeta {
 
 /** Dataset metadata, or null when the dataset has never been written. */
 export async function datasetMeta(name: string): Promise<DatasetMeta | null> {
-  const res = await orange<DatasetMeta>("GET", `/agent/datasets/${encodeURIComponent(name)}`);
+  const res = await bob<DatasetMeta>("GET", `/agent/datasets/${encodeURIComponent(name)}`);
   if (res.status === 404) return null;
   expect(res.status, `GET /agent/datasets/${name} → ${res.text.slice(0, 200)}`).toBe(200);
   return res.body;
@@ -230,7 +230,7 @@ const LIST_LIMIT = 200;
  * burned its whole budget and then reported "timed out after 300s waiting for
  * the first tick to write dataset …", with the real cause buried in a
  * parenthetical sub-clause blaming a subsystem that was working. Same lesson,
- * and the same fix, as the rotated-credential case in `orange()` above.
+ * and the same fix, as the rotated-credential case in `bob()` above.
  */
 function assertNotTruncated(rows: unknown[], what: string): void {
   if (rows.length < LIST_LIMIT) return;
@@ -245,7 +245,7 @@ function assertNotTruncated(rows: unknown[], what: string): void {
 export async function sessions(worker?: string): Promise<BobSession[]> {
   const q = new URLSearchParams({ user_email: "*", limit: String(LIST_LIMIT) });
   if (worker !== undefined) q.set("worker", worker);
-  const res = await orange<BobSession[]>("GET", `/agent/sessions?${q.toString()}`);
+  const res = await bob<BobSession[]>("GET", `/agent/sessions?${q.toString()}`);
   expect(res.status, `GET /agent/sessions → ${res.text.slice(0, 200)}`).toBe(200);
   const rows = Array.isArray(res.body) ? res.body : [];
   assertNotTruncated(rows, "/agent/sessions");
@@ -253,7 +253,7 @@ export async function sessions(worker?: string): Promise<BobSession[]> {
 }
 
 export async function sessionByName(name: string): Promise<BobSession | null> {
-  const res = await orange<BobSession>(
+  const res = await bob<BobSession>(
     "GET",
     `/agent/sessions/by-name/${encodeURIComponent(name)}`,
   );
@@ -263,7 +263,7 @@ export async function sessionByName(name: string): Promise<BobSession | null> {
 }
 
 export async function workerExists(name: string): Promise<boolean> {
-  const res = await orange("GET", `/agent/workers/${encodeURIComponent(name)}`);
+  const res = await bob("GET", `/agent/workers/${encodeURIComponent(name)}`);
   return res.status === 200;
 }
 
@@ -278,7 +278,7 @@ export async function schedulesForWorker(worker: string): Promise<unknown[]> {
  * capped route themselves.
  */
 export async function allSchedules(): Promise<{ worker?: string }[]> {
-  const res = await orange<{ schedules?: { worker?: string }[] }>(
+  const res = await bob<{ schedules?: { worker?: string }[] }>(
     "GET",
     `/agent/schedules?limit=${LIST_LIMIT}`,
   );
@@ -498,7 +498,7 @@ export async function createAndGoLive(
   //    hypothesis it is interviewing for. It is written through
   //    `POST /agent/memories` with the project API key, so its provenance is
   //    server-stamped EMPTY — which also exercises O7's trust anchor.
-  const marker = await orange<MemoryRow>("POST", "/agent/memories", {
+  const marker = await bob<MemoryRow>("POST", "/agent/memories", {
     labels: { kind: "x1-target", name: id, session: session.id },
     content: `X1: the interview session ${session.id} is interviewing for hypothesis ${id}.`,
     embed: false,

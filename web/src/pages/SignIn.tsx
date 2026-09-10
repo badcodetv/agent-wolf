@@ -27,7 +27,7 @@
  * and `e2e/layout-probe.mjs` both POST straight to the route — so hiding it
  * costs the test rig nothing. That is why this is safe.
  *
- * Neither door skips the allowlist: Orange verifying a credential is
+ * Neither door skips the allowlist: Bob verifying a credential is
  * necessary, never sufficient (`api/src/routes/auth.ts`). A verified identity
  * that is not on `WOLF_ALLOWED_EMAILS` is a **403**, distinct from the 401 a
  * request with no cookie gets, and both messages are surfaced verbatim.

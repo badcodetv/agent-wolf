@@ -45,7 +45,7 @@ function rgba(color: string): string {
 }
 
 // Typed against the package's OWN tier-1 export (`@agentkit/chat-ui/pure`),
-// which is the other half of what revision 5 buys: Wolf shares Orange's types
+// which is the other half of what revision 5 buys: Wolf shares Bob's types
 // rather than restating them.
 const artifacts: ArtifactInfo[] = [
   {
@@ -71,7 +71,7 @@ describe("the vendored @agentkit/chat-ui tarball", () => {
   it.each([
     ["light", lightTheme],
     ["dark", darkTheme],
-  ] as const)("%s: is coloured by WOLF's theme, not by Orange's", (_mode, theme) => {
+  ] as const)("%s: is coloured by WOLF's theme, not by Bob's", (_mode, theme) => {
     render(
       <ThemeProvider theme={theme}>
         <ArtifactPanel artifacts={artifacts} sessionId="sess-1" />
@@ -85,7 +85,7 @@ describe("the vendored @agentkit/chat-ui tarball", () => {
   });
 
   it("composes with Wolf's own trust components", () => {
-    // § 2 maps artifact METADATA to `machine`: it is Orange's record of what a
+    // § 2 maps artifact METADATA to `machine`: it is Bob's record of what a
     // container wrote, not model prose. W29 renders it exactly this way.
     const { container } = render(
       <ThemeProvider theme={lightTheme}>

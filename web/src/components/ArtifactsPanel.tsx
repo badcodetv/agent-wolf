@@ -1,27 +1,27 @@
 /**
  * The artifact surface — the files this hypothesis's session container wrote,
- * rendered with **Orange's own** `ArtifactPanel` (W29).
+ * rendered with **Bob's own** `ArtifactPanel` (W29).
  *
  * ## Why this component is the argument for revision 5
  *
- * This is the concrete case that motivated importing Orange's presentational
+ * This is the concrete case that motivated importing Bob's presentational
  * components rather than iframing everything
  * (`design/2026-08-24-agent-wolf-ui.md` § 6: *"the artifact list — the surface
- * that prompted this whole review"*). The panel is Orange's, the palette is
+ * that prompted this whole review"*). The panel is Bob's, the palette is
  * **Wolf's**, and the two meet at Wolf's `ThemeProvider`. An iframe could
  * never do that: a cross-origin document cannot be reached by the host's CSS,
- * which is why the Orange chat rail follows `prefers-color-scheme` and takes
+ * which is why the Bob chat rail follows `prefers-color-scheme` and takes
  * no theme prop at all.
  *
  * `ArtifactsPanel.test.tsx` asserts a `live` artifact's status dot against
  * Wolf's `success.main` **as a literal colour**, in both modes — the same
  * assertion `verify-package.sh` makes inside agent-bob, made again here at
  * the point of use, because that is what proves the shared component is themed
- * by its host rather than carrying Orange's palette with it.
+ * by its host rather than carrying Bob's palette with it.
  *
  * ## Channel P: `machine`
  *
- * 🔴 Artifact **metadata** is Orange's record of what a container wrote — an
+ * 🔴 Artifact **metadata** is Bob's record of what a container wrote — an
  * id, a path, a size, a status. It is not model prose, so it gets
  * `Provenance kind="machine"`, which by § 2 renders **no treatment at all**.
  * Tinting it as `model` would say a model authored the file list, which is
@@ -32,7 +32,7 @@
  * ## Nothing here holds a URL
  *
  * `toArtifactInfo` sets no `downloadUrl`, and there is no route in `web/` that
- * could produce one: the bytes live behind Orange's project API key and are
+ * could produce one: the bytes live behind Bob's project API key and are
  * fetched server-side or not at all.
  */
 
@@ -69,7 +69,7 @@ export const NO_ARTIFACTS =
   "No artifacts yet — nothing has been written to this session's workspace.";
 
 /**
- * The last segment of a stored path. Orange's rows disagree about the leading
+ * The last segment of a stored path. Bob's rows disagree about the leading
  * slash (the capture path stores `/report.md`, an upload stores what the query
  * said), so empty segments are dropped rather than trusted.
  *
@@ -82,14 +82,14 @@ export function fileNameFor(filePath: string): string {
 }
 
 /**
- * Wolf's wire row → Orange's `ArtifactInfo`, the tier-1 type Wolf shares
+ * Wolf's wire row → Bob's `ArtifactInfo`, the tier-1 type Wolf shares
  * rather than restates.
  *
  * 🔴 **`downloadUrl` is deliberately absent.** It is optional on `ArtifactInfo`
- * and it is the one field that would put an Orange URL — and the credential
+ * and it is the one field that would put a Bob URL — and the credential
  * that opens it — into the page.
  *
- * Two casts, both narrowing an open string onto a closed union that Orange's
+ * Two casts, both narrowing an open string onto a closed union that Bob's
  * own Go source says is extensible (`artifactType` is commented "extensible";
  * `status` has four values today). They are safe because every consumer of
  * both fields inside `ArtifactPanel` is TOTAL — `STATUS_DOT_COLORS[a.status] ||
@@ -97,7 +97,7 @@ export function fileNameFor(filePath: string): string {
  * renders as "unknown", which is the honest treatment. Inventing a known value
  * to satisfy the union would be a lie in the one direction that matters.
  *
- * `source` has no honest passthrough: Orange's Go values are `tool | auto |
+ * `source` has no honest passthrough: Bob's Go values are `tool | auto |
  * upload` and the TS type's are `auto | registered`, which is a genuine
  * mismatch between the two halves of the same package. Nothing in
  * `ArtifactPanel` reads it, so `auto` is preserved and everything else maps to
@@ -174,7 +174,7 @@ export default function ArtifactsPanel({ hypothesisId }: ArtifactsPanelProps) {
       <Box data-testid="artifacts-panel" sx={{ display: "flex" }}>
         <ArtifactPanel
           artifacts={rows.map(toArtifactInfo)}
-          // The session NAME, not Orange's uuid — Wolf addresses a session by
+          // The session NAME, not Bob's uuid — Wolf addresses a session by
           // the name it chose, and the API's projection never sends the uuid.
           //
           // 🔴 UNASSERTED, and it cannot be made assertable today: `ArtifactPanel`
@@ -182,7 +182,7 @@ export default function ArtifactsPanel({ hypothesisId }: ArtifactsPanelProps) {
           // and the prop is REQUIRED on `ArtifactPanelProps`, so R148's "if a
           // guard cannot fail on its own, write it as a comment" has no remedy
           // here. **The trigger condition, so the next reader knows WHEN this
-          // stops being inert: if any of Orange's three `ArtifactPanel`
+          // stops being inert: if any of Bob's three `ArtifactPanel`
           // callbacks (`onPinToDashboard`, `onViewAll`, `onArtifactClick`) is
           // ever wired, this prop becomes live and needs a value assertion.**
           sessionId={sessionNameForHypothesis(hypothesisId)}

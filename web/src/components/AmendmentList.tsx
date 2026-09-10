@@ -16,7 +16,7 @@
  * `amendBody` (`api/src/routes/hypotheses.ts`) is
  * `z.enum(["accept", "reject"])` — present tense. Two executors shipping
  * `"accept"` and `"accepted"` both pass their own mocked tests, and the UI
- * 400s the first time a human clicks Accept. `amendment_id` is the Orange
+ * 400s the first time a human clicks Accept. `amendment_id` is the Bob
  * memory id of the amendment row, which is `EvidenceRow.id`.
  *
  * A rationale is required for BOTH decisions, because the server requires one

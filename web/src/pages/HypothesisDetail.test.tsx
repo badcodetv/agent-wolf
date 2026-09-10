@@ -229,7 +229,7 @@ describe("🔴 R219 — the detail page passes BOTH halves of the Go Live gate",
 // ── W29: the artifact surface ───────────────────────────────────────────
 
 describe("W29 — the artifacts section", () => {
-  it("renders Orange's ArtifactPanel from `…/artifacts`, once, inside its own section", async () => {
+  it("renders Bob's ArtifactPanel from `…/artifacts`, once, inside its own section", async () => {
     const stub = await renderDetail({
       [DETAIL]: { json: detailBody() },
       [TOKEN]: tokenRoute,
@@ -618,7 +618,7 @@ describe("🔴 a missing block costs a region, never the page", () => {
   });
 });
 
-describe("🔴 status never comes from an Orange delivery", () => {
+describe("🔴 status never comes from a Bob delivery", () => {
   it("renders correctly from a payload carrying no delivery information at all", async () => {
     const body = fullBody();
     expect(JSON.stringify(body)).not.toContain("delivery");

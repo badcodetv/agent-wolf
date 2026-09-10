@@ -7,7 +7,7 @@
  * api/src/bootstrap/bootstrap-project.test.ts).
  *
  * It is deliberately at the repo root, not under api/, so it can be run
- * directly against a real Orange deployment without going through api/'s
+ * directly against a real Bob deployment without going through api/'s
  * build step:
  *
  *   npx tsx scripts/bootstrap-project.ts

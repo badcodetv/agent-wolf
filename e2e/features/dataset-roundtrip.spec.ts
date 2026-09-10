@@ -1,7 +1,7 @@
 /**
  * X1 — the dataset atom, end to end, through the two byte paths.
  *
- * A tick writes the canonical CSV inside a container; Orange stores it as a
+ * A tick writes the canonical CSV inside a container; Bob stores it as a
  * versioned blob; Wolf's series proxy reads it back and hands the browser
  * points. The bytes never cross the model's context in either direction.
  *
@@ -18,7 +18,7 @@ import {
   createAndGoLive,
   datasetMeta,
   METRIC_SLUG,
-  orange,
+  bob,
   BOB_BASE,
   retire,
   signIn,
@@ -110,7 +110,7 @@ test.describe("dataset round trip", () => {
     expect(later, "no second version arrived — the CAS write path may be stuck").not.toBeNull();
     expect(later!.version).toBeGreaterThan(first!.version);
 
-    const versions = await orange<{ versions: { version: number }[] }>(
+    const versions = await bob<{ versions: { version: number }[] }>(
       "GET",
       `/agent/datasets/${encodeURIComponent(hyp.datasetName)}/versions?limit=10`,
     );

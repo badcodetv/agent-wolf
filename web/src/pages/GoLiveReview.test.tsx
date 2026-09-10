@@ -776,13 +776,13 @@ describe("GoLiveReview: the empty and hostile states", () => {
       ...OK,
       [CANDIDATE]: {
         status: 503,
-        json: { kind: "unavailable", message: "orange is having a moment" },
+        json: { kind: "unavailable", message: "bob is having a moment" },
       },
     });
 
     expect(screen.queryByTestId("candidate-empty")).toBeNull();
     expect(screen.getByTestId("candidate-failure")).toHaveTextContent(
-      "orange is having a moment",
+      "bob is having a moment",
     );
     expect(screen.queryByTestId("candidate-preview")).toBeNull();
   });
@@ -793,7 +793,7 @@ describe("GoLiveReview: the empty and hostile states", () => {
     // has read yet is a click the human cannot take back.
     await renderReview({
       ...OK,
-      [DETAIL]: { status: 503, json: { kind: "unavailable", message: "orange is down" } },
+      [DETAIL]: { status: 503, json: { kind: "unavailable", message: "bob is down" } },
     });
 
     expect(screen.queryByTestId("go-live-button")).toBeNull();

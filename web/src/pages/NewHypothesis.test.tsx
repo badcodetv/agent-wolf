@@ -87,7 +87,7 @@ describe("NewHypothesis", () => {
   });
 
   it("🔴 shows a spinner and says why it is slow while the session is provisioned", async () => {
-    // The route polls Orange until the session leaves `creating`, and a first
+    // The route polls Bob until the session leaves `creating`, and a first
     // create on a cold host also pulls the session image. A form that looks
     // frozen for a minute reads as a bug and gets clicked again.
     let release: (() => void) | undefined;
@@ -119,7 +119,7 @@ describe("NewHypothesis", () => {
     expect(stub.countFor(CREATE)).toBe(1);
   });
 
-  it("surfaces Orange's create error VERBATIM — 'host port pool is exhausted' is actionable", async () => {
+  it("surfaces Bob's create error VERBATIM — 'host port pool is exhausted' is actionable", async () => {
     stubFetchRoutes({
       [CREATE]: {
         status: 503,

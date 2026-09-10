@@ -42,14 +42,14 @@ services:
       WOLF_SERIES_URL_TTL_SECONDS: ${WOLF_SERIES_URL_TTL_SECONDS:-}
       FRED_API_KEY: ${FRED_API_KEY:-}
       WOLF_MARKETDATA_CACHE_TTL_SECONDS: ${WOLF_MARKETDATA_CACHE_TTL_SECONDS:-}
-      # W8's sign-in surface and Wolf's own credential to Orange. Same rule as
+      # W8's sign-in surface and Wolf's own credential to Bob. Same rule as
       # the block above: a variable documented in .env.example and read by
       # api/src/config.ts still never reaches this container without a line
       # here (R81). WOLF_API_KEY, WOLF_ALLOWED_EMAILS and WOLF_SESSION_SECRET
       # are all REQUIRED — wolf-api refuses to boot without them, naming the
       # one that is missing.
       BOB_BASE_URL: ${BOB_BASE_URL:-}
-      # W11's embed URLs: the BROWSER-reachable Orange origin, which is not
+      # W11's embed URLs: the BROWSER-reachable Bob origin, which is not
       # BOB_BASE_URL (that one is agentd inside DinD's netns). Optional —
       # it carries its http://localhost:8080 default from api/src/config.ts
       # when left empty — which is exactly why it needs a line here
@@ -105,7 +105,7 @@ services:
       # HERE — the same class of omission as R81, one layer further out.
       #
       # ⚠️ VITE_BOB_PUBLIC_URL must equal wolf-api's BOB_PUBLIC_URL and
-      # must be listed in the `wolf` project's `allowed_origins` in Orange's
+      # must be listed in the `wolf` project's `allowed_origins` in Bob's
       # project map. Two variables, one origin, and nothing checks that they
       # agree — see .env.example.
       #

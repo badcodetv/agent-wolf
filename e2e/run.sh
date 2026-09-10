@@ -34,13 +34,13 @@
 #    literal string would fail every single run. We assert the SCRIPTED form,
 #    and separately assert that neither real-model line is present.
 #
-# 2. THE TWO STACKS' DEFAULT PORTS COLLIDE. Orange's mock invocation takes 8081
-#    and Wolf's default WOLF_WEB_PORT is 8081. Pinned here: Orange 8090,
+# 2. THE TWO STACKS' DEFAULT PORTS COLLIDE. Bob's mock invocation takes 8081
+#    and Wolf's default WOLF_WEB_PORT is 8081. Pinned here: Bob 8090,
 #    Wolf 8091, and wolf-web is BUILT with VITE_BOB_PUBLIC_URL=:8090 (vite
 #    inlines it; an `environment:` entry cannot reach a built bundle).
 #
 # 3. http://localhost:8091 MUST be in the `wolf` project's allowed_origins or
-#    the Orange embed page's `frame-ancestors` blocks the chat iframe outright,
+#    the Bob embed page's `frame-ancestors` blocks the chat iframe outright,
 #    which reads as a broken UI rather than as a config error.
 #
 # 4. 🔴 WOLF_MCP_URL IS SET EXPLICITLY, AND IT HAS TO BE. wolf-api's boot-time
@@ -101,7 +101,7 @@ WOLF_REPO="$(cd "${E2E_DIR}/.." && pwd)"
 # (`/…/badcode/agent-wolf` beside `/…/badcode/agent-bob`); a per-ticket
 # worktree sits one level deeper (`/…/badcode/wave18/x1`). The first version of
 # this line knew only the worktree layout, so running from the canonical
-# checkout — which is where it lives — failed to find Orange at all. It failed
+# checkout — which is where it lives — failed to find Bob at all. It failed
 # CLOSED with the right message, which is the correct direction, but a rig that
 # cannot find its own sibling by default is a rig everyone runs with an
 # environment variable they should not need.
@@ -252,7 +252,7 @@ manifest_ids() {
   sort -u "${X1_RUN_MANIFEST}" | grep -E '^[0-9a-f]{8}$' || true
 }
 
-api() { # api <METHOD> <PATH> [BODY]  — Orange, with the project API key
+api() { # api <METHOD> <PATH> [BODY]  — Bob, with the project API key
   local method="$1" path="$2" body="${3:-}"
   if [ -n "${body}" ]; then
     curl -sS -X "${method}" -H "X-API-Key: ${WOLF_API_KEY}" -H 'Content-Type: application/json' \
@@ -282,7 +282,7 @@ print(len(rows) if isinstance(rows, list) else "?")'
 
 # Session ids belonging to ONE hypothesis id: its `hyp-<id>` chat session and
 # every job session the dispatcher ran for `researcher-<id>`. Matched on the
-# fields Orange returns, never on a substring of a name.
+# fields Bob returns, never on a substring of a name.
 list_session_ids_for() { # list_session_ids_for <hypothesis-id>
   api GET '/agent/sessions?user_email=*&limit=200' 2>/dev/null \
     | python3 -c 'import json,sys
@@ -315,11 +315,11 @@ cleanup() {
   local rc=$?
   [ "${CLEANED}" = 1 ] && exit "${rc}"
   CLEANED=1
-  # 🔴 401 IS NOT "ORANGE IS DOWN", AND CONFLATING THEM SILENTLY LEAKS.
+  # 🔴 401 IS NOT "BOB IS DOWN", AND CONFLATING THEM SILENTLY LEAKS.
   #
   # This probe used to be `curl -fsS …`, which fails on ANY non-2xx. When a
   # second run rotated the project API key (see the lock above), the probe got
-  # 401, `-f` made it look like a dead stack, cleanup printed "Orange is not
+  # 401, `-f` made it look like a dead stack, cleanup printed "Bob is not
   # answering; nothing to reclaim" and returned — leaking every session that run
   # had created. That is how ~35 orphaned sessions accumulated on this host,
   # each holding one of the 100 host ports, and it is exactly the "a failed run
@@ -329,7 +329,7 @@ cleanup() {
   probe="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
     "${BOB_BASE}/agent/sessions?user_email=*&limit=1" -H "X-API-Key: ${WOLF_API_KEY}" 2>/dev/null || echo 000)"
   if [ "${probe}" = "401" ] || [ "${probe}" = "403" ]; then
-    echo "cleanup: 🔴 Orange REFUSED this run's project API key (HTTP ${probe})." >&2
+    echo "cleanup: 🔴 Bob REFUSED this run's project API key (HTTP ${probe})." >&2
     echo "cleanup: 🔴 THIS RUN'S SESSIONS ARE LEAKED and still hold host ports." >&2
     echo "cleanup:    Something recreated agentd with a different key mid-run." >&2
     echo "cleanup:    Reclaim them with:  ./e2e/run.sh --reclaim-orphans" >&2
@@ -364,7 +364,7 @@ cleanup() {
       printf 'cleanup: if they are yours, they are a leak; if not, they belong to someone else.\n'
     fi
   else
-    echo "cleanup: Orange is not answering; nothing to reclaim through the API"
+    echo "cleanup: Bob is not answering; nothing to reclaim through the API"
   fi
   rm -rf "${SECRET_DIR}"
   exit "${rc}"
@@ -416,7 +416,7 @@ if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
   cat <<'USAGE'
 X1 — the Agent Wolf end-to-end rig.
 
-Brings up BOTH stacks (Orange + Wolf) in offline mock-model mode, bootstraps the
+Brings up BOTH stacks (Bob + Wolf) in offline mock-model mode, bootstraps the
 `wolf` project, runs the Playwright specs, and cleans up after itself on exit.
 
   ./e2e/run.sh                     run every spec
@@ -510,7 +510,7 @@ if [ -n "${SPEC_FILTER}" ]; then
   SPEC_ARGS=("features/${SPEC_FILTER}.spec.ts")
 fi
 
-# ── 1. Orange, in offline mock mode ─────────────────────────────────────────
+# ── 1. Bob, in offline mock mode ─────────────────────────────────────────
 
 export X1_MOCK_SCRIPT="${E2E_DIR}/mock/script.json"
 [ -f "${X1_MOCK_SCRIPT}" ] || fail "missing ${X1_MOCK_SCRIPT}"
@@ -591,7 +591,7 @@ assert_mock_mode() {
 log "asserting agentd chose a mock model"
 assert_mock_mode
 
-# ── 3. Wait for Orange's API ────────────────────────────────────────────────
+# ── 3. Wait for Bob's API ────────────────────────────────────────────────
 
 wait_for() { # wait_for <label> <seconds> <command...>
   local label="$1" secs="$2"; shift 2
@@ -604,7 +604,7 @@ wait_for() { # wait_for <label> <seconds> <command...>
   echo "up: ${label}"
 }
 
-wait_for "orange /agent/sessions" 120 \
+wait_for "bob /agent/sessions" 120 \
   curl -fsS -o /dev/null -H "X-API-Key: ${WOLF_API_KEY}" "${BOB_BASE}/agent/sessions"
 
 SESSIONS_BEFORE="$(count_sessions)"

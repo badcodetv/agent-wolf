@@ -20,7 +20,7 @@
  */
 
 interface WolfImportMetaEnv {
-  /** Orange's BROWSER-reachable origin — the base of the chat embed URL. */
+  /** Bob's BROWSER-reachable origin — the base of the chat embed URL. */
   readonly VITE_BOB_PUBLIC_URL?: string;
   /** The Google Identity Services client id used by the sign-in page. */
   readonly VITE_GOOGLE_CLIENT_ID?: string;
@@ -32,17 +32,17 @@ function env(): WolfImportMetaEnv {
 }
 
 /**
- * The default Orange public origin: agent-bob's own compose stack
+ * The default Bob public origin: agent-bob's own compose stack
  * publishes its `web` service on 8080. Matches `api/src/config.ts`'s
- * `DEFAULT_ORANGE_PUBLIC_URL` and `web/Dockerfile`'s `ARG` default.
+ * `DEFAULT_BOB_PUBLIC_URL` and `web/Dockerfile`'s `ARG` default.
  *
  * ⚠️ It must be the same origin as the API's `BOB_PUBLIC_URL`, and it must
- * appear in the `wolf` project's `allowed_origins` in Orange's project map —
+ * appear in the `wolf` project's `allowed_origins` in Bob's project map —
  * the embed page's `frame-ancestors` CSP is built from that list, so an
  * origin missing there means the browser blocks the chat rail outright, with
  * no error on the Wolf side at all.
  */
-export const DEFAULT_ORANGE_PUBLIC_URL = "http://localhost:8080";
+export const DEFAULT_BOB_PUBLIC_URL = "http://localhost:8080";
 
 /** Trailing slashes trimmed, so callers concatenate a path without doubling the separator. */
 function trimTrailingSlashes(value: string): string {
@@ -50,18 +50,18 @@ function trimTrailingSlashes(value: string): string {
 }
 
 /**
- * Orange's browser-reachable origin, without a trailing slash.
+ * Bob's browser-reachable origin, without a trailing slash.
  *
  * Plain concatenation is used at the call sites rather than `new URL()`: a
- * base carrying a path prefix (`https://example.test/orange`) survives
+ * base carrying a path prefix (`https://example.test/bob`) survives
  * concatenation and is silently truncated by `new URL("/embed/…", base)`.
  * `api/src/routes/embed.ts`'s `embedUrlFor` makes the same choice for the
  * same reason.
  */
-export function orangePublicUrl(): string {
+export function bobPublicUrl(): string {
   const raw = env().VITE_BOB_PUBLIC_URL;
   const trimmed = typeof raw === "string" ? raw.trim() : "";
-  return trimTrailingSlashes(trimmed === "" ? DEFAULT_ORANGE_PUBLIC_URL : trimmed);
+  return trimTrailingSlashes(trimmed === "" ? DEFAULT_BOB_PUBLIC_URL : trimmed);
 }
 
 /**

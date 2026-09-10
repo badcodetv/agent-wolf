@@ -4,7 +4,7 @@ A platform for stating trading hypotheses and having them deeply researched and 
 validated. A user states a thesis, an interview sharpens it into a falsifiable spec, and a daily
 job then researches and scores it until a human confirms or invalidates the thesis.
 
-Agent Wolf is built on **[Agent Bob](../agent-bob)** as its runtime: Orange owns prompts,
+Agent Wolf is built on **[Agent Bob](../agent-bob)** as its runtime: Bob owns prompts,
 sessions, schedules, memories and datasets; Wolf owns the page, the vocabulary and the user
 allowlist. The full design — architecture, the trust model, the hypothesis lifecycle, and every
 ticket that builds this repo — lives in agent-bob's
@@ -20,8 +20,8 @@ first; this README only covers running what's here.
 
 | Path | What |
 | --- | --- |
-| `api/` | Node + TypeScript API: hypothesis lifecycle, Orange client, market-data MCP server, evaluation poller. Express 5, vitest, zod, pino. |
-| `web/` | React 18 + MUI 6 UI: hypothesis list/detail, scoreboard, the Orange chat embed. Vite + vitest. Its own components — imports nothing from agent-bob (`web/` there is a private, non-installable library; see the design doc's "Iframe-only UI reuse" decision). |
+| `api/` | Node + TypeScript API: hypothesis lifecycle, Bob client, market-data MCP server, evaluation poller. Express 5, vitest, zod, pino. |
+| `web/` | React 18 + MUI 6 UI: hypothesis list/detail, scoreboard, the Bob chat embed. Vite + vitest. Its own components — imports nothing from agent-bob (`web/` there is a private, non-installable library; see the design doc's "Iframe-only UI reuse" decision). |
 | `docker-compose.yml`, `.env.example` | The local topology — see below. |
 | `docs/archive-2026-05-hypothesis-bot/` | The superseded first design, kept for its research briefs. |
 
@@ -36,11 +36,11 @@ sign-in:
 cd ../agent-bob
 ./stack publish-base dev     # once, if you never have: the base Wolf builds FROM
 ./stack wolf up              # BILLABLE. `./stack wolf up mock` is the free twin
-# → Wolf http://localhost:8081   Orange http://localhost:8080
+# → Wolf http://localhost:8081   Bob http://localhost:8080
 ./stack wolf down
 ```
 
-It publishes Wolf's session image, merges a `wolf` project into Orange's project
+It publishes Wolf's session image, merges a `wolf` project into Bob's project
 map (API key + allowed origins), starts both stacks, bootstraps the project, and
 prints what it resolved. Local dev secrets are generated once into
 agent-bob's gitignored `.stack-wolf-secrets.env`. Full description, including
@@ -55,13 +55,13 @@ Two commands here are useful on their own:
 ./scripts/publish-image.sh          # build + push session-wolf (REGISTRY=… required)
 ./scripts/load-image-into-dind.sh   # the OFFLINE alternative: build into DinD
                                     #   instead of publishing. Only works when
-                                    #   Orange was started in `local` image mode.
+                                    #   Bob was started in `local` image mode.
 ```
 
 ### By hand
 
 **Order matters: bring Agent Bob up first.** Agent Wolf's compose file joins
-Orange's compose network as `external` and shares Orange's `dind` container's
+Bob's compose network as `external` and shares Bob's `dind` container's
 network namespace — both must already exist before `docker compose up` here can
 succeed. This isn't a convenience choice: in the standalone stack `agentd` shares
 DinD's network namespace, so nested session containers cannot resolve compose DNS
@@ -83,14 +83,14 @@ cp .env.example .env
 # WOLF_MCP_TOKEN is REQUIRED — wolf-api refuses to boot without it rather
 # than serve its market-data MCP tools unauthenticated. Generate one into
 # .env (never commit the value); the same value must reach session
-# containers through Orange's MCP config.
+# containers through Bob's MCP config.
 echo "WOLF_MCP_TOKEN=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')" >> .env
 # Three more are REQUIRED, and wolf-api names the missing one at boot:
 #   WOLF_SESSION_SECRET  signs the wolf_session cookie (>= 32 chars)
-#   WOLF_API_KEY         the "wolf" project's Orange API key (X-API-Key)
+#   WOLF_API_KEY         the "wolf" project's Bob API key (X-API-Key)
 #   WOLF_ALLOWED_EMAILS  who may sign in; empty NEVER means everyone
 echo "WOLF_SESSION_SECRET=$(openssl rand -base64 32)" >> .env
-# WOLF_API_KEY must match the key Orange's project map names for the wolf
+# WOLF_API_KEY must match the key Bob's project map names for the wolf
 # project (`"api_key_env": "WOLF_API_KEY"`), and the allowlist is yours:
 #   echo "WOLF_API_KEY=…"                     >> .env
 #   echo "WOLF_ALLOWED_EMAILS=you@example.com" >> .env

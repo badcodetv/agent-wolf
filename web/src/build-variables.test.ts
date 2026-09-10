@@ -54,7 +54,7 @@ describe("the two VITE_* build variables", () => {
   it("are the only two — no third VITE_ variable has crept in", () => {
     const text = readFileSync(ENV_MODULE, "utf8");
     const found = new Set(text.match(/VITE_[A-Z0-9_]+/g) ?? []);
-    expect([...found].sort()).toEqual(["VITE_GOOGLE_CLIENT_ID", "VITE_BOB_PUBLIC_URL"]);
+    expect([...found].sort()).toEqual(["VITE_BOB_PUBLIC_URL", "VITE_GOOGLE_CLIENT_ID"]);
   });
 
   it("are declared as build ARGs in web/Dockerfile's build stage, before yarn build", () => {
@@ -200,7 +200,7 @@ describe("every source file is text", () => {
   });
 });
 
-describe("no Orange origin is hard-coded outside env.ts", () => {
+describe("no Bob origin is hard-coded outside env.ts", () => {
   it("names localhost:8080 only where the default lives", () => {
     const offenders = sourceFiles().filter((file) => {
       if (file === ENV_MODULE || file === join(webRoot, "src", "env.test.ts")) return false;

@@ -279,7 +279,7 @@ export function submitVerdict(
  * and it 400s only in front of a human who has already typed a rationale —
  * which is why `AmendmentList.test.tsx` asserts this body byte for byte.
  *
- * `amendmentId` is the ORANGE MEMORY ID of the `kind=spec-amendment` row,
+ * `amendmentId` is the BOB MEMORY ID of the `kind=spec-amendment` row,
  * i.e. `EvidenceRow.id` from the detail payload.
  */
 export function amendSpec(
@@ -299,7 +299,7 @@ export function amendSpec(
  * `GET /api/hypotheses/:id/artifacts` — the metadata list for this
  * hypothesis's `hyp-<id>` session, proxied SERVER-SIDE.
  *
- * 🔴 The browser is never sent to Orange for it. Orange sets no CORS headers,
+ * 🔴 The browser is never sent to Bob for it. Bob sets no CORS headers,
  * and the only credential that opens its artifact routes is Wolf's
  * project-wide `WOLF_API_KEY` — so the list is fetched by the API, with the
  * key, and re-served here. There is no `download_url` in the response and

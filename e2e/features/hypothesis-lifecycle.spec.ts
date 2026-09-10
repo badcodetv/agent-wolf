@@ -18,7 +18,7 @@ import {
   getMemory,
   listMemories,
   METRIC_SLUG,
-  orange,
+  bob,
   sessionByName,
   sessions,
   signIn,
@@ -49,7 +49,7 @@ test.describe("hypothesis lifecycle", () => {
     expect(detail.status).toBe(200);
     expect(detail.body.hypothesis.status).toBe("live");
 
-    // The three Orange atoms go-live creates. `researcher-<id>` carries the
+    // The three Bob atoms go-live creates. `researcher-<id>` carries the
     // BARE id — the `hyp-` prefix belongs to the session name and to nothing
     // else, and `hyp-hyp-…` is the failure this pair catches.
     expect(detail.body.atoms.worker).toBe(`researcher-${hyp.id}`);
@@ -80,7 +80,7 @@ test.describe("hypothesis lifecycle", () => {
     // Written from INSIDE the tick container: the provenance names the
     // per-hypothesis researcher worker, which is the whole point of the
     // dataset atom (a shared series that never crosses the model's context).
-    const raw = await orange<{ created_by_worker: string }>(
+    const raw = await bob<{ created_by_worker: string }>(
       "GET",
       `/agent/datasets/${encodeURIComponent(meta.name)}`,
     );
@@ -137,7 +137,7 @@ test.describe("hypothesis lifecycle", () => {
         // invisible to an API-key caller and this loop finds nothing at all.
         const candidates = await sessions(`researcher-${hyp.id}`);
         for (const candidate of candidates) {
-          const events = await orange<{ events: { events: { type: string; data: unknown }[] }[] }>(
+          const events = await bob<{ events: { events: { type: string; data: unknown }[] }[] }>(
             "GET",
             `/agent/session/${candidate.id}/query-events?limit=200`,
           );
@@ -295,7 +295,7 @@ test.describe("hypothesis lifecycle", () => {
     await expect(page.getByTestId("metric-chart").first()).toBeVisible();
 
     // 🔴 THE CHAT IFRAME. If http://localhost:8091 were missing from the wolf
-    // project's `allowed_origins`, the Orange embed page's `frame-ancestors`
+    // project's `allowed_origins`, the Bob embed page's `frame-ancestors`
     // would block this document outright — which reads as a broken UI rather
     // than as a config error. Asserting the frame has a real document body is
     // what tells the two apart.

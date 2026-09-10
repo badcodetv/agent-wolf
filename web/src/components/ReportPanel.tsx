@@ -14,7 +14,7 @@
  * host. Add `allow-same-origin` and the document regains Wolf's origin: the
  * same script now reads the cookie, calls every route as the signed-in human,
  * and reaches into the parent document. A bounded risk becomes a session
- * compromise — Orange's hazard H3, and `ReportPanel.test.tsx` asserts the
+ * compromise — Bob's hazard H3, and `ReportPanel.test.tsx` asserts the
  * rendered attribute string rather than a prop, because an `allow-same-origin`
  * arriving through any route at all lands in that same string.
  *

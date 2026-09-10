@@ -14,7 +14,7 @@
  * ## Why it is slow, and why that must be visible
  *
  * `POST /api/hypotheses` is slow BY CONSTRUCTION and the first create of a
- * session image is the slowest of all: Orange's session create is
+ * session image is the slowest of all: Bob's session create is
  * asynchronous, so the API polls the by-name route until the `hyp-<id>`
  * session leaves `creating` before it writes anything — and on a cold host
  * that wait includes pulling the session image from the registry. Nothing is
@@ -23,7 +23,7 @@
  * working. A disabled button with changed text is not enough; a form that
  * looks frozen for ninety seconds reads as a bug and gets clicked again.
  *
- * 🔴 **Orange's create error is surfaced VERBATIM.** "host port pool is
+ * 🔴 **Bob's create error is surfaced VERBATIM.** "host port pool is
  * exhausted" is operational and actionable — it tells the reader to delete a
  * finished session, and it clears on its own — and flattening it into "could
  * not create hypothesis" throws away the only useful part. That rule is in the

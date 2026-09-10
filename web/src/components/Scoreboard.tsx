@@ -20,8 +20,8 @@
  * (UI design § 5, "One source of truth for staleness"). The one thing the
  * series route decides is the chart's hatching; see `MetricChart.tsx`.
  *
- * 🔴 Nothing here reads an Orange delivery status. A delivery parked at
- * `awaiting_human` never clears — a known Orange wart — so a page that took
+ * 🔴 Nothing here reads a Bob delivery status. A delivery parked at
+ * `awaiting_human` never clears — a known Bob wart — so a page that took
  * "is this current?" from a delivery would show every live hypothesis as
  * permanently mid-flight. `Scoreboard.test.tsx` renders from a payload
  * carrying no delivery information at all, because there is none to carry.

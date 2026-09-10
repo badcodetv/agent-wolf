@@ -245,7 +245,7 @@ describe("§ 2b principle 5 — the mode follows the OS and cannot be told other
   });
 
   it("offers no way to override the mode", () => {
-    // If a toggle is ever added, Wolf and the Orange rail it iframes can end
+    // If a toggle is ever added, Wolf and the Bob rail it iframes can end
     // up in different modes with no way to reconcile them (§ 2b principle 5).
     const source = readFileSync(join(webRoot, "src", "theme.ts"), "utf8");
     expect(source).not.toMatch(/setMode|toggleColorMode|localStorage/);
