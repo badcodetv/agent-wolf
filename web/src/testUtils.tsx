@@ -134,7 +134,7 @@ export function renderWithProviders(
  * Asserts nothing was written to either web storage.
  *
  * The embed token lives in COMPONENT STATE ONLY. A token in `localStorage` is
- * readable by any script on the origin and survives the tab, and an Orange
+ * readable by any script on the origin and survives the tab, and a Bob
  * embed token carries project-wide authority for its lifetime
  * (`docs/19-embedding.md`, hazard H1) — so persisting one widens the blast
  * radius of an XSS from "this render" to "until it expires, everywhere".

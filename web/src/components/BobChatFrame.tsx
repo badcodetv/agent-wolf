@@ -1,5 +1,5 @@
 /**
- * The Orange conversation, embedded.
+ * The Bob conversation, embedded.
  *
  * 🔴 **This is a RAIL, not a block in a document** (UI design § 5). It renders
  * at `height: 100%` and carries NO pixel height of its own; the rail container
@@ -15,7 +15,7 @@
  * `GET /api/hypotheses/:id/embed-token` answers
  * `{ token, expires_at_sec, embed_url }`, and **`expires_at_sec` is unix
  * SECONDS** — it is the token's own `exp` claim, read back off the signed
- * token by Orange (`go/cmd/agentd/embedtoken.go`). Milliseconds are what
+ * token by Bob (`go/cmd/agentd/embedtoken.go`). Milliseconds are what
  * `Date.now()` speaks. Multiplying is not optional and it is not cosmetic:
  * reading the value as milliseconds gives a deadline ~55 000 years out (a
  * token that never refreshes and silently dies mid-conversation), and reading
@@ -31,7 +31,7 @@
  * ## The token is held in component state and NOWHERE else
  *
  * Not `localStorage`, not `sessionStorage`, not a module-level cache. An
- * Orange embed token carries PROJECT-WIDE authority for its lifetime
+ * Bob embed token carries PROJECT-WIDE authority for its lifetime
  * (`docs/19-embedding.md`, hazard H1); its short TTL is the only bound it has,
  * and persisting it widens the blast radius of any script on this origin from
  * "this render" to "until it expires". The fragment placement is the same
@@ -43,7 +43,7 @@ import Box from "@mui/material/Box";
 import Skeleton from "@mui/material/Skeleton";
 import Severity from "./trust/Severity.js";
 import { ApiError, fetchEmbedToken, sessionNameForHypothesis } from "../api/client.js";
-import { orangePublicUrl } from "../env.js";
+import { bobPublicUrl } from "../env.js";
 
 /** Re-mint this long before expiry. W13's criterion, in milliseconds. */
 export const REFRESH_MARGIN_MS = 120_000;
@@ -69,7 +69,7 @@ const MAX_TIMEOUT_MS = 2 ** 31 - 1;
  */
 export function embedSrc(hypothesisId: string, token: string): string {
   const session = sessionNameForHypothesis(hypothesisId);
-  return `${orangePublicUrl()}/embed/session/${session}#token=${encodeURIComponent(token)}`;
+  return `${bobPublicUrl()}/embed/session/${session}#token=${encodeURIComponent(token)}`;
 }
 
 /** Milliseconds to wait before re-minting a token expiring at `expiresAtSec` (unix SECONDS). */

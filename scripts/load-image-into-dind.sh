@@ -33,8 +33,8 @@
 # this image with the bare harness under the same tag, and every session
 # would start from something that is not what this script built, with no
 # error anywhere. WOLF_BASE_IMAGE (in agent-wolf's own .env) is a project
-# setting Wolf's bootstrap writes into Orange's project-settings row for the
-# "wolf" project specifically — it never touches Orange's own BASE_IMAGE.
+# setting Wolf's bootstrap writes into Bob's project-settings row for the
+# "wolf" project specifically — it never touches Bob's own BASE_IMAGE.
 
 set -euo pipefail
 

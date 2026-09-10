@@ -193,7 +193,7 @@ describe("🔴 it degrades instead of throwing", () => {
   });
 });
 
-describe("🔴 nothing comes from an Orange delivery status", () => {
+describe("🔴 nothing comes from a Bob delivery status", () => {
   it("renders completely from a payload carrying no delivery information at all", () => {
     // There is no delivery field anywhere in this fixture, and there is none
     // on the wire either. A delivery parked at `awaiting_human` never clears,

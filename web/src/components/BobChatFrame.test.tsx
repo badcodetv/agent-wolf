@@ -53,26 +53,26 @@ describe("the refresh margin", () => {
 
 describe("embedSrc", () => {
   it("composes the src from VITE_BOB_PUBLIC_URL — a hard-coded origin fails this", () => {
-    vi.stubEnv("VITE_BOB_PUBLIC_URL", "https://orange.example.test");
+    vi.stubEnv("VITE_BOB_PUBLIC_URL", "https://bob.example.test");
     expect(embedSrc(ID, "tok-abc")).toBe(
-      "https://orange.example.test/embed/session/hyp-1a2b3c4d#token=tok-abc",
+      "https://bob.example.test/embed/session/hyp-1a2b3c4d#token=tok-abc",
     );
   });
 
   it("adds the hyp- prefix exactly once and never to the id itself", () => {
-    vi.stubEnv("VITE_BOB_PUBLIC_URL", "https://orange.example.test");
+    vi.stubEnv("VITE_BOB_PUBLIC_URL", "https://bob.example.test");
     const src = embedSrc(ID, "tok-abc");
     expect(src).toContain("/embed/session/hyp-1a2b3c4d#");
     expect(src).not.toContain("hyp-hyp-");
   });
 
   it("survives a base carrying a path prefix and a trailing slash", () => {
-    vi.stubEnv("VITE_BOB_PUBLIC_URL", "https://example.test/orange/");
-    expect(embedSrc(ID, "t")).toBe("https://example.test/orange/embed/session/hyp-1a2b3c4d#token=t");
+    vi.stubEnv("VITE_BOB_PUBLIC_URL", "https://example.test/bob/");
+    expect(embedSrc(ID, "t")).toBe("https://example.test/bob/embed/session/hyp-1a2b3c4d#token=t");
   });
 
   it("puts the token in the FRAGMENT, which is never sent to a server or written to an access log", () => {
-    vi.stubEnv("VITE_BOB_PUBLIC_URL", "https://orange.example.test");
+    vi.stubEnv("VITE_BOB_PUBLIC_URL", "https://bob.example.test");
     const src = embedSrc(ID, "tok-abc");
     expect(src.split("#")[1]).toBe("token=tok-abc");
     expect(src.split("#")[0]).not.toContain("tok-abc");
@@ -81,7 +81,7 @@ describe("embedSrc", () => {
 
 describe("BobChatFrame", () => {
   it("mints a token on mount and renders it in the frame src", async () => {
-    vi.stubEnv("VITE_BOB_PUBLIC_URL", "https://orange.example.test");
+    vi.stubEnv("VITE_BOB_PUBLIC_URL", "https://bob.example.test");
     const stub = stubFetchRoutes({
       [TOKEN_ROUTE]: {
         json: { token: "tok-1", expires_at_sec: nowSec() + 900, embed_url: "ignored" },
@@ -92,7 +92,7 @@ describe("BobChatFrame", () => {
 
     expect(stub.countFor(TOKEN_ROUTE)).toBe(1);
     expect(frame().getAttribute("src")).toBe(
-      "https://orange.example.test/embed/session/hyp-1a2b3c4d#token=tok-1",
+      "https://bob.example.test/embed/session/hyp-1a2b3c4d#token=tok-1",
     );
   });
 
@@ -124,7 +124,7 @@ describe("BobChatFrame", () => {
   });
 
   it("refreshes AND remounts the frame the moment 120s remain — pinned 1ms inside", async () => {
-    vi.stubEnv("VITE_BOB_PUBLIC_URL", "https://orange.example.test");
+    vi.stubEnv("VITE_BOB_PUBLIC_URL", "https://bob.example.test");
     const stub = stubFetchRoutes({
       [TOKEN_ROUTE]: (i) => ({
         json: { token: `tok-${i + 1}`, expires_at_sec: nowSec() + 600, embed_url: "" },

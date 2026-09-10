@@ -5,7 +5,7 @@
  * 🔴 **The theming case is written to be able to fail.** Asserting the dot
  * against `theme.palette.success.main` alone would pass for the wrong reason
  * the day Wolf's green happened to equal MUI's default — the very state a
- * component "carrying Orange's palette with it" would produce. So each case
+ * component "carrying Bob's palette with it" would produce. So each case
  * pins WOLF's colour as a **literal** and, beside it, asserts the rendered
  * colour is **not** MUI's stock `success.main`. Only a component taking its
  * colours from the host's `ThemeProvider` satisfies both.
@@ -62,7 +62,7 @@ function rgba(color: string): string {
 }
 
 describe("ArtifactsPanel", () => {
-  it("artifacts_panel: renders Orange's panel from the proxied list, by file name", async () => {
+  it("artifacts_panel: renders Bob's panel from the proxied list, by file name", async () => {
     const { stub } = renderPanel(lightTheme, {
       [ARTIFACTS]: {
         json: { artifacts: [row(), row({ id: "art-2", file_path: "/workspace/chart.json" })] },
@@ -70,7 +70,7 @@ describe("ArtifactsPanel", () => {
     });
     expect(await screen.findByText("report.md")).toBeInTheDocument();
     expect(screen.getByText("chart.json")).toBeInTheDocument();
-    // ONE request, to Wolf's own relative path. Never Orange's origin.
+    // ONE request, to Wolf's own relative path. Never Bob's origin.
     expect(stub.calls).toEqual([ARTIFACTS]);
   });
 
@@ -91,7 +91,7 @@ describe("ArtifactsPanel", () => {
     // through `lightTheme.palette.success.main` — a test that computes its own
     // expectation from the same object the component read cannot fail.
     expect(painted).toBe("rgb(26, 127, 55)");
-    // 🔴 The discriminator. If `ArtifactPanel` carried Orange's own palette
+    // 🔴 The discriminator. If `ArtifactPanel` carried Bob's own palette
     // rather than taking Wolf's, this is what it would paint.
     expect(rgba(painted)).not.toBe(rgba(createTheme().palette.success.main));
     expect(painted).not.toBe("");
@@ -130,7 +130,7 @@ describe("ArtifactsPanel", () => {
   // ── Channel P ─────────────────────────────────────────────────────────
 
   it("artifacts_panel: renders inside Provenance kind=\"machine\" — no tint, no rule, no stamp", async () => {
-    // § 2: artifact METADATA is Orange's record of what a container wrote, not
+    // § 2: artifact METADATA is Bob's record of what a container wrote, not
     // model prose. `machine` renders no wrapper at all, which is exactly what
     // "no treatment" has to mean if the `model` ground is to keep its force.
     const { view } = renderPanel(lightTheme, {
@@ -152,7 +152,7 @@ describe("ArtifactsPanel", () => {
     expect(empty).toHaveTextContent(
       "No artifacts yet — nothing has been written to this session's workspace.",
     );
-    // And the panel itself is NOT rendered — Orange's component returns null
+    // And the panel itself is NOT rendered — Bob's component returns null
     // for an empty list, so a missing empty state would be a silent blank.
     expect(screen.queryByTestId("artifacts-panel")).toBeNull();
     // 🔴 Mirrors its sibling below. An empty session is NOT a problem, so no
@@ -204,7 +204,7 @@ describe("ArtifactsPanel", () => {
     expect(info.filePath).toBe("/workspace/nested/dgs10.csv");
     expect(info.fileSize).toBe(4096);
     expect(info.status).toBe("live");
-    // 🔴 The field that would put an Orange URL — and the project API key that
+    // 🔴 The field that would put a Bob URL — and the project API key that
     // opens it — into the page. Absent, and asserted as absent by KEY, because
     // `undefined` and "not there" must both hold.
     expect(info.downloadUrl).toBeUndefined();
@@ -219,7 +219,7 @@ describe("ArtifactsPanel", () => {
   });
 
   it("artifacts_map: an UNKNOWN status is passed through, not rewritten into a known one", () => {
-    // Orange's status set is closed at four values today and its type is a Go
+    // Bob's status set is closed at four values today and its type is a Go
     // string; a fifth must cost one dot's colour, never a fabricated status.
     expect(toArtifactInfo(row({ status: "quarantined" })).status).toBe("quarantined");
   });

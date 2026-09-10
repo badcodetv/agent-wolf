@@ -41,7 +41,7 @@ COPY tsconfig.base.json ./tsconfig.base.json
 #
 # ⚠️ VITE_BOB_PUBLIC_URL must be the same origin as wolf-api's
 # BOB_PUBLIC_URL, and it must appear in the `wolf` project's
-# `allowed_origins` in Orange's project map: the embed page's
+# `allowed_origins` in Bob's project map: the embed page's
 # `frame-ancestors` CSP is built from that list, so a mismatch means the
 # browser blocks the chat rail outright with no error on the Wolf side.
 ARG VITE_BOB_PUBLIC_URL=http://localhost:8080

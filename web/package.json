@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Agent Wolf UI — hypothesis list/detail, scoreboard, Orange chat iframe. Wolf's own components and theme, plus Orange's types and presentational components via @agentkit/chat-ui (revision 5, tiers 1-2); Orange conversations come through an iframe only. See design/2026-08-20-agent-wolf.md (agent-bob repo).",
+  "description": "Agent Wolf UI — hypothesis list/detail, scoreboard, Bob chat iframe. Wolf's own components and theme, plus Bob's types and presentational components via @agentkit/chat-ui (revision 5, tiers 1-2); Bob conversations come through an iframe only. See design/2026-08-20-agent-wolf.md (agent-bob repo).",
   "scripts": {
     "dev": "vite",
     "build": "tsc -p tsconfig.json && vite build",

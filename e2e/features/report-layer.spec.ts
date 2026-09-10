@@ -820,13 +820,13 @@ print(json.dumps({"id": created.get("id"),
     ).not.toBe("");
     expect(retraction.created_by_session).toBe(clean.sessionId);
 
-    // 4. The attack LANDED: Orange's default read no longer returns the
+    // 4. The attack LANDED: Bob's default read no longer returns the
     //    template. Without this, "the frame still renders" is consistent with
     //    nothing having happened at all.
     const defaultRead = await listMemories(`kind=report-template,name=${clean.id}`);
     expect(
       defaultRead.some((r) => r.id === locked!.id),
-      "Orange did not hide the retracted template; this leg is not testing what it claims",
+      "Bob did not hide the retracted template; this leg is not testing what it claims",
     ).toBe(false);
     const withRetracted = await listMemories(`kind=report-template,name=${clean.id}`, {
       includeRetracted: true,

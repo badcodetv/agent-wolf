@@ -5,7 +5,7 @@
  * ┌──────────────────────────────────────────────┬──────────────────────┐
  * │  ← Board   Petrodollar / drone parts    kai  │  Conversation    ⟨⟩  │
  * │  ◉ CHALLENGED — [Confirm] [Invalidate]       │  ┌────────────────┐  │
- * │  THE CASE · tripped rows · 3 research notes  │  │  Orange embed  │  │
+ * │  THE CASE · tripped rows · 3 research notes  │  │  Bob embed     │  │
  * │  REPORT (fixed height, expand)               │  │  sticky, 100vh │  │
  * │  SCOREBOARD · CONDITIONS · CHARTS            │  │                │  │
  * │  ARTIFACTS · PROPOSALS · TIMELINE  ↓ scroll  │  └────────────────┘  │
@@ -360,10 +360,10 @@ export default function HypothesisDetail() {
               </>
             )}
 
-            {/* W29. § 2 maps artifact METADATA to `machine`: it is Orange's
+            {/* W29. § 2 maps artifact METADATA to `machine`: it is Bob's
                 record of what a container wrote, not model prose — so the
                 panel carries no tint and no stamp. The panel itself is
-                Orange's own `ArtifactPanel`, under WOLF's ThemeProvider. */}
+                Bob's own `ArtifactPanel`, under WOLF's ThemeProvider. */}
             <Section title="ARTIFACTS">
               <ArtifactsPanel hypothesisId={id} />
             </Section>

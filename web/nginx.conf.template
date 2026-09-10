@@ -32,7 +32,7 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header Connection "";
-        # SSE-friendly: the Orange chat iframe streams over SSE, and Wolf's
+        # SSE-friendly: the Bob chat iframe streams over SSE, and Wolf's
         # own poller/status endpoints may too — never buffer either.
         proxy_buffering off;
         proxy_cache off;

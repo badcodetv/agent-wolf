@@ -4,7 +4,7 @@
  * These mirror `api/src/routes/hypotheses.ts` (`BoardRow`, `HypothesisDetail`)
  * and `api/src/routes/embed.ts` (`EmbedTokenResponse`) — snake_case on the
  * wire, and the unit in every timestamp's name: `_ms` is unix
- * **milliseconds** (memories), `_sec` is unix **seconds** (Orange's `agent_*`
+ * **milliseconds** (memories), `_sec` is unix **seconds** (Bob's `agent_*`
  * tables, and an embed token's `exp` claim). The plan's § "Environment facts"
  * says the two units differ deliberately and must not be unified; encoding
  * the unit in the name is how that stays visible on this side too.
@@ -415,7 +415,7 @@ export interface VerdictRow {
   created_at_ms: UnixMs;
 }
 
-/** `created_at_sec` is unix SECONDS — Orange's `agent_*` tables, not a memory. */
+/** `created_at_sec` is unix SECONDS — Bob's `agent_*` tables, not a memory. */
 export interface AttentionRequestRow {
   id: string;
   message: string;
@@ -499,7 +499,7 @@ export interface ReportCandidate {
   /** Everything after line 1: the proposed template fragment, verbatim. */
   html: string;
   created_at_ms: UnixMs;
-  /** Provenance, for § 2's `model` stamp. `""` where Orange stamped nothing. */
+  /** Provenance, for § 2's `model` stamp. `""` where Bob stamped nothing. */
   created_by_worker: string;
   created_by_session: string;
   /** sha256 of `html`; `null` when the candidate does not validate. */
@@ -524,23 +524,23 @@ export interface ReportTemplateAccepted {
 // ── Artifacts (W29) ─────────────────────────────────────────────────────
 
 /**
- * One row of `GET /api/hypotheses/:id/artifacts` — the metadata Orange holds
+ * One row of `GET /api/hypotheses/:id/artifacts` — the metadata Bob holds
  * for a file the session's container wrote. Mirrors `api/src/routes/artifacts.ts`'s
- * `ArtifactRow`, which is an ALLOW-LIST: Orange's `blobPath` (the store's own
+ * `ArtifactRow`, which is an ALLOW-LIST: Bob's `blobPath` (the store's own
  * object key) and its session uuid are dropped on the server and never reach
  * this type.
  *
- * 🔴 There is no `download_url` here and there must never be one. Orange sets
+ * 🔴 There is no `download_url` here and there must never be one. Bob sets
  * no CORS headers, so a URL on its origin fails in the browser anyway — and
  * the only credential that opens it is Wolf's project-wide API key.
  *
- * `status` and `artifact_type` are strings, not unions: Orange's own sets are
+ * `status` and `artifact_type` are strings, not unions: Bob's own sets are
  * extensible, and a closed union would turn a new value into a parse failure
  * that costs the whole panel.
  */
 export interface ArtifactRow {
   id: string;
-  /** Orange's dedup key with the session; may or may not carry a leading slash. */
+  /** Bob's dedup key with the session; may or may not carry a leading slash. */
   file_path: string;
   artifact_type: string;
   /** `live` | `extracted` | `lost` | `extraction_failed`, and open to more. */

@@ -67,7 +67,7 @@ describe("🔴 the frame's sandbox", () => {
     // NO sandbox. The framed document regains this origin, so model-authored
     // script inside it can read Wolf's session cookie, call every signed-in
     // API route as the human, and reach into the parent document — a bounded
-    // risk becomes a session compromise. This is Orange's hazard H3.
+    // risk becomes a session compromise. This is Bob's hazard H3.
     expect(sandbox).not.toBeNull();
     expect(sandbox ?? "").not.toContain("allow-same-origin");
 

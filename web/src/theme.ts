@@ -194,7 +194,7 @@ function themeOptions(mode: WolfColorMode): ThemeOptions {
 }
 
 /**
- * Two theme objects, not one with `mode` flipped — the same rule the Orange
+ * Two theme objects, not one with `mode` flipped — the same rule the Bob
  * console shell and its embed page follow.
  */
 export const lightTheme: Theme = createTheme(themeOptions("light"));
@@ -205,7 +205,7 @@ export function wolfTheme(mode: WolfColorMode): Theme {
 }
 
 /**
- * § 2b principle 5, and it is a necessity rather than a taste: the Orange rail
+ * § 2b principle 5, and it is a necessity rather than a taste: the Bob rail
  * Wolf iframes reads `prefers-color-scheme` and **cannot be told otherwise**
  * (`examples/web/src/EmbedSession.tsx:77-80` — `useMediaQuery(
  * "(prefers-color-scheme: dark)")`, two theme objects, no prop and no toggle).

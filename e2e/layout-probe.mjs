@@ -15,7 +15,7 @@
  * ancestor chain printing computed `min-width`.
  *
  * 🔴 **The chat panel is a CROSS-ORIGIN iframe** (Wolf on :8081 embedding
- * Orange on :8080), so page JavaScript cannot see inside it — `contentDocument`
+ * Bob on :8080), so page JavaScript cannot see inside it — `contentDocument`
  * throws. Playwright can: `page.frames()` reaches every frame regardless of
  * origin, which is the whole reason this is a Playwright script and not a
  * snippet in the console.
