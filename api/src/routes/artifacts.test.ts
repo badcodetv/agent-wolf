@@ -365,7 +365,7 @@ describe("artifacts_list", () => {
     expect(res.json.kind).toBe("not_found");
   });
 
-  it("artifacts_list: an Bob OUTAGE is `unavailable` — distinguishable from an absent session", async () => {
+  it("artifacts_list: a Bob OUTAGE is `unavailable` — distinguishable from an absent session", async () => {
     // `not_found` and `unavailable` must stay distinguishable: an outage is
     // not a missing session, and only one of the two is retryable. The status
     // is Bob's own 502, passed through by `defaultErrorFor`; the KIND is

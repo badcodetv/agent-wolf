@@ -2711,7 +2711,7 @@ describe("hypotheses_report_block", () => {
   });
 
   it("hypotheses_report_block: an UPSTREAM failure on the report read is NOT an unreadable report", async () => {
-    // 🔴 The narrowing at the catch. An Bob outage or a bug must
+    // 🔴 The narrowing at the catch. A Bob outage or a bug must
     // propagate: answering 200 with an empty block would tell the operator
     // the report layer is idle while the upstream is down, and W10's poller
     // reads `unavailable` as "retry" and `internal` as "we have a bug" — both

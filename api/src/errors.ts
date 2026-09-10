@@ -21,7 +21,7 @@ export type WolfErrorKind =
   | "invalid" // caller error; carries field-level details
   | "conflict" // CAS or state-machine rejection
   | "forbidden" // authenticated but not allowed
-  | "misconfigured" // an env var or an Bob-side setting is wrong; names the variable
+  | "misconfigured" // an env var or a Bob-side setting is wrong; names the variable
   | "internal"; // WE have a bug — an unhandled throw. NOT retryable. Message never echoed to the client.
 
 /** Default HTTP status per kind, used when the caller does not override it. */

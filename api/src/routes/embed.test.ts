@@ -388,7 +388,7 @@ describe("embed_token_not_found", () => {
     expect(h.stub.requests).toEqual([]);
   });
 
-  it("embed_token_not_found: an Bob outage is unavailable, NOT not_found", async () => {
+  it("embed_token_not_found: a Bob outage is unavailable, NOT not_found", async () => {
     const h = await harness({ embedToken: { status: 503, body: "upstream down" } });
     const res = await get(h, `/api/hypotheses/${ID}/embed-token`);
 

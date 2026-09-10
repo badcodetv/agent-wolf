@@ -1450,7 +1450,7 @@ describe("store_transition", () => {
 
   it("store_transition: the current state is RE-READ FROM BOB before the write", async () => {
     // Not from a value the caller passed in, and not from a cached board: the
-    // read that decides the transition is an Bob round-trip issued inside
+    // read that decides the transition is a Bob round-trip issued inside
     // the critical section, immediately before the append.
     const { store, stub } = harness(wired);
     await store.transition({ id: "1a2b3c4d", to: "challenged" });

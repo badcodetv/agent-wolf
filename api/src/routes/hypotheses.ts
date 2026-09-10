@@ -666,7 +666,7 @@ function firstLine(text: string): string {
  * appeared — with a good interview sitting in the transcript and nothing
  * anywhere reporting a problem.
  *
- * The alternative fix is an Bob change exposing `SESSION_NAME` in the
+ * The alternative fix is a Bob change exposing `SESSION_NAME` in the
  * container env, which is cleaner but touches the engine and every product
  * that embeds it. This is Wolf-local and puts the id where the model is
  * certain to read it: the first thing in the conversation.
@@ -1383,7 +1383,7 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
         // the board and vanish from this page.
         return { read: { report: null, tamper: reportTamperFrom(err) }, unreadable: true };
       }
-      // Everything else propagates. An Bob outage or a bug is NOT an
+      // Everything else propagates. A Bob outage or a bug is NOT an
       // unreadable report: answering 200 with an empty block would tell the
       // operator the report layer is idle while the upstream is down.
       throw err;

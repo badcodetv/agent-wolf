@@ -576,7 +576,7 @@ describe("series_auth", () => {
     expect(h.stub.requests).toEqual([]);
   });
 
-  it("series_auth: an Bob outage on the metadata read is unavailable, not never_fetched", async () => {
+  it("series_auth: a Bob outage on the metadata read is unavailable, not never_fetched", async () => {
     const h = await harness({ metadata: { status: 503, body: "upstream down" } });
     const res = await get(h, SERIES);
 

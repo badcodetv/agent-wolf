@@ -177,7 +177,7 @@ export interface BobClient {
   /**
    * `GET /agent/sessions/by-name/{name}/artifacts` (W29) — the METADATA list
    * for one session, addressed by the name Wolf chose (`hyp-<id>`) rather than
-   * by an Bob uuid Wolf would have to hold.
+   * by a Bob uuid Wolf would have to hold.
    *
    * A bare JSON array on the wire (`writeJSON(w, list)`), not a
    * `{"artifacts":[…]}` envelope — unlike memories, datasets and schedules.
@@ -272,7 +272,7 @@ async function safeText(res: Response): Promise<string> {
 function classifyStatus(status: number): WolfErrorKind {
   switch (status) {
     case 401:
-      // W15: this case was MISSING, so an Bob 401 fell through `default`
+      // W15: this case was MISSING, so a Bob 401 fell through `default`
       // and arrived as kind `internal` — "WE have a bug" — for what is in fact
       // a rejected credential. W8 needed `POST /auth/verify-google`'s 401 to
       // read as `forbidden` and worked around it by branching on

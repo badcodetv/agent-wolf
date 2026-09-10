@@ -241,7 +241,7 @@ export async function bootstrapProject(
 // here, NOT through api/src/config.ts's `WolfConfig`. This ticket's Files
 // line restricts config.ts to two variables (`WOLF_BASE_IMAGE`,
 // `WOLF_CRITIC_CRON`) — the file-ownership table serialises config.ts
-// across many tickets, and adding an Bob base URL / API key pair to its
+// across many tickets, and adding a Bob base URL / API key pair to its
 // typed schema is not this ticket's to make. `WOLF_MCP_URL` and
 // `WOLF_BASE_IMAGE`/`WOLF_CRITIC_CRON` DO come from `loadConfig()`, since
 // they already live there (the first was W1's, the latter two are this
