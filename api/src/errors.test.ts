@@ -4,7 +4,7 @@ import { WolfError } from "./errors.js";
 describe("WolfError", () => {
   it("distinguishes not_found from unavailable", () => {
     const missing = new WolfError("not_found", "hypothesis hyp-abc123 not found");
-    const down = new WolfError("unavailable", "orange did not respond");
+    const down = new WolfError("unavailable", "bob did not respond");
 
     expect(missing.kind).toBe("not_found");
     expect(down.kind).toBe("unavailable");

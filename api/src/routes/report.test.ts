@@ -28,7 +28,7 @@ import { createReportRouter, type ReportRouter } from "./report.js";
 /**
  * W21 — the three report routes. Test names are prefixed `report_`.
  *
- * Orange is an in-memory fake behind undici's `MockAgent` (the pinned
+ * Bob is an in-memory fake behind undici's `MockAgent` (the pinned
  * mechanism; no live network anywhere in this file). It is a FAKE rather than
  * a per-request canned answer because three of this ticket's criteria are
  * about a sequence: POST a template then GET the frame; accept an amendment
@@ -47,7 +47,7 @@ import { createReportRouter, type ReportRouter } from "./report.js";
  *    would assert nothing about the thing that could leak.
  */
 
-const ORANGE = "http://orange.test:4100";
+const BOB = "http://bob.test:4100";
 const API_KEY = "wolf-project-api-key-for-tests";
 const SECRET = "session-secret-for-tests-0123456789abcdef";
 const OWNER = "kai@badcode.dev";
@@ -125,7 +125,7 @@ function csv(rows: [string, number][]): string {
   return ["timestamp,value", ...rows.map(([t, v]) => `${t},${v}`), ""].join("\n");
 }
 
-// ── The in-memory Orange ────────────────────────────────────────────────
+// ── The in-memory Bob ────────────────────────────────────────────────
 
 interface Recorded {
   method: string;
@@ -150,7 +150,7 @@ interface MemRow {
   retractedBy?: Retraction[];
 }
 
-class FakeOrange {
+class FakeBob {
   readonly requests: Recorded[] = [];
   readonly sessions: Record<string, unknown>[] = [];
   readonly memories: MemRow[] = [];
@@ -330,7 +330,7 @@ class FakeOrange {
           const path = String(opts.path);
           const body = typeof opts.body === "string" ? opts.body : undefined;
           this.requests.push({ method, path, ...(body !== undefined ? { body } : {}) });
-          const answer = this.route(method, new URL(path, ORANGE), body);
+          const answer = this.route(method, new URL(path, BOB), body);
           return {
             statusCode: answer.status,
             data: answer.body as never,
@@ -347,7 +347,7 @@ class FakeOrange {
     const out: Record<string, unknown> = {
       id: row.id,
       labels: row.labels,
-      // Orange returns `substring(content, 1, 500)` — a snippet, never the
+      // Bob returns `substring(content, 1, 500)` — a snippet, never the
       // full content. Modelling the truncation is what keeps the template
       // reads honest: a route that read `snippet` would silently serve a
       // truncated template here, and pass every other assertion.
@@ -388,7 +388,7 @@ class FakeOrange {
     if (method === "POST" && path === "/agent/memories") {
       const parsed = JSON.parse(body ?? "{}") as { labels: Record<string, string>; content: string };
       if (this.failAppendWhere?.(parsed.labels) === true) {
-        return { status: 503, body: '{"error":"orange is having a moment"}' };
+        return { status: 503, body: '{"error":"bob is having a moment"}' };
       }
       this.appended += 1;
       // Written with Wolf's own API key, so the provenance is EMPTY — which
@@ -409,19 +409,19 @@ class FakeOrange {
         .split(",")
         .filter((t) => t !== "")
         .map((term) => term.split("="));
-      // 🔴 `limit` is HONOURED, newest first, exactly as Orange does. A fake
+      // 🔴 `limit` is HONOURED, newest first, exactly as Bob does. A fake
       // that returned every match made every page cap in the system invisible
       // — `ROW_LIMIT`, `DETAIL_LIMIT`, all of them — so a test claiming to
       // prove a lookup survives a full page proved nothing (found by a
       // surviving mutation, fix round 2).
-      // Orange's own semantics: `limit` DEFAULTS to 20 and is CAPPED at 100
+      // Bob's own semantics: `limit` DEFAULTS to 20 and is CAPPED at 100
       // (`go/agentdb/memories.go:36-37,443-448`). The fake defaulted to 100
       // and applied no cap, which is the same "kinder than reality"
       // direction that produced two defects already — a caller relying on a
-      // page bigger than Orange will ever return would pass here and fail in
+      // page bigger than Bob will ever return would pass here and fail in
       // production.
       const limit = Math.min(Number(url.searchParams.get("limit") ?? "20"), 100);
-      // 🔴 `include_retracted` is HONOURED. Without it Orange filters
+      // 🔴 `include_retracted` is HONOURED. Without it Bob filters
       // retracted rows server-side (`client.ts` sends `include_retracted=1`
       // deliberately), so a fake that always returned them made every
       // retraction defence in the system untestable — a hostile retraction
@@ -535,7 +535,7 @@ beforeEach(() => {
   mockAgent.disableNetConnect();
   mockAgent.enableNetConnect((host) => host.startsWith("127.0.0.1") || host.startsWith("localhost"));
   setGlobalDispatcher(mockAgent);
-  pool = mockAgent.get(ORANGE);
+  pool = mockAgent.get(BOB);
 });
 
 afterEach(async () => {
@@ -551,7 +551,7 @@ function config(env: NodeJS.ProcessEnv = {}): WolfConfig {
       WOLF_SESSION_SECRET: SECRET,
       WOLF_ALLOWED_EMAILS: OWNER,
       WOLF_API_KEY: API_KEY,
-      BOB_BASE_URL: ORANGE,
+      BOB_BASE_URL: BOB,
       NODE_ENV: "test",
       ...env,
     },
@@ -572,7 +572,7 @@ function capturingLogger(): { logger: Logger; lines: string[] } {
 
 interface Harness {
   base: string;
-  orange: FakeOrange;
+  bob: FakeBob;
   cookie: string;
   lines: string[];
   /** W22's accessor, bound to the SAME router instance the routes are mounted from. */
@@ -580,13 +580,13 @@ interface Harness {
 }
 
 /** Builds the fixture set most tests start from: one hypothesis, one template. */
-function seeded(orange: FakeOrange): FakeOrange {
-  orange.hypothesis(ID);
-  orange.spec(ID);
-  orange.template(ID, TEMPLATE_A);
-  orange.dataset(`${ID}-${SLUG_A}`, 3, csv([["2026-08-23T00:00:00Z", 141.22]]));
-  orange.dataset(`${ID}-${SLUG_B}`, 1, csv([["2026-08-23T00:00:00Z", 61.5]]));
-  return orange;
+function seeded(bob: FakeBob): FakeBob {
+  bob.hypothesis(ID);
+  bob.spec(ID);
+  bob.template(ID, TEMPLATE_A);
+  bob.dataset(`${ID}-${SLUG_A}`, 3, csv([["2026-08-23T00:00:00Z", 141.22]]));
+  bob.dataset(`${ID}-${SLUG_B}`, 1, csv([["2026-08-23T00:00:00Z", 61.5]]));
+  return bob;
 }
 
 interface HarnessOptions {
@@ -595,16 +595,16 @@ interface HarnessOptions {
 }
 
 async function harness(
-  seed: (orange: FakeOrange) => void = seeded,
+  seed: (bob: FakeBob) => void = seeded,
   options: HarnessOptions = {},
 ): Promise<Harness> {
-  const orange = new FakeOrange(pool);
-  seed(orange);
-  orange.install();
+  const bob = new FakeBob(pool);
+  seed(bob);
+  bob.install();
 
   const cfg = config();
   const { logger, lines } = capturingLogger();
-  const client = createBobClient({ baseUrl: cfg.orangeBaseUrl, apiKey: cfg.orangeApiKey, logger });
+  const client = createBobClient({ baseUrl: cfg.bobBaseUrl, apiKey: cfg.bobApiKey, logger });
   const store = createHypothesisStore({ client, logger });
 
   const app = express();
@@ -632,7 +632,7 @@ async function harness(
 
   const signIn = await fetch(`${base}/test-sign-in`, { method: "POST" });
   const cookie = (signIn.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
-  return { base, orange, cookie, lines, composeReportStats: report.composeReportStats };
+  return { base, bob, cookie, lines, composeReportStats: report.composeReportStats };
 }
 
 /**
@@ -647,12 +647,12 @@ async function harness(
  * obtain a cookie from an app whose route table this file must not modify.
  */
 async function realHarness(
-  seed: (orange: FakeOrange) => void = seeded,
+  seed: (bob: FakeBob) => void = seeded,
   env: NodeJS.ProcessEnv = {},
 ): Promise<Harness> {
-  const orange = new FakeOrange(pool);
-  seed(orange);
-  orange.install();
+  const bob = new FakeBob(pool);
+  seed(bob);
+  bob.install();
 
   const { logger, lines } = capturingLogger();
   const cfg = loadConfig(
@@ -661,7 +661,7 @@ async function realHarness(
       WOLF_SESSION_SECRET: SECRET,
       WOLF_ALLOWED_EMAILS: OWNER,
       WOLF_API_KEY: API_KEY,
-      BOB_BASE_URL: ORANGE,
+      BOB_BASE_URL: BOB,
       WOLF_TEST_LOGIN: `${OWNER}:${TEST_PASSWORD}`,
       NODE_ENV: "test",
       ...env,
@@ -683,7 +683,7 @@ async function realHarness(
   });
   if (signIn.status !== 200) throw new Error(`dev-login failed: ${signIn.status}`);
   const cookie = (signIn.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
-  return { base, orange, cookie, lines };
+  return { base, bob, cookie, lines };
 }
 
 interface Result {
@@ -763,10 +763,10 @@ describe("report_frame", () => {
   it("report_frame: the CSP is the one composeFrame derived for THAT template", async () => {
     // Two hypotheses, two templates, two different remote-origin sets. A
     // route emitting a constant policy passes every W19 test and fails here.
-    const h = await harness((orange) => {
-      seeded(orange);
-      orange.hypothesis(ID_B);
-      orange.template(ID_B, TEMPLATE_B);
+    const h = await harness((bob) => {
+      seeded(bob);
+      bob.hypothesis(ID_B);
+      bob.template(ID_B, TEMPLATE_B);
     });
 
     const a = await get(h, FRAME);
@@ -778,9 +778,9 @@ describe("report_frame", () => {
   });
 
   it("report_frame: an origin that is fetched but not executable stays out of script-src (R152)", async () => {
-    const h = await harness((orange) => {
-      orange.hypothesis(ID_B);
-      orange.template(ID_B, TEMPLATE_B);
+    const h = await harness((bob) => {
+      bob.hypothesis(ID_B);
+      bob.template(ID_B, TEMPLATE_B);
     });
     const res = await get(h, frameUrl(ID_B));
 
@@ -812,9 +812,9 @@ describe("report_frame", () => {
   });
 
   it("report_frame: 404 kind=not_found, distinguishable from a server error, when no template exists", async () => {
-    const h = await harness((orange) => {
-      orange.hypothesis(ID);
-      orange.spec(ID);
+    const h = await harness((bob) => {
+      bob.hypothesis(ID);
+      bob.spec(ID);
     });
     const res = await get(h, FRAME);
 
@@ -830,16 +830,16 @@ describe("report_frame", () => {
     const res = await get(h, FRAME, false);
 
     expect(res.status).toBe(401);
-    expect(h.orange.requests).toHaveLength(0);
+    expect(h.bob.requests).toHaveLength(0);
   });
 
   it("report_frame: a FORGED report-template is 404, never rendered", async () => {
-    const h = await harness((orange) => {
-      orange.hypothesis(ID);
+    const h = await harness((bob) => {
+      bob.hypothesis(ID);
       // Written from inside a container: non-empty provenance, so `isTrusted`
       // refuses it. Rendering it would let a researcher session own the
       // document a human reads.
-      orange.memory({
+      bob.memory({
         id: "forged",
         labels: { kind: "report-template", name: ID, status: "locked" },
         content: `${hashOf(TEMPLATE_A)}\n${TEMPLATE_A}`,
@@ -855,12 +855,12 @@ describe("report_frame", () => {
   });
 
   it("report_frame: a template hidden by a HOSTILE retraction is still served", async () => {
-    const h = await harness((orange) => {
-      seeded(orange);
+    const h = await harness((bob) => {
+      seeded(bob);
       // A retraction whose OWN provenance is non-empty: an untrusted actor
       // cannot withdraw server-written state. Serving `null` here would be
       // the retraction defence failing open.
-      orange.retractHostilely(`tmpl-${ID}`);
+      bob.retractHostilely(`tmpl-${ID}`);
     });
     const res = await get(h, FRAME);
 
@@ -877,16 +877,16 @@ describe("report_frame", () => {
     // arriving here is the `hyp-hyp-…` bug being born.
     expect(res.status).toBe(400);
     expect(res.json.kind).toBe("invalid");
-    expect(h.orange.requests).toHaveLength(0);
+    expect(h.bob.requests).toHaveLength(0);
   });
 
   it("report_frame: a stored template that no longer validates is internal, and its message is not echoed", async () => {
-    const h = await harness((orange) => {
-      orange.hypothesis(ID);
+    const h = await harness((bob) => {
+      bob.hypothesis(ID);
       // No `[data-wolf-fallback]` — a validation failure, and one that could
       // only arise from a validator change or a write path that skipped
       // validation. The caller sent nothing, so it is not their 400.
-      orange.template(ID, '<section data-wolf-slot="analysis">x</section>');
+      bob.template(ID, '<section data-wolf-slot="analysis">x</section>');
     });
     const res = await get(h, FRAME);
 
@@ -905,9 +905,9 @@ describe("report_frame", () => {
 
 describe("report_frame_content", () => {
   it("report_frame_content: slot content is sanitised into the document", async () => {
-    const h = await harness((orange) => {
-      seeded(orange);
-      orange.report(ID, "the basket held", {
+    const h = await harness((bob) => {
+      seeded(bob);
+      bob.report(ID, "the basket held", {
         analysis: '<p onclick="alert(1)">the basket <em>held</em></p><script>steal()</script>',
       });
     });
@@ -925,9 +925,9 @@ describe("report_frame_content", () => {
   });
 
   it("report_frame_content: an unfilled slot renders empty, never the string undefined", async () => {
-    const h = await harness((orange) => {
-      seeded(orange);
-      orange.report(ID, "nothing to say", {});
+    const h = await harness((bob) => {
+      seeded(bob);
+      bob.report(ID, "nothing to say", {});
     });
     const res = await get(h, FRAME);
 
@@ -954,11 +954,11 @@ describe("report_frame_content", () => {
   });
 
   it("report_frame_content: a metric whose dataset was never written is version 0 and empty, never absent", async () => {
-    const h = await harness((orange) => {
-      orange.hypothesis(ID);
-      orange.spec(ID);
-      orange.template(ID, TEMPLATE_A);
-      orange.dataset(`${ID}-${SLUG_A}`, 3, csv([["2026-08-23T00:00:00Z", 141.22]]));
+    const h = await harness((bob) => {
+      bob.hypothesis(ID);
+      bob.spec(ID);
+      bob.template(ID, TEMPLATE_A);
+      bob.dataset(`${ID}-${SLUG_A}`, 3, csv([["2026-08-23T00:00:00Z", 141.22]]));
       // SLUG_B is deliberately never written.
     });
     const res = await get(h, FRAME);
@@ -976,10 +976,10 @@ describe("report_frame_content", () => {
     const spec = workedSpec() as any;
     spec.metrics[0].slug = "constructor";
     spec.invalidation[0].metric = "constructor";
-    const h = await harness((orange) => {
-      orange.hypothesis(ID);
-      orange.spec(ID, spec);
-      orange.template(ID, TEMPLATE_A);
+    const h = await harness((bob) => {
+      bob.hypothesis(ID);
+      bob.spec(ID, spec);
+      bob.template(ID, TEMPLATE_A);
       // No dataset for `constructor` — the branch that broke.
     });
     const res = await get(h, FRAME);
@@ -995,17 +995,17 @@ describe("report_frame_content", () => {
     // metrics exist, what unit each carries and which datasets are fetched —
     // so trusting one would let a researcher session choose what its own
     // report renders. The frame still serves; it just has no series.
-    const h = await harness((orange) => {
-      orange.hypothesis(ID);
-      orange.spec(ID, workedSpec(), { worker: `researcher-${ID}`, session: `sess-hyp-${ID}` });
-      orange.template(ID, TEMPLATE_A);
-      orange.dataset(`${ID}-${SLUG_A}`, 3, csv([["2026-08-23T00:00:00Z", 141.22]]));
+    const h = await harness((bob) => {
+      bob.hypothesis(ID);
+      bob.spec(ID, workedSpec(), { worker: `researcher-${ID}`, session: `sess-hyp-${ID}` });
+      bob.template(ID, TEMPLATE_A);
+      bob.dataset(`${ID}-${SLUG_A}`, 3, csv([["2026-08-23T00:00:00Z", 141.22]]));
     });
     const res = await get(h, FRAME);
 
     expect(res.status).toBe(200);
     expect(res.raw).toContain("window.__WOLF_SERIES__ = {};");
-    expect(h.orange.paths("/agent/datasets/")).toHaveLength(0);
+    expect(h.bob.paths("/agent/datasets/")).toHaveLength(0);
   });
 
   it("report_frame_content: a hostilely retracted locked SPEC is still used", async () => {
@@ -1013,35 +1013,35 @@ describe("report_frame_content", () => {
     // spec decides which metrics exist and which datasets are fetched, so a
     // container able to hide it by retracting it could blank the report's
     // numbers without forging anything. `include_retracted=1` is what makes
-    // the trust rule the judge instead of Orange's server-side filter.
-    const h = await harness((orange) => {
-      seeded(orange);
-      orange.retractHostilely(`spec-${ID}`);
+    // the trust rule the judge instead of Bob's server-side filter.
+    const h = await harness((bob) => {
+      seeded(bob);
+      bob.retractHostilely(`spec-${ID}`);
     });
     const res = await get(h, FRAME);
 
     expect(res.status).toBe(200);
     const series = JSON.parse(/window\.__WOLF_SERIES__ = (.*);<\/script>/.exec(res.raw)![1]!);
     expect(Object.keys(series).sort()).toEqual([SLUG_A, SLUG_B]);
-    expect(h.orange.paths("/agent/datasets/").length).toBeGreaterThan(0);
+    expect(h.bob.paths("/agent/datasets/").length).toBeGreaterThan(0);
   });
 
   it("report_frame_content: a hypothesis with no locked spec still renders, with an empty series", async () => {
-    const h = await harness((orange) => {
-      orange.hypothesis(ID);
-      orange.template(ID, TEMPLATE_A);
+    const h = await harness((bob) => {
+      bob.hypothesis(ID);
+      bob.template(ID, TEMPLATE_A);
     });
     const res = await get(h, FRAME);
 
     expect(res.status).toBe(200);
     expect(res.raw).toContain("window.__WOLF_SERIES__ = {};");
-    expect(h.orange.paths("/agent/datasets/")).toHaveLength(0);
+    expect(h.bob.paths("/agent/datasets/")).toHaveLength(0);
   });
 
   it("report_frame_content: an upstream outage on a dataset is unavailable, never a missing metric", async () => {
-    const h = await harness((orange) => {
-      seeded(orange);
-      orange.unavailableDatasets.add(`${ID}-${SLUG_A}`);
+    const h = await harness((bob) => {
+      seeded(bob);
+      bob.unavailableDatasets.add(`${ID}-${SLUG_A}`);
     });
     const res = await get(h, FRAME);
 
@@ -1061,7 +1061,7 @@ describe("report_frame_cache", () => {
     const h = await harness();
 
     const first = await get(h, FRAME);
-    const downloadsAfterFirst = h.orange.downloads.length;
+    const downloadsAfterFirst = h.bob.downloads.length;
     const second = await get(h, FRAME);
 
     expect(first.status).toBe(200);
@@ -1070,17 +1070,17 @@ describe("report_frame_cache", () => {
     expect(second.csp).toBe(first.csp);
     // Two metrics, downloaded once. Without the gate this is four.
     expect(downloadsAfterFirst).toBe(2);
-    expect(h.orange.downloads).toHaveLength(2);
+    expect(h.bob.downloads).toHaveLength(2);
     // The version is still READ on every request — the gate is a comparison,
     // not a decision to stop looking.
-    expect(h.orange.paths(`/agent/datasets/${ID}-${SLUG_A}`).length).toBeGreaterThanOrEqual(2);
+    expect(h.bob.paths(`/agent/datasets/${ID}-${SLUG_A}`).length).toBeGreaterThanOrEqual(2);
   });
 
   it("report_frame_cache: a new dataset version re-downloads and re-composes", async () => {
     const h = await harness();
     const first = await get(h, FRAME);
 
-    h.orange.dataset(
+    h.bob.dataset(
       `${ID}-${SLUG_A}`,
       4,
       csv([
@@ -1093,9 +1093,9 @@ describe("report_frame_cache", () => {
     expect(second.raw).not.toBe(first.raw);
     expect(second.raw).toContain("155.75");
     // Only the changed dataset is fetched again.
-    const slugADownloads = h.orange.downloads.filter((r) => r.path.includes(SLUG_A));
+    const slugADownloads = h.bob.downloads.filter((r) => r.path.includes(SLUG_A));
     expect(slugADownloads).toHaveLength(2);
-    expect(h.orange.downloads.filter((r) => r.path.includes(SLUG_B))).toHaveLength(1);
+    expect(h.bob.downloads.filter((r) => r.path.includes(SLUG_B))).toHaveLength(1);
     // Each download is PINNED to the version its metadata read named.
     expect(slugADownloads[0]!.path).toContain("version=3");
     expect(slugADownloads[1]!.path).toContain("version=4");
@@ -1108,9 +1108,9 @@ describe("report_frame_cache", () => {
     // an unpinned download returns v4's bytes while the frame reports v3.
     // The invariant is that the number the frame states and the numbers it
     // draws come from the same snapshot.
-    const h = await harness((orange) => {
-      seeded(orange);
-      orange.bumpOnMetadataRead.set(`${ID}-${SLUG_A}`, {
+    const h = await harness((bob) => {
+      seeded(bob);
+      bob.bumpOnMetadataRead.set(`${ID}-${SLUG_A}`, {
         version: 4,
         csv: csv([["2026-08-24T00:00:00Z", 999.99]]),
       });
@@ -1129,14 +1129,14 @@ describe("report_frame_cache", () => {
     // 🔴 The structureHash half of the cache key. The dataset versions are
     // identical across these two requests, so a version-only key serves the
     // superseded document for ever — silently, and past a human review.
-    const h = await harness((orange) => {
-      seeded(orange);
-      orange.amendment(ID, TEMPLATE_B);
+    const h = await harness((bob) => {
+      seeded(bob);
+      bob.amendment(ID, TEMPLATE_B);
     });
 
     const before = await get(h, FRAME);
     expect(before.csp).toBe(CSP_A);
-    const versionsBefore = h.orange.paths("/agent/datasets/").length;
+    const versionsBefore = h.bob.paths("/agent/datasets/").length;
 
     const accepted = await post(h, `/api/hypotheses/${ID}/report-amendment`, {
       amendment_id: `amend-${ID}`,
@@ -1151,20 +1151,20 @@ describe("report_frame_cache", () => {
     expect(after.raw).toContain("https://img-b.example/pixel.png");
     expect(after.raw).not.toContain("cdn-a.example");
     // And it did NOT pay to re-download the CSVs it already holds.
-    expect(h.orange.downloads).toHaveLength(2);
-    expect(h.orange.paths("/agent/datasets/").length).toBeGreaterThan(versionsBefore);
+    expect(h.bob.downloads).toHaveLength(2);
+    expect(h.bob.paths("/agent/datasets/").length).toBeGreaterThan(versionsBefore);
   });
 
   it("report_frame_cache: a new daily report re-composes, although the template and datasets are unchanged", async () => {
-    const h = await harness((orange) => {
-      seeded(orange);
-      orange.report(ID, "day one", { analysis: "<p>day one</p>" }, "rep-1");
+    const h = await harness((bob) => {
+      seeded(bob);
+      bob.report(ID, "day one", { analysis: "<p>day one</p>" }, "rep-1");
     });
 
     const first = await get(h, FRAME);
     expect(first.raw).toContain("day one");
 
-    h.orange.report(ID, "day two", { analysis: "<p>day two</p>" }, "rep-2");
+    h.bob.report(ID, "day two", { analysis: "<p>day two</p>" }, "rep-2");
     const second = await get(h, FRAME);
 
     expect(second.raw).toContain("day two");
@@ -1178,18 +1178,18 @@ describe("report_frame_cache", () => {
     // cache keys are byte-identical: the id is the only thing separating them.
     // A constant key serves A's document for B at HTTP 200 — cross-hypothesis
     // contamination, in the one place a human reads numbers.
-    const h = await harness((orange) => {
-      orange.hypothesis(ID);
-      orange.spec(ID);
-      orange.template(ID, TEMPLATE_A, "tmpl-a");
-      orange.dataset(`${ID}-${SLUG_A}`, 3, csv([["2026-08-23T00:00:00Z", 111.11]]));
-      orange.dataset(`${ID}-${SLUG_B}`, 1, csv([["2026-08-23T00:00:00Z", 111.22]]));
+    const h = await harness((bob) => {
+      bob.hypothesis(ID);
+      bob.spec(ID);
+      bob.template(ID, TEMPLATE_A, "tmpl-a");
+      bob.dataset(`${ID}-${SLUG_A}`, 3, csv([["2026-08-23T00:00:00Z", 111.11]]));
+      bob.dataset(`${ID}-${SLUG_B}`, 1, csv([["2026-08-23T00:00:00Z", 111.22]]));
 
-      orange.hypothesis(ID_B);
-      orange.spec(ID_B);
-      orange.template(ID_B, TEMPLATE_A, "tmpl-b");
-      orange.dataset(`${ID_B}-${SLUG_A}`, 3, csv([["2026-08-23T00:00:00Z", 999.11]]));
-      orange.dataset(`${ID_B}-${SLUG_B}`, 1, csv([["2026-08-23T00:00:00Z", 999.22]]));
+      bob.hypothesis(ID_B);
+      bob.spec(ID_B);
+      bob.template(ID_B, TEMPLATE_A, "tmpl-b");
+      bob.dataset(`${ID_B}-${SLUG_A}`, 3, csv([["2026-08-23T00:00:00Z", 999.11]]));
+      bob.dataset(`${ID_B}-${SLUG_B}`, 1, csv([["2026-08-23T00:00:00Z", 999.22]]));
     });
 
     const a = await get(h, FRAME);
@@ -1205,23 +1205,23 @@ describe("report_frame_cache", () => {
 
   it("report_frame_cache: the cache is bounded — the oldest entry is evicted at the cap", async () => {
     const h = await harness(
-      (orange) => {
-        seeded(orange);
-        orange.hypothesis(ID_B);
-        orange.spec(ID_B);
-        orange.template(ID_B, TEMPLATE_B);
+      (bob) => {
+        seeded(bob);
+        bob.hypothesis(ID_B);
+        bob.spec(ID_B);
+        bob.template(ID_B, TEMPLATE_B);
       },
       { cacheMaxEntries: 1 },
     );
 
     await get(h, FRAME); // caches ID
     await get(h, frameUrl(ID_B)); // evicts ID
-    const downloadsBefore = h.orange.downloads.length;
+    const downloadsBefore = h.bob.downloads.length;
     const again = await get(h, FRAME); // must re-compose from scratch
 
     expect(again.status).toBe(200);
     expect(again.csp).toBe(CSP_A);
-    expect(h.orange.downloads.length).toBeGreaterThan(downloadsBefore);
+    expect(h.bob.downloads.length).toBeGreaterThan(downloadsBefore);
   });
 });
 
@@ -1231,9 +1231,9 @@ describe("report_frame_cache", () => {
 
 describe("report_compose_stats", () => {
   it("report_compose_stats: returns the stripped_count of the document the frame SERVED", async () => {
-    const h = await harness((orange) => {
-      seeded(orange);
-      orange.report(ID, "the basket held", {
+    const h = await harness((bob) => {
+      seeded(bob);
+      bob.report(ID, "the basket held", {
         analysis: '<p onclick="alert(1)">the basket <em>held</em></p><script>steal()</script>',
       });
     });
@@ -1255,22 +1255,22 @@ describe("report_compose_stats", () => {
   it("report_compose_stats: goes through the frame route's cache — no second compose, no re-download", async () => {
     const h = await harness();
     await get(h, FRAME);
-    const downloadsAfterFrame = h.orange.downloads.length;
+    const downloadsAfterFrame = h.bob.downloads.length;
     const composesAfterFrame = h.lines.filter((l) => l.includes("report frame composed")).length;
 
     await h.composeReportStats!(ID);
 
     // A second cache — or a second compose path — shows up as either.
-    expect(h.orange.downloads).toHaveLength(downloadsAfterFrame);
+    expect(h.bob.downloads).toHaveLength(downloadsAfterFrame);
     expect(h.lines.filter((l) => l.includes("report frame composed"))).toHaveLength(
       composesAfterFrame,
     );
   });
 
   it("report_compose_stats: null when there is no locked template — the detail block's has_template:false", async () => {
-    const h = await harness((orange) => {
-      orange.hypothesis(ID);
-      orange.spec(ID);
+    const h = await harness((bob) => {
+      bob.hypothesis(ID);
+      bob.spec(ID);
     });
 
     await expect(h.composeReportStats!(ID)).resolves.toBeNull();
@@ -1310,9 +1310,9 @@ describe("report_frame_credentials", () => {
    */
   it("report_frame_credentials: neither the API key nor an embed token appears in the frame", async () => {
     const h = await realHarness(
-      (orange) => {
-        seeded(orange);
-        orange.report(ID, "the basket held", { analysis: "<p>the basket held</p>" });
+      (bob) => {
+        seeded(bob);
+        bob.report(ID, "the basket held", { analysis: "<p>the basket held</p>" });
       },
       {
         WOLF_API_KEY: SENTINEL_API_KEY,
@@ -1352,8 +1352,8 @@ describe("report_frame_credentials", () => {
       // a pino line lands in every proxy log and error report downstream.
       expect(h.lines.join("\n")).not.toContain(secret);
     }
-    // Nor does Orange's own base URL, which would hand the page a route to it.
-    expect(res.raw).not.toContain(ORANGE);
+    // Nor does Bob's own base URL, which would hand the page a route to it.
+    expect(res.raw).not.toContain(BOB);
   });
 });
 
@@ -1364,9 +1364,9 @@ describe("report_frame_credentials", () => {
 describe("report_body_limit", () => {
   const url = `/api/hypotheses/${ID}/report-template`;
 
-  function noTemplateYet(orange: FakeOrange): void {
-    orange.hypothesis(ID);
-    orange.spec(ID);
+  function noTemplateYet(bob: FakeBob): void {
+    bob.hypothesis(ID);
+    bob.spec(ID);
   }
 
   it("report_body_limit: a template inside the configured budget reaches the validator", async () => {
@@ -1393,7 +1393,7 @@ describe("report_body_limit", () => {
     expect(res.status).toBe(422);
     expect(res.json.kind).toBe("invalid");
     expect(res.json.details.errors[0].message).toContain("exceeds the limit");
-    expect(h.orange.appends).toHaveLength(0);
+    expect(h.bob.appends).toHaveLength(0);
   });
 
   it("report_body_limit: a body past the TRANSPORT limit is invalid, never internal", async () => {
@@ -1404,16 +1404,16 @@ describe("report_body_limit", () => {
 
     expect(res.status).toBe(413);
     expect(res.json.kind).toBe("invalid");
-    expect(h.orange.appends).toHaveLength(0);
+    expect(h.bob.appends).toHaveLength(0);
   });
 });
 
 describe("report_body_errors", () => {
   const url = `/api/hypotheses/${ID}/report-template`;
 
-  function noTemplateYet(orange: FakeOrange): void {
-    orange.hypothesis(ID);
-    orange.spec(ID);
+  function noTemplateYet(bob: FakeBob): void {
+    bob.hypothesis(ID);
+    bob.spec(ID);
   }
 
   it("report_body_errors: malformed JSON is invalid, never internal", async () => {
@@ -1478,11 +1478,11 @@ describe("report_body_errors", () => {
 describe("report_template", () => {
   const url = `/api/hypotheses/${ID}/report-template`;
 
-  function noTemplate(orange: FakeOrange): void {
-    orange.hypothesis(ID);
-    orange.spec(ID);
-    orange.dataset(`${ID}-${SLUG_A}`, 3, csv([["2026-08-23T00:00:00Z", 141.22]]));
-    orange.dataset(`${ID}-${SLUG_B}`, 1, csv([["2026-08-23T00:00:00Z", 61.5]]));
+  function noTemplate(bob: FakeBob): void {
+    bob.hypothesis(ID);
+    bob.spec(ID);
+    bob.dataset(`${ID}-${SLUG_A}`, 3, csv([["2026-08-23T00:00:00Z", 141.22]]));
+    bob.dataset(`${ID}-${SLUG_B}`, 1, csv([["2026-08-23T00:00:00Z", 61.5]]));
   }
 
   it("report_template: 201 { structure_hash } and a trusted, locked row", async () => {
@@ -1496,8 +1496,8 @@ describe("report_template", () => {
     expect(res.json.remote_origins).toEqual(["https://cdn-a.example"]);
     expect(res.json.script_srcs).toEqual(["https://cdn-a.example/chart.js"]);
 
-    expect(h.orange.appends).toHaveLength(1);
-    const body = JSON.parse(h.orange.appends[0]!.body!);
+    expect(h.bob.appends).toHaveLength(1);
+    const body = JSON.parse(h.bob.appends[0]!.body!);
     expect(body.labels).toEqual({ kind: "report-template", name: ID, status: "locked" });
     // Line 1 is the hash; the rest is the fragment, byte for byte.
     expect(body.content).toBe(`${hashOf(TEMPLATE_A)}\n${TEMPLATE_A}`);
@@ -1535,7 +1535,7 @@ describe("report_template", () => {
     expect(res.status).toBe(409);
     expect(res.json.kind).toBe("conflict");
     expect(res.json.message).toContain("amendment");
-    expect(h.orange.appends).toHaveLength(0);
+    expect(h.bob.appends).toHaveLength(0);
   });
 
   it("report_template: an existing template is 409 even when the submitted HTML is invalid", async () => {
@@ -1546,7 +1546,7 @@ describe("report_template", () => {
 
     expect(res.status).toBe(409);
     expect(res.json.kind).toBe("conflict");
-    expect(h.orange.appends).toHaveLength(0);
+    expect(h.bob.appends).toHaveLength(0);
   });
 
   it("report_template: 422 invalid with a per-path error list, and nothing is written", async () => {
@@ -1561,7 +1561,7 @@ describe("report_template", () => {
     expect(res.json.details.errors.some((e: any) => e.message.includes("data-wolf-fallback"))).toBe(
       true,
     );
-    expect(h.orange.appends).toHaveLength(0);
+    expect(h.bob.appends).toHaveLength(0);
   });
 
   it("report_template: a missing html field is a 400 invalid body, not a 422", async () => {
@@ -1574,14 +1574,14 @@ describe("report_template", () => {
   });
 
   it("report_template: an unknown hypothesis is 404, and nothing is written", async () => {
-    const h = await harness((orange) => {
-      orange.hypothesis(ID_B);
+    const h = await harness((bob) => {
+      bob.hypothesis(ID_B);
     });
     const res = await post(h, url, { html: TEMPLATE_A });
 
     expect(res.status).toBe(404);
     expect(res.json.kind).toBe("not_found");
-    expect(h.orange.appends).toHaveLength(0);
+    expect(h.bob.appends).toHaveLength(0);
   });
 
   it("report_template: 401 with no cookie, and NOT ONE upstream request", async () => {
@@ -1589,7 +1589,7 @@ describe("report_template", () => {
     const res = await post(h, url, { html: TEMPLATE_A }, false);
 
     expect(res.status).toBe(401);
-    expect(h.orange.requests).toHaveLength(0);
+    expect(h.bob.requests).toHaveLength(0);
   });
 });
 
@@ -1622,32 +1622,32 @@ describe("report_fixture", () => {
    * send, assert the fake implements it rather than ignores it. The client
    * sends two — `limit` and `include_retracted` — and both are below.
    */
-  async function fixtureClient(seed: (orange: FakeOrange) => void): Promise<{
-    orange: FakeOrange;
+  async function fixtureClient(seed: (bob: FakeBob) => void): Promise<{
+    bob: FakeBob;
     client: ReturnType<typeof createBobClient>;
   }> {
-    const orange = new FakeOrange(pool);
-    seed(orange);
-    orange.install();
+    const bob = new FakeBob(pool);
+    seed(bob);
+    bob.install();
     const cfg = config();
     const { logger } = capturingLogger();
     return {
-      orange,
-      client: createBobClient({ baseUrl: cfg.orangeBaseUrl, apiKey: cfg.orangeApiKey, logger }),
+      bob,
+      client: createBobClient({ baseUrl: cfg.bobBaseUrl, apiKey: cfg.bobApiKey, logger }),
     };
   }
 
-  function threeAmendments(orange: FakeOrange): void {
-    orange.hypothesis(ID);
-    orange.amendment(ID, TEMPLATE_B, "amend-1");
-    orange.amendment(ID, TEMPLATE_B, "amend-2");
-    orange.amendment(ID, TEMPLATE_B, "amend-3");
+  function threeAmendments(bob: FakeBob): void {
+    bob.hypothesis(ID);
+    bob.amendment(ID, TEMPLATE_B, "amend-1");
+    bob.amendment(ID, TEMPLATE_B, "amend-2");
+    bob.amendment(ID, TEMPLATE_B, "amend-3");
   }
 
   it("report_fixture: HIDES a retracted row when include_retracted is not sent", async () => {
-    const { client } = await fixtureClient((orange) => {
-      threeAmendments(orange);
-      orange.retractHostilely("amend-2");
+    const { client } = await fixtureClient((bob) => {
+      threeAmendments(bob);
+      bob.retractHostilely("amend-2");
     });
 
     const rows = await client.listMemories({ selector: `kind=report-amendment,name=${ID}` });
@@ -1656,9 +1656,9 @@ describe("report_fixture", () => {
   });
 
   it("report_fixture: SHOWS a retracted row when include_retracted is sent", async () => {
-    const { client } = await fixtureClient((orange) => {
-      threeAmendments(orange);
-      orange.retractHostilely("amend-2");
+    const { client } = await fixtureClient((bob) => {
+      threeAmendments(bob);
+      bob.retractHostilely("amend-2");
     });
 
     const rows = await client.listMemories({
@@ -1686,10 +1686,10 @@ describe("report_fixture", () => {
     expect(one[0]?.id).toBe("amend-3");
   });
 
-  it("report_fixture: defaults limit to 20 and caps it at 100, as Orange does", async () => {
-    const { client } = await fixtureClient((orange) => {
-      orange.hypothesis(ID);
-      for (let i = 0; i < 150; i += 1) orange.amendment(ID, TEMPLATE_B, `amend-${i}`);
+  it("report_fixture: defaults limit to 20 and caps it at 100, as Bob does", async () => {
+    const { client } = await fixtureClient((bob) => {
+      bob.hypothesis(ID);
+      for (let i = 0; i < 150; i += 1) bob.amendment(ID, TEMPLATE_B, `amend-${i}`);
     });
     const selector = `kind=report-amendment,name=${ID}`;
 
@@ -1698,9 +1698,9 @@ describe("report_fixture", () => {
   });
 
   it("report_fixture: serves the dataset VERSION that was asked for", async () => {
-    const { client } = await fixtureClient((orange) => {
-      orange.dataset("ds", 3, csv([["2026-08-23T00:00:00Z", 33.3]]));
-      orange.dataset("ds", 4, csv([["2026-08-24T00:00:00Z", 44.4]]));
+    const { client } = await fixtureClient((bob) => {
+      bob.dataset("ds", 3, csv([["2026-08-23T00:00:00Z", 33.3]]));
+      bob.dataset("ds", 4, csv([["2026-08-24T00:00:00Z", 44.4]]));
     });
 
     const pinned = await client.downloadDataset("ds", { version: 3 });
@@ -1735,7 +1735,7 @@ describe("report_decision_labels", () => {
 
   it("report_decision_labels: refuses an id that cannot be a label value", () => {
     // A value with a comma would corrupt the selector the already-decided
-    // query is built from; one over 63 characters would be refused by Orange.
+    // query is built from; one over 63 characters would be refused by Bob.
     expect(() => reportDecisionLabels("1a2b3c4d", "accept", "mem,kind=x")).toThrow(WolfError);
     expect(() => reportDecisionLabels("1a2b3c4d", "accept", "m".repeat(64))).toThrow(WolfError);
     try {
@@ -1754,10 +1754,10 @@ describe("report_decision_labels", () => {
 describe("report_amendment", () => {
   const url = `/api/hypotheses/${ID}/report-amendment`;
 
-  function withAmendment(html: string): (orange: FakeOrange) => void {
-    return (orange) => {
-      seeded(orange);
-      orange.amendment(ID, html);
+  function withAmendment(html: string): (bob: FakeBob) => void {
+    return (bob) => {
+      seeded(bob);
+      bob.amendment(ID, html);
     };
   }
 
@@ -1775,8 +1775,8 @@ describe("report_amendment", () => {
     expect(res.json.template_memory_id).toBe("appended-1");
 
     // The template row, then the decision row (asserted in its own test).
-    expect(h.orange.appends).toHaveLength(2);
-    const body = JSON.parse(h.orange.appends[0]!.body!);
+    expect(h.bob.appends).toHaveLength(2);
+    const body = JSON.parse(h.bob.appends[0]!.body!);
     expect(body.labels).toEqual({ kind: "report-template", name: ID, status: "locked" });
     expect(body.content).toBe(`${hashOf(TEMPLATE_B)}\n${TEMPLATE_B}`);
   });
@@ -1793,7 +1793,7 @@ describe("report_amendment", () => {
     expect(res.json.kind).toBe("invalid");
     expect(res.json.details.errors.length).toBeGreaterThan(0);
     // The criterion is the CONJUNCTION: 422 *and* nothing written.
-    expect(h.orange.appends).toHaveLength(0);
+    expect(h.bob.appends).toHaveLength(0);
 
     // And the old template is still what the frame serves.
     const frame = await get(h, FRAME);
@@ -1813,8 +1813,8 @@ describe("report_amendment", () => {
     expect(res.json.template_memory_id).toBeNull();
     expect(res.json.structure_hash).toBeNull();
     // One append, and it is the decision — never a template.
-    expect(h.orange.appends).toHaveLength(1);
-    expect(JSON.parse(h.orange.appends[0]!.body!).labels.kind).toBe("report-amendment");
+    expect(h.bob.appends).toHaveLength(1);
+    expect(JSON.parse(h.bob.appends[0]!.body!).labels.kind).toBe("report-amendment");
 
     const frame = await get(h, FRAME);
     expect(frame.csp).toBe(CSP_A);
@@ -1832,10 +1832,10 @@ describe("report_amendment", () => {
     // TWO appends: the template, then the decision. The order is deliberate —
     // a decision row for a template that was never locked is a lie about
     // state; a template with no decision row is merely repeatable.
-    expect(h.orange.appends).toHaveLength(2);
+    expect(h.bob.appends).toHaveLength(2);
     expect(res.json.decision_memory_id).toBe("appended-2");
 
-    const decision = JSON.parse(h.orange.appends[1]!.body!);
+    const decision = JSON.parse(h.bob.appends[1]!.body!);
     expect(decision.labels).toEqual({
       kind: "report-amendment",
       name: ID,
@@ -1861,8 +1861,8 @@ describe("report_amendment", () => {
     });
 
     expect(res.status).toBe(200);
-    expect(h.orange.appends).toHaveLength(1);
-    const decision = JSON.parse(h.orange.appends[0]!.body!);
+    expect(h.bob.appends).toHaveLength(1);
+    const decision = JSON.parse(h.bob.appends[0]!.body!);
     expect(decision.labels).toEqual({
       kind: "report-amendment",
       name: ID,
@@ -1898,7 +1898,7 @@ describe("report_amendment", () => {
     expect(again.json.kind).toBe("conflict");
     expect(again.json.details.status).toBe("rejected");
     // Still exactly the one decision row from the first call.
-    expect(h.orange.appends).toHaveLength(1);
+    expect(h.bob.appends).toHaveLength(1);
   });
 
   it("report_amendment: a failed proposal writes NO row at all, not even a decision", async () => {
@@ -1912,7 +1912,7 @@ describe("report_amendment", () => {
     expect(res.status).toBe(422);
     // The decision is written only on a path that reached a decision. A
     // rejected-by-the-validator proposal is not a human's decision.
-    expect(h.orange.appends).toHaveLength(0);
+    expect(h.bob.appends).toHaveLength(0);
   });
 
   it("report_amendment: an unknown amendment id is 404, and nothing is written", async () => {
@@ -1925,14 +1925,14 @@ describe("report_amendment", () => {
 
     expect(res.status).toBe(404);
     expect(res.json.kind).toBe("not_found");
-    expect(h.orange.appends).toHaveLength(0);
+    expect(h.bob.appends).toHaveLength(0);
   });
 
   it("report_amendment: another hypothesis's amendment id is 404, not adopted", async () => {
-    const h = await harness((orange) => {
-      seeded(orange);
-      orange.hypothesis(ID_B);
-      orange.amendment(ID_B, TEMPLATE_B, "amend-other");
+    const h = await harness((bob) => {
+      seeded(bob);
+      bob.hypothesis(ID_B);
+      bob.amendment(ID_B, TEMPLATE_B, "amend-other");
     });
     const res = await post(h, url, {
       amendment_id: "amend-other",
@@ -1943,7 +1943,7 @@ describe("report_amendment", () => {
     // The selector is `kind=report-amendment,name=<id>`, so a row belonging to
     // another hypothesis is not in the candidate set at all.
     expect(res.status).toBe(404);
-    expect(h.orange.appends).toHaveLength(0);
+    expect(h.bob.appends).toHaveLength(0);
   });
 
   it("report_amendment: an EMPTY rationale is refused, and nothing is written", async () => {
@@ -1961,7 +1961,7 @@ describe("report_amendment", () => {
     // The append assertion FIRST: it is the load-bearing one, and putting a
     // shape-dependent assertion above it made a mutation die on a TypeError
     // inside the assertion rather than on the assertion (R146, round 3).
-    expect(h.orange.appends).toHaveLength(0);
+    expect(h.bob.appends).toHaveLength(0);
     expect(empty.status).toBe(400);
     expect(empty.json.kind).toBe("invalid");
     const emptyErrors = (empty.json.details?.errors ?? []) as { path: string }[];
@@ -1984,7 +1984,7 @@ describe("report_amendment", () => {
     });
     expect(blank.status).toBe(400);
     expect(blank.json.kind).toBe("invalid");
-    expect(h.orange.appends).toHaveLength(0);
+    expect(h.bob.appends).toHaveLength(0);
   });
 
   it("report_amendment: an unknown decision is a 400 invalid body", async () => {
@@ -1997,7 +1997,7 @@ describe("report_amendment", () => {
 
     expect(res.status).toBe(400);
     expect(res.json.kind).toBe("invalid");
-    expect(h.orange.appends).toHaveLength(0);
+    expect(h.bob.appends).toHaveLength(0);
   });
 
   it("report_amendment: a decided proposal cannot be decided AGAIN", async () => {
@@ -2016,7 +2016,7 @@ describe("report_amendment", () => {
     expect(replay.json.details.decided_as).toBe("accepted");
     // Two appends from the first call (template + decision) and nothing from
     // the second.
-    expect(h.orange.appends).toHaveLength(2);
+    expect(h.bob.appends).toHaveLength(2);
   });
 
   it("report_amendment: a REPLAYED accept cannot revert a template a later review superseded", async () => {
@@ -2024,10 +2024,10 @@ describe("report_amendment", () => {
     // already-decided guard the third call answers 200 and the frame serves
     // B's template again — with a fresh `status: accepted` row asserting a
     // human chose it, after a human had already chosen C.
-    const h = await harness((orange) => {
-      seeded(orange);
-      orange.amendment(ID, TEMPLATE_B, "amend-b");
-      orange.amendment(ID, TEMPLATE_C, "amend-c");
+    const h = await harness((bob) => {
+      seeded(bob);
+      bob.amendment(ID, TEMPLATE_B, "amend-b");
+      bob.amendment(ID, TEMPLATE_C, "amend-c");
     });
 
     expect(
@@ -2058,7 +2058,7 @@ describe("report_amendment", () => {
 
     expect(again.status).toBe(409);
     expect(again.json.details.decided_as).toBe("rejected");
-    expect(h.orange.appends).toHaveLength(1);
+    expect(h.bob.appends).toHaveLength(1);
   });
 
   it("report_amendment: reject-after-accept blocks — a reject cannot undo a lock", async () => {
@@ -2112,7 +2112,7 @@ describe("report_amendment", () => {
   it("report_amendment: a hostile retraction cannot erase a decision and re-open the replay", async () => {
     // Wolf never retracts a decision, so any retraction of one came from
     // inside a container. Without `include_retracted=1` on the decision query
-    // Orange would filter it server-side and the replay guard would silently
+    // Bob would filter it server-side and the replay guard would silently
     // stop firing.
     const h = await harness(withAmendment(TEMPLATE_B));
     const first = await post(h, url, {
@@ -2121,7 +2121,7 @@ describe("report_amendment", () => {
       rationale: "yes",
     });
     expect(first.status).toBe(200);
-    h.orange.retractHostilely(first.json.decision_memory_id);
+    h.bob.retractHostilely(first.json.decision_memory_id);
 
     const replay = await post(h, url, {
       amendment_id: `amend-${ID}`,
@@ -2140,7 +2140,7 @@ describe("report_amendment", () => {
     // after the template landed, no decision row exists — so the human may
     // decide again, which is exactly what template-first was chosen to allow.
     const h = await harness(withAmendment(TEMPLATE_B));
-    h.orange.failAppendWhere = (labels) => labels["kind"] === "report-amendment";
+    h.bob.failAppendWhere = (labels) => labels["kind"] === "report-amendment";
 
     const partial = await post(h, url, {
       amendment_id: `amend-${ID}`,
@@ -2151,9 +2151,9 @@ describe("report_amendment", () => {
     // upstream failed rather than that the decision stands.
     expect(partial.status).toBe(503);
     expect(partial.json.kind).toBe("unavailable");
-    expect(h.orange.appends.filter((r) => r.body!.includes("report-template"))).toHaveLength(1);
+    expect(h.bob.appends.filter((r) => r.body!.includes("report-template"))).toHaveLength(1);
 
-    h.orange.failAppendWhere = undefined;
+    h.bob.failAppendWhere = undefined;
     const retry = await post(h, url, {
       amendment_id: `amend-${ID}`,
       decision: "accept",
@@ -2166,12 +2166,12 @@ describe("report_amendment", () => {
 
     // Two template rows now exist, with identical bytes and the same hash, so
     // the newest-first read serves the same document either way — benign.
-    const templates = h.orange.appends.filter((r) => r.body!.includes('"report-template"'));
+    const templates = h.bob.appends.filter((r) => r.body!.includes('"report-template"'));
     expect(templates).toHaveLength(2);
     expect(JSON.parse(templates[0]!.body!).content).toBe(JSON.parse(templates[1]!.body!).content);
     // Four append REQUESTS in total: two templates, the decision that failed
     // with a 503, and the decision that succeeded.
-    expect(h.orange.appends).toHaveLength(4);
+    expect(h.bob.appends).toHaveLength(4);
     expect((await get(h, FRAME)).csp).toBe(CSP_B);
 
     // And now it IS decided, so a third attempt is refused.
@@ -2198,7 +2198,7 @@ describe("report_amendment", () => {
 
     expect(flip.status).toBe(409);
     expect(flip.json.details.decided_as).toBe("rejected");
-    expect(h.orange.appends).toHaveLength(1);
+    expect(h.bob.appends).toHaveLength(1);
   });
 
   it("report_amendment: an amendment_id that cannot be a label value is a 400, never a selector term", async () => {
@@ -2215,18 +2215,18 @@ describe("report_amendment", () => {
     expect(res.status).toBe(400);
     expect(res.json.kind).toBe("invalid");
     expect(res.json.details.errors[0].path).toBe("amendment_id");
-    expect(h.orange.requests).toHaveLength(0);
+    expect(h.bob.requests).toHaveLength(0);
   });
 
   it("report_amendment: finds a proposal a single 50-row page would have lost", async () => {
     // The kind now carries decisions as well as proposals, so the page fills
     // at twice the old rate; the old scan took ONE page of 50 and 404ed a
     // legitimate id that had fallen off the end. The id read cannot overflow.
-    const h = await harness((orange) => {
-      seeded(orange);
-      orange.amendment(ID, TEMPLATE_B, "amend-old");
+    const h = await harness((bob) => {
+      seeded(bob);
+      bob.amendment(ID, TEMPLATE_B, "amend-old");
       for (let i = 0; i < 60; i += 1) {
-        orange.amendment(ID, TEMPLATE_B, `amend-noise-${i}`);
+        bob.amendment(ID, TEMPLATE_B, `amend-noise-${i}`);
       }
     });
 
@@ -2238,7 +2238,7 @@ describe("report_amendment", () => {
 
     expect(res.status).toBe(200);
     // Read by id, not scanned: the row came from `/agent/memories/<id>`.
-    expect(h.orange.paths("/agent/memories/amend-old")).toHaveLength(1);
+    expect(h.bob.paths("/agent/memories/amend-old")).toHaveLength(1);
   });
 
   it("report_amendment: 401 with no cookie, and NOT ONE upstream request", async () => {
@@ -2251,7 +2251,7 @@ describe("report_amendment", () => {
     );
 
     expect(res.status).toBe(401);
-    expect(h.orange.requests).toHaveLength(0);
+    expect(h.bob.requests).toHaveLength(0);
   });
 });
 
@@ -2320,19 +2320,19 @@ function withCandidate(
     summary?: string;
     atMs?: number;
   } = {},
-): (orange: FakeOrange) => void {
-  return (orange) => {
-    seeded(orange);
-    orange.candidate(ID, html, opts);
+): (bob: FakeBob) => void {
+  return (bob) => {
+    seeded(bob);
+    bob.candidate(ID, html, opts);
   };
 }
 
 describe("report_candidate", () => {
   it("report_candidate: serves the newest candidate's html, summary and provenance", async () => {
-    const h = await harness((orange) => {
-      seeded(orange);
-      orange.candidate(ID, TEMPLATE_B, { memoryId: "cand-old", summary: "the first attempt" });
-      orange.candidate(ID, CANDIDATE_HTML, { memoryId: "cand-new", summary: "a chart of the basket" });
+    const h = await harness((bob) => {
+      seeded(bob);
+      bob.candidate(ID, TEMPLATE_B, { memoryId: "cand-old", summary: "the first attempt" });
+      bob.candidate(ID, CANDIDATE_HTML, { memoryId: "cand-new", summary: "a chart of the basket" });
     });
 
     const res = await get(h, CANDIDATE);
@@ -2378,7 +2378,7 @@ describe("report_candidate", () => {
   });
 
   it("report_candidate: reads the FULL row, not the 500-character snippet", async () => {
-    // Orange's list route returns `substring(content, 1, 500)`. A template
+    // Bob's list route returns `substring(content, 1, 500)`. A template
     // routinely runs to tens of kilobytes, so a route reading `snippet` would
     // serve a truncated document that still passed every other assertion here
     // — and the human would approve, and lock, half a template.
@@ -2413,9 +2413,9 @@ describe("report_candidate", () => {
     // trust rule rejected anyway and passed with the check deleted (found by
     // a surviving mutation, A16). The session list is the authoritative index
     // of hypotheses, never memory.
-    const h = await harness((orange) => {
-      seeded(orange);
-      orange.candidate(ID_B, CANDIDATE_HTML, { worker: `researcher-${ID_B}`, session: "" });
+    const h = await harness((bob) => {
+      seeded(bob);
+      bob.candidate(ID_B, CANDIDATE_HTML, { worker: `researcher-${ID_B}`, session: "" });
     });
 
     const res = await get(h, candidateUrl(ID_B));
@@ -2430,9 +2430,9 @@ describe("report_candidate", () => {
   it("report_candidate_frame: 404 for a hypothesis that is not in the session index", async () => {
     // The same guard on the frame route. Two routes, two proofs — a guard
     // tested on one of a pair is the guard that goes missing from the other.
-    const h = await harness((orange) => {
-      seeded(orange);
-      orange.candidate(ID_B, CANDIDATE_HTML, { worker: `researcher-${ID_B}`, session: "" });
+    const h = await harness((bob) => {
+      seeded(bob);
+      bob.candidate(ID_B, CANDIDATE_HTML, { worker: `researcher-${ID_B}`, session: "" });
     });
 
     const res = await get(h, `${candidateUrl(ID_B)}/frame`);
@@ -2459,7 +2459,7 @@ describe("report_candidate", () => {
     const res = await get(h, CANDIDATE, false);
 
     expect(res.status).toBe(401);
-    expect(h.orange.requests).toHaveLength(0);
+    expect(h.bob.requests).toHaveLength(0);
   });
 });
 
@@ -2559,10 +2559,10 @@ describe("report_candidate_urls", () => {
     // would differ, silently.
     // No locked template in this seed: the accept POST must succeed, which is
     // the state the review screen is actually in.
-    const h = await harness((orange) => {
-      orange.hypothesis(ID);
-      orange.spec(ID);
-      orange.candidate(ID, CANDIDATE_HTML);
+    const h = await harness((bob) => {
+      bob.hypothesis(ID);
+      bob.spec(ID);
+      bob.candidate(ID, CANDIDATE_HTML);
     });
 
     const read = await get(h, CANDIDATE);
@@ -2583,12 +2583,12 @@ describe("report_candidate_urls", () => {
 
 describe("report_candidate_trust", () => {
   it("report_candidate_trust: a candidate from ANOTHER hypothesis's session is not served", async () => {
-    const h = await harness((orange) => {
-      seeded(orange);
-      orange.hypothesis(ID_B);
+    const h = await harness((bob) => {
+      seeded(bob);
+      bob.hypothesis(ID_B);
       // Labelled `name=<ID>` but written from B's session: a well-formed row
       // in the right kind with another hypothesis's name on it.
-      orange.candidate(ID, CANDIDATE_IMG_ONLY, {
+      bob.candidate(ID, CANDIDATE_IMG_ONLY, {
         memoryId: "cand-forged",
         worker: `researcher-${ID_B}`,
         session: `sess-hyp-${ID_B}`,
@@ -2616,11 +2616,11 @@ describe("report_candidate_trust", () => {
   });
 
   it("report_candidate_trust: a NEWER forged candidate does not displace this hypothesis's own", async () => {
-    const h = await harness((orange) => {
-      seeded(orange);
-      orange.hypothesis(ID_B);
-      orange.candidate(ID, CANDIDATE_HTML, { memoryId: "cand-mine" });
-      orange.candidate(ID, CANDIDATE_IMG_ONLY, {
+    const h = await harness((bob) => {
+      seeded(bob);
+      bob.hypothesis(ID_B);
+      bob.candidate(ID, CANDIDATE_HTML, { memoryId: "cand-mine" });
+      bob.candidate(ID, CANDIDATE_IMG_ONLY, {
         memoryId: "cand-forged",
         worker: `researcher-${ID_B}`,
         session: `sess-hyp-${ID_B}`,
@@ -2645,9 +2645,9 @@ describe("report_candidate_trust", () => {
   it("report_candidate_trust: this hypothesis's own RESEARCHER worker also owns a candidate", async () => {
     // Clause 1 of `isOwnReport`. The interviewer normally writes the
     // candidate from the session; the researcher may propose one too.
-    const h = await harness((orange) => {
-      seeded(orange);
-      orange.candidate(ID, CANDIDATE_HTML, {
+    const h = await harness((bob) => {
+      seeded(bob);
+      bob.candidate(ID, CANDIDATE_HTML, {
         memoryId: "cand-researcher",
         worker: `researcher-${ID}`,
         session: "sess-tick-4f2a",
@@ -2662,12 +2662,12 @@ describe("report_candidate_trust", () => {
   });
 
   it("report_candidate_trust: an unattributed candidate is NOT owned", async () => {
-    // `""` is what Orange stamps when there is no worker and no session.
+    // `""` is what Bob stamps when there is no worker and no session.
     // Comparing it to an absent owner value would make an unattributed row
     // look owned — the failure `isOwnReport` guards against explicitly.
-    const h = await harness((orange) => {
-      seeded(orange);
-      orange.candidate(ID, CANDIDATE_HTML, {
+    const h = await harness((bob) => {
+      seeded(bob);
+      bob.candidate(ID, CANDIDATE_HTML, {
         memoryId: "cand-nobody",
         worker: "",
         session: "",
@@ -2691,10 +2691,10 @@ describe("report_candidate_trust", () => {
   });
 
   it("report_candidate_trust: a HOSTILE retraction does not hide the candidate", async () => {
-    const h = await harness((orange) => {
-      seeded(orange);
-      orange.candidate(ID, CANDIDATE_HTML, { memoryId: "cand-mine" });
-      orange.retractHostilely("cand-mine");
+    const h = await harness((bob) => {
+      seeded(bob);
+      bob.candidate(ID, CANDIDATE_HTML, { memoryId: "cand-mine" });
+      bob.retractHostilely("cand-mine");
     });
 
     const res = await get(h, CANDIDATE);
@@ -2712,11 +2712,11 @@ describe("report_candidate_trust", () => {
   });
 
   it("report_candidate_trust: a retraction WOLF wrote does hide it, and the older one is served", async () => {
-    const h = await harness((orange) => {
-      seeded(orange);
-      orange.candidate(ID, CANDIDATE_HTML, { memoryId: "cand-old" });
-      orange.candidate(ID, CANDIDATE_IMG_ONLY, { memoryId: "cand-withdrawn" });
-      orange.retractByWolf("cand-withdrawn");
+    const h = await harness((bob) => {
+      seeded(bob);
+      bob.candidate(ID, CANDIDATE_HTML, { memoryId: "cand-old" });
+      bob.candidate(ID, CANDIDATE_IMG_ONLY, { memoryId: "cand-withdrawn" });
+      bob.retractByWolf("cand-withdrawn");
     });
 
     const res = await get(h, CANDIDATE);
@@ -2757,10 +2757,10 @@ describe("report_candidate_frame", () => {
   });
 
   it("report_candidate_frame: the preview's slots are EMPTY, never yesterday's report", async () => {
-    const h = await harness((orange) => {
-      seeded(orange);
-      orange.report(ID, "yesterday's headline", { analysis: "<p>SENTINEL-TICK-CONTENT</p>" });
-      orange.candidate(ID, CANDIDATE_HTML);
+    const h = await harness((bob) => {
+      seeded(bob);
+      bob.report(ID, "yesterday's headline", { analysis: "<p>SENTINEL-TICK-CONTENT</p>" });
+      bob.candidate(ID, CANDIDATE_HTML);
     });
 
     const res = await get(h, CANDIDATE_FRAME);
@@ -2794,10 +2794,10 @@ describe("report_candidate_frame", () => {
     // This is the "two routes, two proofs" rule this file already applies to
     // the session-index guard — applied, in round 1, to the weaker guard of
     // the two and not to this one.
-    const h = await harness((orange) => {
-      seeded(orange);
-      orange.hypothesis(ID_B);
-      orange.candidate(ID, CANDIDATE_IMG_ONLY, {
+    const h = await harness((bob) => {
+      seeded(bob);
+      bob.hypothesis(ID_B);
+      bob.candidate(ID, CANDIDATE_IMG_ONLY, {
         memoryId: "cand-forged",
         worker: `researcher-${ID_B}`,
         session: `sess-hyp-${ID_B}`,
@@ -2826,11 +2826,11 @@ describe("report_candidate_frame", () => {
     // The other direction, and the reason the rule is a skip rather than a
     // refusal: this hypothesis's own candidate is still previewed, and the
     // attack is named rather than merely suppressed.
-    const h = await harness((orange) => {
-      seeded(orange);
-      orange.hypothesis(ID_B);
-      orange.candidate(ID, CANDIDATE_HTML, { memoryId: "cand-mine" });
-      orange.candidate(ID, CANDIDATE_IMG_ONLY, {
+    const h = await harness((bob) => {
+      seeded(bob);
+      bob.hypothesis(ID_B);
+      bob.candidate(ID, CANDIDATE_HTML, { memoryId: "cand-mine" });
+      bob.candidate(ID, CANDIDATE_IMG_ONLY, {
         memoryId: "cand-forged",
         worker: `researcher-${ID_B}`,
         session: `sess-hyp-${ID_B}`,
@@ -2854,10 +2854,10 @@ describe("report_candidate_frame", () => {
     // The frame must not OVER-refuse: a retraction written from inside a
     // container cannot withdraw the candidate, or an attacker blanks the
     // review screen and the human approves nothing at all.
-    const h = await harness((orange) => {
-      seeded(orange);
-      orange.candidate(ID, CANDIDATE_HTML, { memoryId: "cand-mine" });
-      orange.retractHostilely("cand-mine");
+    const h = await harness((bob) => {
+      seeded(bob);
+      bob.candidate(ID, CANDIDATE_HTML, { memoryId: "cand-mine" });
+      bob.retractHostilely("cand-mine");
     });
 
     const res = await get(h, CANDIDATE_FRAME);
@@ -2900,7 +2900,7 @@ describe("report_candidate_frame", () => {
     const res = await get(h, CANDIDATE_FRAME, false);
 
     expect(res.status).toBe(401);
-    expect(h.orange.requests).toHaveLength(0);
+    expect(h.bob.requests).toHaveLength(0);
   });
 
   it("report_candidate_frame: NO credential of any kind reaches the document", async () => {

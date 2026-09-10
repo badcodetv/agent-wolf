@@ -11,14 +11,14 @@
  * ## Why this is a server-side PROXY and never a redirect
  *
  * The same argument the series route makes, and for the same two reasons.
- * Orange sets no CORS headers by design, so a `302` to
+ * Bob sets no CORS headers by design, so a `302` to
  * `…/agent/sessions/by-name/…/artifacts` would fail in the browser for a
  * reason nothing on this server can see. And the only credential that opens
  * that route is `WOLF_API_KEY`, Wolf's **project-wide** key: putting it — or a
  * URL that carries it — into a page is handing every reader of that page the
  * whole project. So the list is fetched here, with the key, and re-served as
  * Wolf's own JSON. `artifacts.test.ts` asserts a `200` with a JSON body, a
- * `Location` header that is absent, and a body that names no Orange address.
+ * `Location` header that is absent, and a body that names no Bob address.
  *
  * ## The projection is an ALLOW-LIST, and that is the point
  *
@@ -26,14 +26,14 @@
  * deliberately drops:
  *
  *  - **`blobPath`** — the STORE's object key (`gs://<bucket>/<session>/<file>`).
- *    It describes where Orange keeps the bytes and is of no use to a browser;
+ *    It describes where Bob keeps the bytes and is of no use to a browser;
  *    publishing it hands out the storage layout for free.
- *  - **`sessionId`** — Orange's session uuid. Wolf addresses a session by the
+ *  - **`sessionId`** — Bob's session uuid. Wolf addresses a session by the
  *    name it chose (`hyp-<id>`) everywhere else, and a uuid in the page is one
  *    more handle a caller can try somewhere it was not scoped to.
  *
  * An allow-list rather than a delete-list because the failure directions are
- * not symmetric: a field Orange ADDS tomorrow is dropped by an allow-list and
+ * not symmetric: a field Bob ADDS tomorrow is dropped by an allow-list and
  * published by a delete-list, and nothing in either repo would say so.
  *
  * ## The one line of credential handling
@@ -58,21 +58,21 @@ import { requireHypothesisId } from "./embed.js";
  * shape, and ten fields exactly.
  *
  * `status` and `artifact_type` are strings rather than unions on purpose.
- * Orange's own sets are `live | extracted | lost | extraction_failed` and
+ * Bob's own sets are `live | extracted | lost | extraction_failed` and
  * `file | code | image | data | webapp` (explicitly "extensible"), and a
- * closed union here would turn a value Orange adds into a parse failure that
+ * closed union here would turn a value Bob adds into a parse failure that
  * costs the whole panel — where passing it through costs one row's dot colour.
  */
 export interface ArtifactRow {
   id: string;
-  /** Orange's dedup key with the session. May or may not carry a leading slash — whoever wrote it decided. */
+  /** Bob's dedup key with the session. May or may not carry a leading slash — whoever wrote it decided. */
   file_path: string;
   artifact_type: string;
   status: string;
   label: string;
   description: string;
   mime_type: string;
-  /** Bytes. `fileSize` on Orange's wire; the unit is in the name here by house rule. */
+  /** Bytes. `fileSize` on Bob's wire; the unit is in the name here by house rule. */
   file_size_bytes: number;
   source: string;
   is_dir: boolean;
@@ -125,7 +125,7 @@ export function createArtifactsRouter(options: CreateArtifactsRouterOptions): Ro
         const sessionName = sessionNameForHypothesis(id);
 
         // An absent session — or one belonging to another project, which
-        // Orange deliberately does not distinguish — is a `not_found` from the
+        // Bob deliberately does not distinguish — is a `not_found` from the
         // client's standard status mapping, and reaches the caller as a 404.
         // It is never a 500: this route is not an existence oracle and a
         // hypothesis whose session was reaped is a normal state, not a fault.

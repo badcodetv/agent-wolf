@@ -71,7 +71,7 @@ const KIND_VERDICT = "verdict";
 const KIND_RESEARCH_NOTE = "research-note";
 const KIND_SPEC_AMENDMENT = "spec-amendment";
 
-// The per-hypothesis daily researcher's worker name (§ "Orange atoms").
+// The per-hypothesis daily researcher's worker name (§ "Bob atoms").
 // Defined in `hypothesis/provision.ts` — the module that creates and deletes
 // it — and re-exported here so W8's callers keep their import site.
 export { RESEARCHER_WORKER_PREFIX, researcherWorkerFor } from "../hypothesis/provision.js";
@@ -79,13 +79,13 @@ export { RESEARCHER_WORKER_PREFIX, researcherWorkerFor } from "../hypothesis/pro
 /** How many rows of one kind a detail read pulls back. */
 const DETAIL_ROW_LIMIT = 50;
 
-/** Poll bounds for Orange's ASYNCHRONOUS session create (see below). */
+/** Poll bounds for Bob's ASYNCHRONOUS session create (see below). */
 export const DEFAULT_SESSION_POLL_INTERVAL_MS = 500;
 export const DEFAULT_SESSION_POLL_TIMEOUT_MS = 30_000;
 
 /**
  * How long `POST /api/hypotheses` waits for the seeded interview turn to be
- * REGISTERED with Orange before answering anyway.
+ * REGISTERED with Bob before answering anyway.
  *
  * Short on purpose. Registration happens within milliseconds of the message
  * POST reaching agentd (`beginActiveQuery`, before the sandbox is dispatched),
@@ -102,7 +102,7 @@ export const DEFAULT_SEED_POLL_INTERVAL_MS = 150;
 // snake_case on the wire, matching the plan's own field list
 // (`updated_at_ms`, `support_score`, `conditions_summary`), and matching the
 // unit-in-the-name rule: `_ms` is unix milliseconds (memories), `_sec` is
-// unix seconds (Orange's `agent_*` tables, which is what an attention
+// unix seconds (Bob's `agent_*` tables, which is what an attention
 // request's `created_at` is).
 //
 // Both shapes are OPEN FOR EXTENSION: W22 adds `headline` to the board row
@@ -178,9 +178,9 @@ export function attentionTierFor(row: AttentionInputs, attentionRequested: boole
  *
  * ⚠️ **`sessionId !== null` is TYPE NARROWING, not a behavioural defence, and
  * that rests on an invariant elsewhere.** `mapAttentionRequest` builds
- * `sessionId` with `strField` (`orange/client.ts:337-340`), which coerces to
+ * `sessionId` with `strField` (`bob/client.ts:337-340`), which coerces to
  * `""` at the wire boundary — so `request.sessionId` is a `string` at runtime
- * whatever Orange sends, and `"" === null` is false. Deleting the clause
+ * whatever Bob sends, and `"" === null` is false. Deleting the clause
  * changes no answer today, which a mutation confirmed.
  *
  * 🔴 It is documented here rather than only in the test because **the day
@@ -312,7 +312,7 @@ export interface StateChangeRow {
 }
 
 export interface HypothesisAtoms {
-  /** The `hyp-<id>` session's Orange id. */
+  /** The `hyp-<id>` session's Bob id. */
   session_id: string | null;
   /** `researcher-<id>` — created at GO-LIVE, not at draft. */
   worker: string;
@@ -561,12 +561,12 @@ function requireHypothesisId(raw: string | undefined): string {
 const defaultSleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
-// ── Create: mapping Orange's session-create failures ────────────────────
+// ── Create: mapping Bob's session-create failures ────────────────────
 
 /**
  * `POST /agent/session`'s refusals, each mapped to the taxonomy.
  *
- * The Orange client already maps the two that would otherwise be wrong:
+ * The Bob client already maps the two that would otherwise be wrong:
  * a 403 whose body says "host port pool is exhausted" arrives as
  * `unavailable` carrying the upstream message VERBATIM (deleting a finished
  * session genuinely clears it — owner decision B7), and a 501 arrives as
@@ -576,7 +576,7 @@ function classifyCreateFailure(err: unknown, sessionName: string): never {
   if (err instanceof WolfError) {
     if (err.kind === "unavailable") {
       // The port-pool refusal arrives from the client as kind `unavailable`
-      // carrying Orange's own status (403), because the client preserves the
+      // carrying Bob's own status (403), because the client preserves the
       // upstream status on every error it builds. Restated at the taxonomy's
       // 503 so the two paths that produce this condition — the POST's 403 and
       // a polled `status:"error"` — answer identically, and so a retryable
@@ -597,7 +597,7 @@ function classifyCreateFailure(err: unknown, sessionName: string): never {
       // caller asked for is missing.
       throw new WolfError(
         "misconfigured",
-        `Orange has no "${INTERVIEWER_WORKER}" worker in the wolf project — run ` +
+        `Bob has no "${INTERVIEWER_WORKER}" worker in the wolf project — run ` +
           "scripts/bootstrap-project.ts (W12) before creating a hypothesis",
         { details: { worker: INTERVIEWER_WORKER, fix: "scripts/bootstrap-project.ts" } },
       );
@@ -606,7 +606,7 @@ function classifyCreateFailure(err: unknown, sessionName: string): never {
       // Two different bodies land here — "session name already taken" and
       // `worker "interviewer" is disabled` — and both are genuine conflicts.
       // The upstream message is kept: they need different fixes.
-      throw new WolfError("conflict", `Orange refused to create session ${sessionName}`, {
+      throw new WolfError("conflict", `Bob refused to create session ${sessionName}`, {
         status: 409,
         upstreamBody: err.upstreamBody ?? "",
         details: { session: sessionName, upstream: err.upstreamBody ?? err.message },
@@ -617,7 +617,7 @@ function classifyCreateFailure(err: unknown, sessionName: string): never {
       // session cannot be scoped. Wolf's own credential, Wolf's own problem.
       throw WolfError.misconfigured(
         "WOLF_API_KEY",
-        "WOLF_API_KEY: Orange refused a named session because the credential carries no " +
+        "WOLF_API_KEY: Bob refused a named session because the credential carries no " +
           "project — it must be the wolf project's API key",
       );
     }
@@ -653,7 +653,7 @@ function firstLine(text: string): string {
  * The interview's first message: the hypothesis id, then the user's thesis.
  *
  * 🔴 **The id has to be in here because the model cannot see it anywhere
- * else.** A session container is given `SESSION_ID` (Orange's 32-hex id) and
+ * else.** A session container is given `SESSION_ID` (Bob's 32-hex id) and
  * `SESSION_TOKEN` and nothing more — NOT the session's name. Wolf names the
  * session `hyp-<id>`, and `prompts/interviewer.md` used to tell the model to
  * read its own id off that name, which was unfollowable: the name never
@@ -666,7 +666,7 @@ function firstLine(text: string): string {
  * appeared — with a good interview sitting in the transcript and nothing
  * anywhere reporting a problem.
  *
- * The alternative fix is an Orange change exposing `SESSION_NAME` in the
+ * The alternative fix is an Bob change exposing `SESSION_NAME` in the
  * container env, which is cleaner but touches the engine and every product
  * that embeds it. This is Wolf-local and puts the id where the model is
  * certain to read it: the first thing in the conversation.
@@ -714,13 +714,13 @@ function evidenceRow(row: MemorySearchResultRow): EvidenceRow {
  * when there is nothing to report, so an absent array never renders as an
  * empty warning.
  *
- * ⚠️ **No Orange shape produces the overlap today, and an earlier version of
+ * ⚠️ **No Bob shape produces the overlap today, and an earlier version of
  * this comment claimed one did.** It said the board's state read and its
  * report read "can both witness the same hostile retraction"; they cannot — a
  * retraction memory carries a single `retracts=<id>` label, so one retraction
  * appears in exactly one row's `retracted_by`, and the two reads cover
  * disjoint kinds. The guard stays because the arrays are assembled from
- * INDEPENDENT reads whose overlap is a property of Orange's data model rather
+ * INDEPENDENT reads whose overlap is a property of Bob's data model rather
  * than of this function, and a duplicate would render as two identical
  * warnings about one event. Exported so it can be graded directly, since no
  * fixture can reach it through a route.
@@ -829,7 +829,7 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
   }
 
   /**
-   * Orange's session create is ASYNCHRONOUS and reports no provisioning
+   * Bob's session create is ASYNCHRONOUS and reports no provisioning
    * failure on the POST: it answers `200 {id, status:"creating", workflowId}`
    * and provisions in a background goroutine (`go/httpapi/session.go`). A
    * failure lands on the row as `status:"error"` plus `create_error`, so the
@@ -850,7 +850,7 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
           "unavailable",
           session.createError && session.createError !== ""
             ? session.createError
-            : `Orange could not provision session ${sessionName}`,
+            : `Bob could not provision session ${sessionName}`,
           { status: 503, details: { session: sessionName } },
         );
       }
@@ -860,7 +860,7 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
       if (Date.now() >= deadline) {
         throw new WolfError(
           "unavailable",
-          `Orange session ${sessionName} was still "creating" after ${Math.round(
+          `Bob session ${sessionName} was still "creating" after ${Math.round(
             pollTimeoutMs / 1000,
           )}s`,
           { status: 503, details: { session: sessionName } },
@@ -1023,10 +1023,10 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
     // but this function DOES wait for it to be REGISTERED. Those are different
     // moments and the difference was a real race.
     //
-    // Orange's message route streams the whole model turn down its response,
+    // Bob's message route streams the whole model turn down its response,
     // so awaiting it would add the turn's duration to the create. But
     // returning the instant the request is dispatched was worse: the browser
-    // navigated, the chat frame mounted, asked Orange "is a turn in flight?",
+    // navigated, the chat frame mounted, asked Bob "is a turn in flight?",
     // was told no — because the POST had not yet reached
     // `beginActiveQuery` — and never asked again. The reader saw their own
     // message and then silence, while the turn streamed to nobody. Reloading
@@ -1075,7 +1075,7 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
         return;
       }
       if (Date.now() >= deadline) {
-        // Not an error: the turn may simply have been very fast, or Orange may
+        // Not an error: the turn may simply have been very fast, or Bob may
         // never have registered it. Either way the hypothesis is real and the
         // create must not fail on a confirmation that is a convenience.
         logger.warn(
@@ -1383,7 +1383,7 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
         // the board and vanish from this page.
         return { read: { report: null, tamper: reportTamperFrom(err) }, unreadable: true };
       }
-      // Everything else propagates. An Orange outage or a bug is NOT an
+      // Everything else propagates. An Bob outage or a bug is NOT an
       // unreadable report: answering 200 with an empty block would tell the
       // operator the report layer is idle while the upstream is down.
       throw err;
@@ -1460,7 +1460,7 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
    * other read on this handler — the attention list, the schedule list, the
    * report block. This is the LEAST important field on the page and it sits
    * on the page carrying the human's verdict controls: letting a transient
-   * Orange failure here take down the spec, the scoreboard, the verdict and
+   * Bob failure here take down the spec, the scoreboard, the verdict and
    * the tamper warnings would trade the whole decision surface for one
    * sentence. `error` rather than `warn` because, unlike a missing schedule,
    * a state row Wolf itself wrote and cannot read back is a real fault.

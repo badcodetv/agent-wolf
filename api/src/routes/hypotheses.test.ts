@@ -39,18 +39,18 @@ import type { ReportComposeStats } from "./report.js";
 // design/2026-08-20-agent-wolf.md, W8's acceptance criteria. Test names are
 // prefixed `hypotheses_`.
 //
-// Orange is mocked with undici's MockAgent (the pinned mechanism). Two kinds
+// Bob is mocked with undici's MockAgent (the pinned mechanism). Two kinds
 // of body appear below:
 //
 //  - **Captured** — `../hypothesis/__fixtures__/*.json`, recorded verbatim from
 //    a running O11 build for W5 (see that directory's README). The tamper
-//    pass-through test is graded against those, because only Orange can say
+//    pass-through test is graded against those, because only Bob can say
 //    what `retracted_by` really contains.
 //  - **Synthetic** — every body built by `memoryRow`/`page` below. They are
 //    hand-built and are NOT presented as recordings: no `kind=evaluation` row
 //    exists in any capture, because nothing writes one until W10.
 
-const ORANGE = "http://orange.test:4100";
+const BOB = "http://bob.test:4100";
 const API_KEY = "wolf-project-api-key-for-tests";
 const SECRET = "session-secret-for-tests-0123456789abcdef";
 const OWNER = "kai@badcode.dev";
@@ -137,7 +137,7 @@ function reportRow(
   });
 }
 
-// ── The stub Orange ─────────────────────────────────────────────────────
+// ── The stub Bob ─────────────────────────────────────────────────────
 
 interface Recorded {
   method: string;
@@ -179,7 +179,7 @@ interface StubConfig {
   memoriesById?: Record<string, string>;
   /** Status codes `GET /agent/memories/{id}` answers with instead of a body — an UPSTREAM failure, not a parse failure. */
   failMemoryById?: Record<string, number>;
-  /** `POST /agent/session`. Default: Orange's real asynchronous answer. */
+  /** `POST /agent/session`. Default: Bob's real asynchronous answer. */
   createSession?: Answer;
   /** Successive answers to `GET /agent/sessions/by-name/…`; the last repeats. */
   byName?: Answer[];
@@ -193,7 +193,7 @@ const EMPTY = '{"memories":[]}';
 
 /**
  * `limit` and `include_retracted` on a per-name memory read, HONOURED rather
- * than ignored (W22, R180). Orange applies its not-retracted filter unless
+ * than ignored (W22, R180). Bob applies its not-retracted filter unless
  * the flag is set, and it does so BEFORE any reduction — a stub that ignores
  * the flag lets a read drop it and stay green while production hands back an
  * older row.
@@ -251,7 +251,7 @@ class Stub {
           const path = String(opts.path);
           const body = typeof opts.body === "string" ? opts.body : "";
           this.requests.push({ method, path, body });
-          const answer = this.route(method, new URL(path, ORANGE));
+          const answer = this.route(method, new URL(path, BOB));
           return {
             statusCode: answer.status,
             data: answer.body as never,
@@ -281,7 +281,7 @@ class Stub {
       return answer ?? { status: 500, body: "no answer configured" };
     }
     if (path === "/agent/sessions") {
-      // `?user_email=*` is load-bearing against the real Orange (an API key's
+      // `?user_email=*` is load-bearing against the real Bob (an API key's
       // synthetic email matches no session row), so it is honoured here
       // rather than ignored — W22, R180.
       if (url.searchParams.get("user_email") !== "*") return { status: 200, body: "[]" };
@@ -309,7 +309,7 @@ class Stub {
     if (path.startsWith("/agent/memories/")) {
       const id = decodeURIComponent(path.slice("/agent/memories/".length));
       const failure = this.config.failMemoryById?.[id];
-      if (failure !== undefined) return { status: failure, body: "orange is having a bad day" };
+      if (failure !== undefined) return { status: failure, body: "bob is having a bad day" };
       const found = this.config.memoriesById?.[id];
       return found === undefined
         ? { status: 404, body: "memory not found" }
@@ -329,7 +329,7 @@ class Stub {
           return { status: 200, body: this.config.evaluations ?? EMPTY };
         }
         if (kind === "report") {
-          // Honest about `include_retracted`: Orange answers the flagged and
+          // Honest about `include_retracted`: Bob answers the flagged and
           // unflagged forms DIFFERENTLY, so a read that drops the flag gets
           // the empty page and its test fails loudly.
           return url.searchParams.get("include_retracted") === "1"
@@ -344,13 +344,13 @@ class Stub {
     }
     if (path === "/agent/attention-requests") {
       if (this.config.failAttention !== undefined) {
-        return { status: this.config.failAttention, body: "orange is having a bad day" };
+        return { status: this.config.failAttention, body: "bob is having a bad day" };
       }
       const parsed = JSON.parse(this.config.attention ?? '{"attention_requests":[]}') as {
         attention_requests?: Record<string, unknown>[];
       };
       let rows = parsed.attention_requests ?? [];
-      // `state=open` is honoured rather than ignored (R180): Orange filters
+      // `state=open` is honoured rather than ignored (R180): Bob filters
       // answered and timed-out rows out server-side, so a caller that drops
       // the parameter gets MORE rows than it asked for — and a test asserting
       // "only open requests reach the board" would be decoration against a
@@ -363,17 +363,17 @@ class Stub {
         // on all three of its rows, so a strict filter would drop all three
         // and redden a W8 test for a reason unrelated to the code under test.
         //
-        // It makes this fake MORE PERMISSIVE than Orange — but only for a
-        // hand-written fixture, never for a shape Orange can produce: both
+        // It makes this fake MORE PERMISSIVE than Bob — but only for a
+        // hand-written fixture, never for a shape Bob can produce: both
         // fields are NON-POINTER on the Go side (`go/agentdb/attention.go`
         // :54-58), so the real wire always carries them.
         //
-        // The two-clause rule is Orange's own, verified rather than guessed:
+        // The two-clause rule is Bob's own, verified rather than guessed:
         // `SessionAwaitsHuman` queries `answered_at = 0 AND timed_out_at = 0`
         // (`go/agentdb/attention.go:278`), and `expires_at` is deliberately
         // NOT part of it — "ExpiresAt 0 means no deadline ... a request
         // without one simply waits" (`:51-52`). Do not add an expiry clause
-        // here "for realism": it would make the fake STRICTER than Orange,
+        // here "for realism": it would make the fake STRICTER than Bob,
         // which is the one direction a fake is never wrong in by accident.
         rows = rows.filter(
           (row) => Number(row["answered_at"] ?? 0) === 0 && Number(row["timed_out_at"] ?? 0) === 0,
@@ -420,7 +420,7 @@ class Stub {
 function perNameSelectors(stub: Stub): string[] {
   return stub.requests
     .filter((r) => r.path.startsWith("/agent/memories?") && !r.path.includes("latest_per="))
-    .map((r) => new URL(r.path, ORANGE).searchParams.get("selector") ?? "");
+    .map((r) => new URL(r.path, BOB).searchParams.get("selector") ?? "");
 }
 /** Every `GET /agent/memories/{id}` — the FULL-CONTENT read drift would need. */
 function fullContentReads(stub: Stub): string[] {
@@ -442,7 +442,7 @@ beforeEach(() => {
   mockAgent.disableNetConnect();
   mockAgent.enableNetConnect((host) => host.startsWith("127.0.0.1") || host.startsWith("localhost"));
   setGlobalDispatcher(mockAgent);
-  pool = mockAgent.get(ORANGE);
+  pool = mockAgent.get(BOB);
 });
 
 afterEach(async () => {
@@ -458,7 +458,7 @@ function config(): WolfConfig {
       WOLF_SESSION_SECRET: SECRET,
       WOLF_ALLOWED_EMAILS: OWNER,
       WOLF_API_KEY: API_KEY,
-      BOB_BASE_URL: ORANGE,
+      BOB_BASE_URL: BOB,
       NODE_ENV: "test",
     },
     { readRouteTable: () => undefined },
@@ -507,7 +507,7 @@ async function harness(stubConfig: StubConfig, opts: HarnessOptions = {}): Promi
   const statsCalls: { id: string; sessions?: SessionLookup }[] = [];
   const cfg = config();
   const logger = createLogger({ logLevel: "silent" });
-  const client = createBobClient({ baseUrl: cfg.orangeBaseUrl, apiKey: cfg.orangeApiKey, logger });
+  const client = createBobClient({ baseUrl: cfg.bobBaseUrl, apiKey: cfg.bobApiKey, logger });
   // ONE store, exactly as createApp builds it: the transition mutex is per
   // INSTANCE, so a router that built its own would stop serialising.
   const store = createHypothesisStore({ client, logger });
@@ -630,7 +630,7 @@ describe("stub_attention_requests", () => {
     });
     stub.install();
     return createBobClient({
-      baseUrl: ORANGE,
+      baseUrl: BOB,
       apiKey: API_KEY,
       logger: createLogger({ logLevel: "silent" }),
     });
@@ -645,7 +645,7 @@ describe("stub_attention_requests", () => {
   });
 
   it("stub_attention_requests: with state=open the fake hides a TIMED-OUT request", async () => {
-    // The twin of the case above, on the other of Orange's two closing
+    // The twin of the case above, on the other of Bob's two closing
     // conditions — asserted the same way, so neither half is the thin one.
     const rows = await client().listAttentionRequests({ state: "open" });
     expect(rows.map((r) => r.id)).not.toContain("ar-timed-out");
@@ -660,8 +660,8 @@ describe("stub_attention_requests", () => {
     expect(rows.map((r) => r.id)).toEqual(["ar-answered", "ar-timed-out", "ar-open"]);
   });
 
-  it("stub_attention_requests: an EXPIRED but unanswered request is still OPEN, as Orange defines it", async () => {
-    // Orange's `open` is `answered_at = 0 AND timed_out_at = 0` and nothing
+  it("stub_attention_requests: an EXPIRED but unanswered request is still OPEN, as Bob defines it", async () => {
+    // Bob's `open` is `answered_at = 0 AND timed_out_at = 0` and nothing
     // else (`go/agentdb/attention.go:278`); `expires_at` is not a clause,
     // because a request without a deadline "simply waits" (`:51-52`). Pinned
     // so nobody adds an expiry filter to the fake "for realism" and makes it
@@ -675,7 +675,7 @@ describe("stub_attention_requests", () => {
     });
     stub.install();
     const rows = await createBobClient({
-      baseUrl: ORANGE, apiKey: API_KEY, logger: createLogger({ logLevel: "silent" }),
+      baseUrl: BOB, apiKey: API_KEY, logger: createLogger({ logLevel: "silent" }),
     }).listAttentionRequests({ state: "open" });
     expect(rows.map((r) => r.id)).toEqual(["ar-expired"]);
   });
@@ -694,7 +694,7 @@ describe("stub_attention_requests", () => {
     });
     stub.install();
     const rows = await createBobClient({
-      baseUrl: ORANGE, apiKey: API_KEY, logger: createLogger({ logLevel: "silent" }),
+      baseUrl: BOB, apiKey: API_KEY, logger: createLogger({ logLevel: "silent" }),
     }).listAttentionRequests({ state: "open" });
     expect(rows.map((r) => r.id)).toEqual(["ar-legacy"]);
   });
@@ -1079,7 +1079,7 @@ describe("hypotheses_board", () => {
     stub.attention = JSON.stringify({
       attention_requests: [
         { id: "ar-1", session_id: `sess-hyp-${ids[4]}`, worker: "interviewer", message: "which basket?", created_at: 1787334311, expires_at: 1787334911, answered_at: 0, timed_out_at: 0 },
-        // ANSWERED — Orange's `state=open` filter drops it, and so must the board.
+        // ANSWERED — Bob's `state=open` filter drops it, and so must the board.
         { id: "ar-2", session_id: `sess-hyp-${ids[5]}`, worker: "interviewer", message: "already dealt with", created_at: 1787334312, expires_at: 1787334912, answered_at: 1787334400, timed_out_at: 0 },
       ],
     });
@@ -1373,7 +1373,7 @@ describe("hypotheses_board", () => {
     expect(missing.support_score).toBeNull();
   });
 
-  it("hypotheses_board: passes W5's tamper array through unmodified (captured Orange bodies)", async () => {
+  it("hypotheses_board: passes W5's tamper array through unmodified (captured Bob bodies)", async () => {
     const sessions = ["hyp-1a2b3c4d", "hyp-2b3c4d5e", "hyp-3c4d5e6f", "hyp-4d5e6f70"].map((n) =>
       sessionRow(n),
     );
@@ -1515,7 +1515,7 @@ describe("hypotheses_create", () => {
     expect(res.status).toBe(201);
 
     // 🔴 The seed is deliberately NOT awaited by the route — the response is
-    // sent first, because Orange streams the whole model turn down the message
+    // sent first, because Bob streams the whole model turn down the message
     // response. So the assertion has to wait for it rather than read straight
     // after the response, and a test written without this wait would pass on a
     // seed that never happened.
@@ -1567,9 +1567,9 @@ describe("hypotheses_create", () => {
     expect(msg.indexOf("abcd1234")).toBeLessThan(msg.indexOf("gold up"));
   });
 
-  it("🔴 the 201 is NOT sent until Orange reports the interview turn in flight", async () => {
+  it("🔴 the 201 is NOT sent until Bob reports the interview turn in flight", async () => {
     // THE RACE THIS CLOSES: the browser navigates on the 201, mounts the chat
-    // frame, asks Orange "is a turn running?" — and asks ONCE. Answered before
+    // frame, asks Bob "is a turn running?" — and asks ONCE. Answered before
     // the turn was registered, it never asks again: the reader sees their own
     // message and then silence while the turn streams to nobody. Reloading
     // showed a finished answer, which is the tell that the events were being
@@ -1703,7 +1703,7 @@ describe("hypotheses_create", () => {
     });
   }
 
-  it("hypotheses_create: Orange refusing on the port pool is `unavailable` with the upstream string intact, not `forbidden`", async () => {
+  it("hypotheses_create: Bob refusing on the port pool is `unavailable` with the upstream string intact, not `forbidden`", async () => {
     const h = await harness({
       createSession: { status: 403, body: "host port pool is exhausted\n" },
     });
@@ -2083,7 +2083,7 @@ describe("hypotheses_detail", () => {
     expect(fullContentReads(h.stub)).toContain(`/agent/memories/state-${ID}`);
     // ⚠️ The pair this belongs to: `challenge_reason: null` here means "the
     // poller recorded no rationale", and in the FAILED-read case below it
-    // means "Orange would not answer". 🔴 **They are indistinguishable on the
+    // means "Bob would not answer". 🔴 **They are indistinguishable on the
     // wire, deliberately** — both render W14's pinned absent-reason sentence,
     // which is true either way, and the failure is on the log instead. What
     // both cases must therefore share is that the PAGE SURVIVED; levelled
@@ -2096,7 +2096,7 @@ describe("hypotheses_detail", () => {
     // 🔴 S1. This read is the LEAST important field on the page and it sits on
     // the page carrying the human's decision controls. Every sibling read on
     // this handler degrades deliberately — the attention list, the schedule
-    // list, the report block — and this one must too, or a transient Orange
+    // list, the report block — and this one must too, or a transient Bob
     // failure takes down the spec, the scoreboard, the verdict and the tamper
     // warnings along with it.
     //
@@ -2337,7 +2337,7 @@ describe("hypotheses_merge_tamper", () => {
   // `kind=report-template` × `kind=report` on the detail block. Each site
   // names its own pair, because that is where the assumption can change; this
   // file cannot see either one. The guard is about the arrays being assembled
-  // from INDEPENDENT reads, which is a property of Orange's data model rather
+  // from INDEPENDENT reads, which is a property of Bob's data model rather
   // than of this function.
   const forged: Tamper = {
     reason: "forged_row",
@@ -2711,7 +2711,7 @@ describe("hypotheses_report_block", () => {
   });
 
   it("hypotheses_report_block: an UPSTREAM failure on the report read is NOT an unreadable report", async () => {
-    // 🔴 The narrowing at the catch. An Orange outage or a bug must
+    // 🔴 The narrowing at the catch. An Bob outage or a bug must
     // propagate: answering 200 with an empty block would tell the operator
     // the report layer is idle while the upstream is down, and W10's poller
     // reads `unavailable` as "retry" and `internal` as "we have a bug" — both
@@ -2727,7 +2727,7 @@ describe("hypotheses_report_block", () => {
         createdAtMs: 1787334090000,
       }),
     ]);
-    // `memoriesById` has no `rep-1`, so the full read is a 500 from Orange,
+    // `memoriesById` has no `rep-1`, so the full read is a 500 from Bob,
     // not a parse failure.
     stub.failMemoryById = { "rep-1": 500 };
     const h = await harness(stub);
@@ -2738,7 +2738,7 @@ describe("hypotheses_report_block", () => {
   });
 
   it("hypotheses_report_block: both report reads carry include_retracted=1", async () => {
-    // Without it Orange filters retracted rows BEFORE the reduction and a
+    // Without it Bob filters retracted rows BEFORE the reduction and a
     // hostile retraction silently hands back an older row (R90).
     const h = await harness(withReport(withTemplate(baseStub()), { headline: "<p>x</p>" }));
     await get(h, `/api/hypotheses/${ID}`);

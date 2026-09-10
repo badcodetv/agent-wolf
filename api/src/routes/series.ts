@@ -1,6 +1,6 @@
 /**
  * The series proxy — the other of the two places Wolf hands the browser
- * something that came from Orange (design/2026-08-20-agent-wolf.md, W11).
+ * something that came from Bob (design/2026-08-20-agent-wolf.md, W11).
  *
  *   GET /api/hypotheses/:id/series/:metric
  *     → 200 { points, unit, version, fetched_at_ms, state }
@@ -10,7 +10,7 @@
  *
  * ## Why this is a PROXY and not a redirect
  *
- * Orange sets no CORS headers, by design. A `302` to
+ * Bob sets no CORS headers, by design. A `302` to
  * `…/agent/datasets/…/download`, or a `download_url` for the browser to
  * `fetch`, would therefore fail in the browser for a reason nothing on the
  * server can see — and it would put Wolf's project API key, or an O4 dataset
@@ -30,7 +30,7 @@
  * is what we last saw" for the second, and a flat line or a silent gap for
  * either is exactly the failure the state field exists to prevent.
  *
- *  - **`never_fetched`** — Orange 404s the dataset: nothing has ever written
+ *  - **`never_fetched`** — Bob 404s the dataset: nothing has ever written
  *    it. Answered `200` with `points: []` and `version: 0`, never a `500`.
  *    This is the state of every metric on the day its hypothesis goes live.
  *  - **`stale`** — the newest observation is older than the spec's

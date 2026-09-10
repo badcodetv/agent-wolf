@@ -15,7 +15,7 @@ import { createBobClient } from "./client.js";
 // anywhere in this file (§ "Pinned technology choices": undici MockAgent,
 // no msw, no nock).
 
-const BASE_URL = "http://orange.test:4100";
+const BASE_URL = "http://bob.test:4100";
 const API_KEY = "wolf-test-secret-9f3a7c21";
 
 let mockAgent: MockAgent;
@@ -495,7 +495,7 @@ describe("the two full-content reads (W15 names them getMemoryById / getCurrentM
   });
 
   it("getCurrentMemory(name, kind) is `not_found` when the newest row is a different kind — the filter is CLIENT-SIDE", async () => {
-    // Orange's route builds the selector as exactly `"name=" + name`
+    // Bob's route builds the selector as exactly `"name=" + name`
     // (`go/httpapi/memories.go:391`) and takes no other parameter, so it
     // answers with the newest memory of ANY kind carrying that name — and in
     // Wolf's vocabulary every kind shares `name=<hypothesis id>`. `kind` here
@@ -885,7 +885,7 @@ describe("embed token and google verification", () => {
 
 describe("artifacts", () => {
   /**
-   * Orange's artifact wire, verbatim from `go/artifacts/artifacts.go`'s struct
+   * Bob's artifact wire, verbatim from `go/artifacts/artifacts.go`'s struct
    * tags. 🔴 **camelCase** — this is the one route on this client whose wire is
    * not snake_case, and a mapper that reads `file_path` here would map every
    * field to its zero value with nothing failing.
@@ -999,7 +999,7 @@ describe("artifacts", () => {
     const c = intercept("GET", 200, "x", { "content-type": "text/plain" });
     await client().getSessionArtifactFile("hyp-1a2b3c4d", "a/b/c.txt");
     // Two segments after `by-name`, then `artifacts/file`, and nothing else:
-    // folding the file path into the path would address a route Orange does
+    // folding the file path into the path would address a route Bob does
     // not serve, and the failure would be a 404 with no explanation.
     expect(pathnameOf(c)).toBe("/agent/sessions/by-name/hyp-1a2b3c4d/artifacts/file");
     expect(queryOf(c)).toEqual({ path: "a/b/c.txt" });

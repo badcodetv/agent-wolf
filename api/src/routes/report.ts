@@ -172,7 +172,7 @@ export interface ReportTemplateResponse {
  * sandbox.
  */
 export interface ReportCandidateResponse {
-  /** The candidate row's Orange memory id. */
+  /** The candidate row's Bob memory id. */
   memory_id: string;
   /** Line 1 of the candidate: the interview's own summary of what it proposes. */
   summary: string;
@@ -865,7 +865,7 @@ export function createReportRouter(options: CreateReportRouterOptions): ReportRo
    * the trust model always fails. The rule that applies is W22's
    * `isOwnReport`, the same one `kind=report` gets: the row's provenance must
    * name this hypothesis's own `researcher-<id>` worker or its `hyp-<id>`
-   * session, both stamped by Orange from the caller's credential and neither
+   * session, both stamped by Bob from the caller's credential and neither
    * settable from a request body. Anything else is a `cross_hypothesis_write`
    * — a prompt-injected session running for hypothesis A appending
    * `kind=report-candidate, name=B` — and **this is the worst place in the
@@ -896,7 +896,7 @@ export function createReportRouter(options: CreateReportRouterOptions): ReportRo
     const rows = await client.listMemories({
       selector: reportSelector(KIND_REPORT_CANDIDATE, id),
       limit: ROW_LIMIT,
-      // Without it Orange filters retracted rows server-side, so a retraction
+      // Without it Bob filters retracted rows server-side, so a retraction
       // written from INSIDE A CONTAINER hides the candidate and the screen
       // says "the interview has not produced one yet" — an erasure
       // indistinguishable from the empty state.
@@ -1168,7 +1168,7 @@ export function createReportRouter(options: CreateReportRouterOptions): ReportRo
       selector: `${reportSelector(KIND_REPORT_AMENDMENT, id)},${AMENDMENT_LABEL}=${amendmentId}`,
       limit: 1,
       // ⚠️ `include_retracted=1`, for the same reason every other read in this
-      // codebase carries it: without it Orange filters retracted rows
+      // codebase carries it: without it Bob filters retracted rows
       // server-side, so a retraction written from INSIDE A CONTAINER would
       // hide the decision and re-open the replay this guard closes. Wolf
       // never retracts a decision, so any retraction of one is untrusted by

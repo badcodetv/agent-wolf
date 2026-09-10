@@ -53,13 +53,13 @@ import {
 // design/2026-08-20-agent-wolf.md § "The trust model" + W5's acceptance
 // criteria. Test names are prefixed `store_` per the ticket.
 //
-// Every Orange body these tests are graded against is a RECORDED response from
+// Every Bob body these tests are graded against is a RECORDED response from
 // a running O11 build — see `__fixtures__/README.md` for the commit, the date
 // and how each row was written. The retraction cases in particular are
 // meaningless against invented JSON: the whole question is what `retracted_by`
-// actually contains, and only Orange can answer that.
+// actually contains, and only Bob can answer that.
 
-const BASE_URL = "http://orange.test:4100";
+const BASE_URL = "http://bob.test:4100";
 const API_KEY = "wolf-test-secret-9f3a7c21";
 
 function fixture(name: string): string {
@@ -82,12 +82,12 @@ const SESSION_PAGES: readonly CapturedSessionRow[][] = [
   JSON.parse(fixture("sessions-interviewer-page2.json")) as CapturedSessionRow[],
   JSON.parse(fixture("sessions-interviewer-page3.json")) as CapturedSessionRow[],
 ];
-/** All six captured interviewer sessions, newest first, exactly as Orange ordered them. */
+/** All six captured interviewer sessions, newest first, exactly as Bob ordered them. */
 const ALL_SESSION_ROWS: readonly CapturedSessionRow[] = SESSION_PAGES.flat();
 
 function sessionsNamed(...names: string[]): CapturedSessionRow[] {
   // Real captured rows, selected by name and re-paged by the stub. Nothing is
-  // reshaped: these are the objects Orange returned.
+  // reshaped: these are the objects Bob returned.
   return names.map((name) => {
     const row = ALL_SESSION_ROWS.find((r) => r.name === name);
     if (row === undefined) throw new Error(`no captured session row named ${name}`);
@@ -95,7 +95,7 @@ function sessionsNamed(...names: string[]): CapturedSessionRow[] {
   });
 }
 
-// ── The stub Orange ─────────────────────────────────────────────────────
+// ── The stub Bob ─────────────────────────────────────────────────────
 
 interface Recorded {
   method: string;
@@ -111,7 +111,7 @@ interface StubConfig {
    */
   board?: string;
   /**
-   * Raw body for the same query WITHOUT the flag. Orange answers these two
+   * Raw body for the same query WITHOUT the flag. Bob answers these two
    * DIFFERENTLY (that is the whole point of the flag), so the stub does too:
    * a board read that drops `include_retracted` gets this body, and the
    * resurrection tests below then fail loudly instead of passing by accident.
@@ -149,7 +149,7 @@ interface StubConfig {
   appendStatus?: number;
   /**
    * Serve EVERY page as page zero, ignoring `offset` entirely — which is
-   * exactly what Orange does when it cannot parse the parameter:
+   * exactly what Bob does when it cannot parse the parameter:
    * `go/httpapi/history.go:107-125` runs `strconv.Atoi` and falls back to `0`
    * on ANY parse error rather than rejecting the request. The session walk's
    * only exit was a short page, so against this server it never ends. W32.
@@ -163,7 +163,7 @@ const EMPTY_MEMORIES = '{"memories":[]}';
  * `limit` and `include_retracted` on a per-name memory read, HONOURED rather
  * than ignored (W22, R180).
  *
- * Orange applies `notRetractedSQL` unless `include_retracted=1`, and it does
+ * Bob applies `notRetractedSQL` unless `include_retracted=1`, and it does
  * so BEFORE any reduction — that is the whole reason every read in
  * `hypothesis/store.ts` carries the flag. A stub that ignores it turns that
  * defence into decoration: the read could drop the flag and every test here
@@ -173,7 +173,7 @@ function applyListParams(body: string, url: URL): string {
   const parsed = JSON.parse(body) as { memories?: Record<string, unknown>[] };
   let rows = parsed.memories ?? [];
   if (url.searchParams.get("include_retracted") !== "1") {
-    // Orange's filter does not care WHO wrote the retraction; that judgement
+    // Bob's filter does not care WHO wrote the retraction; that judgement
     // is Wolf's, and it can only be made on rows the flag let through.
     rows = rows.filter((row) => {
       const retractions = row["retracted_by"];
@@ -237,7 +237,7 @@ class Stub {
       };
     }
     if (url.pathname === "/agent/sessions") {
-      // `?user_email=*` is LOAD-BEARING against the real Orange: an API key's
+      // `?user_email=*` is LOAD-BEARING against the real Bob: an API key's
       // synthetic email (`api-key:<project>`) matches no session row, so a
       // list without it comes back empty and the authoritative index of
       // hypotheses is silently empty with it. Honoured here (W22, R180) —
@@ -249,7 +249,7 @@ class Stub {
       const offset = Number(url.searchParams.get("offset") ?? "0");
       const worker = url.searchParams.get("worker");
       const filtered = worker === null ? rows : rows.filter((r) => r.worker === worker);
-      // `sessionsIgnoreOffset` reproduces Orange's silent `offset -> 0`
+      // `sessionsIgnoreOffset` reproduces Bob's silent `offset -> 0`
       // fallback; otherwise the offset is honoured (W22, R180).
       const from = this.config.sessionsIgnoreOffset === true ? 0 : offset;
       return { status: 200, data: JSON.stringify(filtered.slice(from, from + limit)) };
@@ -276,7 +276,7 @@ class Stub {
         }
         if (kind === "report") {
           // Honest about the flag, exactly as the `board` / `boardDefault`
-          // pair is: Orange answers the two DIFFERENTLY, so a read that drops
+          // pair is: Bob answers the two DIFFERENTLY, so a read that drops
           // `include_retracted=1` gets the empty page and every headline test
           // in this file fails loudly rather than passing by accident.
           return url.searchParams.get("include_retracted") === "1"
@@ -320,14 +320,14 @@ afterEach(async () => {
   await mockAgent.close();
 });
 
-function orange(): BobClient {
+function bob(): BobClient {
   return createBobClient({ baseUrl: BASE_URL, apiKey: API_KEY });
 }
 
 function harness(config: StubConfig): { store: HypothesisStore; stub: Stub } {
   const stub = new Stub(pool, config);
   stub.install();
-  return { store: createHypothesisStore({ client: orange() }), stub };
+  return { store: createHypothesisStore({ client: bob() }), stub };
 }
 
 /** The four hypotheses the tamper fixtures describe. */
@@ -519,7 +519,7 @@ describe("store_session_index", () => {
     expect(index.has("settings-chat")).toBe(false);
   });
 
-  it("store_session_index: the index carries the Orange session id, for W8's atoms", async () => {
+  it("store_session_index: the index carries the Bob session id, for W8's atoms", async () => {
     const { store } = harness({ sessions: ALL_SESSION_ROWS });
     const index = await store.readSessionIndex({ sessionPageSize: 2 });
     const entry = index.get("1a2b3c4d");
@@ -529,7 +529,7 @@ describe("store_session_index", () => {
   });
 
   it("store_session_index: 120 sessions across three pages all appear in the index", async () => {
-    // Scaled up from a captured row — the field shape is Orange's, the volume
+    // Scaled up from a captured row — the field shape is Bob's, the volume
     // is not (120 real containers is not a thing a unit test may create).
     const template = ALL_SESSION_ROWS[0];
     if (template === undefined) throw new Error("no captured session rows");
@@ -567,7 +567,7 @@ describe("store_session_index", () => {
 describe("store_session_index_budget", () => {
   /**
    * `count` distinct hypothesis sessions, scaled up from a CAPTURED row so the
-   * field shape is Orange's. The volume is not: no unit test may create two
+   * field shape is Bob's. The volume is not: no unit test may create two
    * thousand containers.
    */
   function manySessions(count: number): CapturedSessionRow[] {
@@ -594,7 +594,7 @@ describe("store_session_index_budget", () => {
   }
 
   it("store_session_index_budget: a server that ignores offset is stopped by the PAGE budget, and it THROWS", async () => {
-    // The exact production failure: Orange parses `offset` with `strconv.Atoi`
+    // The exact production failure: Bob parses `offset` with `strconv.Atoi`
     // and falls back to 0 on any parse error, so it answers page zero forever.
     // The walk's only exit was `page.length < limit`, which such a server never
     // produces. Before W32 this ran until the process died (2.8 GB RSS).
@@ -715,7 +715,7 @@ describe("store_board", () => {
     expect(query.get("selector")).toBe("kind=hypothesis");
     expect(query.get("latest_per")).toBe("name");
     expect(query.get("limit")).toBe("100");
-    // LOAD-BEARING, and absent from the plan's board criterion. Orange applies
+    // LOAD-BEARING, and absent from the plan's board criterion. Bob applies
     // its retraction filter before the `latest_per` reduction, so without this
     // a hostile retraction of the newest row promotes the OLDER trusted row and
     // the board rolls back with no warning — see the resurrection tests below,
@@ -951,7 +951,7 @@ describe("store_state_history", () => {
   // The cap is kept and REPORTED rather than raised — see `historyTruncated`.
 
   function manyStateRows(n: number): string {
-    // Newest first, exactly as Orange returns them.
+    // Newest first, exactly as Bob returns them.
     return JSON.stringify({
       memories: Array.from({ length: n }, (_, i) => ({
         id: `state-${String(n - i).padStart(3, "0")}`,
@@ -974,7 +974,7 @@ describe("store_state_history", () => {
 
     expect(history).toHaveLength(50);
     expect(historyTruncated).toBe(true);
-    // Named, not counted: the newest 50 by the order Orange returned, so the
+    // Named, not counted: the newest 50 by the order Bob returned, so the
     // truncation is at the OLD end where it belongs.
     expect(history[0]?.memoryId).toBe("state-060");
     expect(history[49]?.memoryId).toBe("state-011");
@@ -996,7 +996,7 @@ describe("store_state_history", () => {
   it("store_state_history: EXACTLY the cap reports truncation, because a full page is not proof there is no next one", async () => {
     // 🔴 The boundary, and it over-reports deliberately — the same rule W32's
     // session walk applies: a full page is not evidence that nothing follows,
-    // and only Orange knows. Claiming a complete timeline we cannot verify is
+    // and only Bob knows. Claiming a complete timeline we cannot verify is
     // the worse of the two errors on a page a human decides from.
     const { store } = harness({ ...TAMPERED, details: { ...TAMPERED.details, "1a2b3c4d": manyStateRows(50) } });
     const { history, historyTruncated } = await store.readHypothesisWithHistory("1a2b3c4d");
@@ -1085,7 +1085,7 @@ describe("store_state_history", () => {
 //
 // This block is the fix round's reason for existing. The board's fast path
 // used to read WITHOUT `include_retracted=1`, exactly as the plan's board
-// criterion is written. Orange applies its retraction filter BEFORE the
+// criterion is written. Bob applies its retraction filter BEFORE the
 // `latest_per` reduction, so a hostile retraction of Wolf's NEWEST state row
 // did not hide the hypothesis — it promoted the OLDER trusted row beneath it,
 // which passes every clause of `isTrusted` and was accepted as authoritative.
@@ -1107,8 +1107,8 @@ describe("store_resurrection", () => {
     sessions: sessionsNamed("hyp-1a2b3c4d", "hyp-2b3c4d5e", "hyp-3c4d5e6f"),
   };
 
-  it("store_resurrection: RECORDED — without the flag Orange hands back the OLDER trusted row", () => {
-    // Not an assertion about Wolf's code: about Orange's. Two captured bodies,
+  it("store_resurrection: RECORDED — without the flag Bob hands back the OLDER trusted row", () => {
+    // Not an assertion about Wolf's code: about Bob's. Two captured bodies,
     // the same query, one query parameter apart.
     type Row = { id: string; labels: Record<string, string>; created_by_worker: string };
     const rowsOf = (name: string): Row[] =>
@@ -1180,7 +1180,7 @@ describe("store_resurrection", () => {
   });
 
   it("store_resurrection: a clean board is unchanged by the flag — which is why it stays free", () => {
-    // Orange attaches `retracted_by` only where there IS a retraction, so the
+    // Bob attaches `retracted_by` only where there IS a retraction, so the
     // flag adds no key, no row and no request to an untampered board. Both
     // captured all-trusted bodies carry the same three names and no
     // `retracted_by` anywhere.
@@ -1206,7 +1206,7 @@ describe("store_forged_row", () => {
     const records = await store.readBoard();
     const forged = records.find((r) => r.id === "2b3c4d5e");
     // The recorded board body shows the forged row WINNING latest_per — that is
-    // what Orange returns, and why the board cannot be read from latest_per
+    // what Bob returns, and why the board cannot be read from latest_per
     // alone.
     expect(fixture("board-latest-per.json")).toContain('"status":"confirmed"');
     expect(forged?.status).toBe("live");
@@ -1261,7 +1261,7 @@ describe("store_hostile_retraction", () => {
 
   it("store_hostile_retraction: every Tamper names a non-empty writer and the OFFENDING memory", async () => {
     // The plan's § "Shared shapes" says "exactly one of the two provenance
-    // fields is non-empty". That is not what Orange produces, and the recorded
+    // fields is non-empty". That is not what Bob produces, and the recorded
     // fixtures prove it: `caller.SessionID` is always set for anything written
     // from inside a container and `caller.Worker` is set as well whenever the
     // session HAS a worker (`go/cmd/agentd/mcpserver.go:534`) — which is every
@@ -1448,9 +1448,9 @@ describe("store_transition", () => {
     expect(body.labels["owner"]).toBe("kai-at-badcode.dev");
   });
 
-  it("store_transition: the current state is RE-READ FROM ORANGE before the write", async () => {
+  it("store_transition: the current state is RE-READ FROM BOB before the write", async () => {
     // Not from a value the caller passed in, and not from a cached board: the
-    // read that decides the transition is an Orange round-trip issued inside
+    // read that decides the transition is an Bob round-trip issued inside
     // the critical section, immediately before the append.
     const { store, stub } = harness(wired);
     await store.transition({ id: "1a2b3c4d", to: "challenged" });
@@ -1542,7 +1542,7 @@ describe("store_owner_slug", () => {
     expect(slug).toMatch(LABEL_VALUE_PATTERN);
   });
 
-  it("store_owner_slug: 1000 random strings all produce legal Orange label values", () => {
+  it("store_owner_slug: 1000 random strings all produce legal Bob label values", () => {
     // Deterministic PRNG so a failure is reproducible from the seed alone.
     let seed = 0x5eed_1a2b;
     const next = (): number => {
@@ -1594,7 +1594,7 @@ describe("store_title", () => {
 
   it("store_title: a first line longer than 500 characters is the truncated prefix, and says so", () => {
     const row = byName("5e6f7081");
-    // Orange cut a 600-character first line at 500. There is no newline left in
+    // Bob cut a 600-character first line at 500. There is no newline left in
     // the snippet, which is exactly how the cut is detectable.
     expect(row.snippet).not.toContain("\n");
     expect(row.snippet.length).toBe(SNIPPET_MAX_CHARS);
@@ -2288,7 +2288,7 @@ describe("store_read_latest_report", () => {
 // ── W10: the kind=evaluation append, its summary line, and the in-flight
 //        exclusion the poller shares with W9's teardown ─────────────────
 //
-// ⚠️ The Orange bodies in this block are SYNTHETIC, not captured — unlike
+// ⚠️ The Bob bodies in this block are SYNTHETIC, not captured — unlike
 // every other body in this file. Nothing has ever written a `kind=evaluation`
 // row against a live stack (W10's poller is the first writer, and it is this
 // commit), so there is nothing to capture. They are built out of the same
@@ -2725,7 +2725,7 @@ describe("store_in_flight_exclusion", () => {
   }
 
   it("store_in_flight_exclusion: pending and running count; every other status does not", () => {
-    // ENUMERATED, never `!isTerminal(...)`: a status Orange adds later must be
+    // ENUMERATED, never `!isTerminal(...)`: a status Bob adds later must be
     // classified deliberately rather than inherited as "safe to delete".
     expect([...IN_FLIGHT_DELIVERY_STATUSES].sort()).toEqual(["pending", "running"]);
     for (const status of ["pending", "running"]) {
@@ -2767,8 +2767,8 @@ describe("store_shared_transition_mutex", () => {
         "9d253a61-79f6-46b1-ad25-a552761b0a6d": fixture("memory-by-id-1a2b3c4d.json"),
       },
     });
-    const a = createHypothesisStore({ client: orange() });
-    const b = createHypothesisStore({ client: orange() });
+    const a = createHypothesisStore({ client: bob() });
+    const b = createHypothesisStore({ client: bob() });
 
     await Promise.allSettled([
       a.transition({ id: ID, to: "challenged" }),
@@ -2933,7 +2933,7 @@ describe("store_cross_hypothesis_report", () => {
   it("store_cross_hypothesis_report: hypothesis A cannot own B's report — B keeps its own, and reports tamper", async () => {
     const { store } = harness({
       sessions: SESSIONS,
-      // Newest first, exactly as Orange orders them: the forgery is on top.
+      // Newest first, exactly as Bob orders them: the forgery is on top.
       reports: { [B]: JSON.stringify({ memories: [forgedRow(), ownRow()] }) },
       memoriesById: {
         "rep-b-own": fullRow("rep-b-own", "B held through July"),
@@ -3180,7 +3180,7 @@ describe("store_read_report_summaries", () => {
   it("store_read_report_summaries: the FOLLOW-UP read carries include_retracted=1 — the two attacks combined", async () => {
     // 🔴 The combination is the point, and neither half alone reaches it: a
     // forged newest row forces the per-name audit read, and the victim's own
-    // report underneath has been HOSTILELY RETRACTED. Orange applies its
+    // report underneath has been HOSTILELY RETRACTED. Bob applies its
     // not-retracted filter BEFORE the reduction, so without the flag on that
     // second request B's real headline disappears and the attacker has
     // erased it after all — having only had to make the erasure look like a

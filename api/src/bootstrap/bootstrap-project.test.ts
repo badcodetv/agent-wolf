@@ -20,13 +20,13 @@ import {
 // design/2026-08-20-agent-wolf.md, tickets W12 and W2b. Every test drives
 // bootstrapProject through undici's MockAgent (§ "Pinned technology
 // choices": no live network in any unit test) exactly the way
-// src/orange/client.test.ts drives createBobClient — bootstrapProject
+// src/bob/client.test.ts drives createBobClient — bootstrapProject
 // uses that same client internally for every read and write, including
 // `GET /agent/workers/{name}` via `client.getWorker` (W2b's twenty-third
 // route; the raw `fetch` workaround documented in earlier revisions of
 // bootstrap-project.ts is gone).
 
-const BASE_URL = "http://orange.test:8099";
+const BASE_URL = "http://bob.test:8099";
 const API_KEY = "wolf-bootstrap-test-key";
 const WOLF_MCP_URL = "http://172.17.0.1:8100/mcp";
 const WOLF_BASE_IMAGE = "agent-wolf:dev";
@@ -38,7 +38,7 @@ function prompt(name: string): string {
   return readFileSync(join(repoRoot, "prompts", name), "utf8");
 }
 // W2b: the raw `fetch` this module used to make for GET /agent/workers/{name}
-// is gone — every Orange call now goes through BobClient.
+// is gone — every Bob call now goes through BobClient.
 describe("bootstrap-project.ts contains no raw fetch( call (W2b)", () => {
   it("its source has no fetch( call", () => {
     const src = readFileSync(join(here, "bootstrap-project.ts"), "utf8");
@@ -195,7 +195,7 @@ describe("bootstrapProject — fresh project", () => {
     expect(body.attention_channel).toEqual({});
   });
 
-  it("the mcp_config header value is a whole-value ${VAR} reference — Orange's envRefPattern, no Bearer prefix, no partial interpolation", async () => {
+  it("the mcp_config header value is a whole-value ${VAR} reference — Bob's envRefPattern, no Bearer prefix, no partial interpolation", async () => {
     mockFreshProject();
     await bootstrapProject(options());
     const body = bodyOf("PUT", "/agent/project-settings");
@@ -461,9 +461,9 @@ describe("prompt contract — the literals every other ticket depends on", () =>
   it("interviewer.md names mcp__ui__ask_user, the tool that renders a question card", () => {
     // Without this instruction the interviewer asks in prose — typically
     // four questions in one message, which a person answers partially or
-    // not at all. The card is built into Orange's chat UI and available to
+    // not at all. The card is built into Bob's chat UI and available to
     // every session by default; the ONLY thing that was missing was the
-    // prompt telling the model to use it. The exact name matters: Orange's
+    // prompt telling the model to use it. The exact name matters: Bob's
     // reducer only looks for the question-card marker on a tool whose name
     // contains `ask_user` (agent-bob web/src/agentEventReducer.ts:243).
     expect(INTERVIEWER_PROMPT.includes("mcp__ui__ask_user")).toBe(true);
@@ -473,7 +473,7 @@ describe("prompt contract — the literals every other ticket depends on", () =>
     // Observed against the real model on 2026-09-07: told to use the card,
     // it gave four options and left `allow_freetext` at its default false —
     // trapping the user in the list. The tool cannot default it to true when
-    // options are present without changing every existing Orange product's
+    // options are present without changing every existing Bob product's
     // cards, so the interviewer prompt is where this belongs.
     expect(INTERVIEWER_PROMPT.includes("allow_freetext: true")).toBe(true);
   });

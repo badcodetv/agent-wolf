@@ -25,13 +25,13 @@ import { createSeriesRouter, seriesState } from "./series.js";
 // design/2026-08-20-agent-wolf.md, W11's acceptance criteria for
 // `GET /api/hypotheses/:id/series/:metric`. Test names are prefixed `series_`.
 //
-// Orange is mocked with undici's MockAgent (the pinned mechanism). The SPEC
+// Bob is mocked with undici's MockAgent (the pinned mechanism). The SPEC
 // below is the committed W3 fixture — the same worked example that ticket
 // asserts validates — so these tests cannot pass against a spec shape the
 // validator would reject. Everything else is synthetic and is not presented
 // as a recording.
 
-const ORANGE = "http://orange.test:4100";
+const BOB = "http://bob.test:4100";
 const API_KEY = "wolf-project-api-key-for-tests";
 const SECRET = "session-secret-for-tests-0123456789abcdef";
 const OWNER = "kai@badcode.dev";
@@ -59,7 +59,7 @@ function daysBefore(nowMs: number, days: number): string {
   return new Date(nowMs - days * MS_PER_DAY).toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
-// ── The stub Orange ─────────────────────────────────────────────────────
+// ── The stub Bob ─────────────────────────────────────────────────────
 
 interface Recorded {
   method: string;
@@ -103,7 +103,7 @@ class Stub {
         .reply((opts) => {
           const path = String(opts.path);
           this.requests.push({ method, path });
-          const answer = this.route(method, new URL(path, ORANGE));
+          const answer = this.route(method, new URL(path, BOB));
           return {
             statusCode: answer.status,
             data: answer.body as never,
@@ -188,7 +188,7 @@ beforeEach(() => {
   mockAgent.disableNetConnect();
   mockAgent.enableNetConnect((host) => host.startsWith("127.0.0.1") || host.startsWith("localhost"));
   setGlobalDispatcher(mockAgent);
-  pool = mockAgent.get(ORANGE);
+  pool = mockAgent.get(BOB);
 });
 
 afterEach(async () => {
@@ -204,7 +204,7 @@ function config(): WolfConfig {
       WOLF_SESSION_SECRET: SECRET,
       WOLF_ALLOWED_EMAILS: OWNER,
       WOLF_API_KEY: API_KEY,
-      BOB_BASE_URL: ORANGE,
+      BOB_BASE_URL: BOB,
       NODE_ENV: "test",
     },
     { readRouteTable: () => undefined },
@@ -234,7 +234,7 @@ async function harness(stubConfig: StubConfig = {}, nowMs = NOW_MS): Promise<Har
   stub.install();
   const cfg = config();
   const { logger, lines } = capturingLogger();
-  const client = createBobClient({ baseUrl: cfg.orangeBaseUrl, apiKey: cfg.orangeApiKey, logger });
+  const client = createBobClient({ baseUrl: cfg.bobBaseUrl, apiKey: cfg.bobApiKey, logger });
 
   const app = express();
   app.use(express.json());
@@ -290,12 +290,12 @@ describe("series_proxy", () => {
     const h = await harness();
     const res = await get(h, SERIES);
 
-    // Orange sets no CORS headers by design, so a redirect or a
+    // Bob sets no CORS headers by design, so a redirect or a
     // `download_url` for the browser to fetch would fail in the browser.
     expect(res.status).toBe(200);
     expect(res.status).toBeLessThan(300);
     expect(res.contentType).toContain("application/json");
-    expect(res.raw).not.toContain(ORANGE);
+    expect(res.raw).not.toContain(BOB);
     expect(res.raw).not.toContain("download_url");
   });
 
@@ -352,7 +352,7 @@ describe("series_proxy", () => {
 // ── The three states ────────────────────────────────────────────────────
 
 describe("series_state", () => {
-  it("series_state: a 404 from Orange is 200 never_fetched with an empty series and version 0", async () => {
+  it("series_state: a 404 from Bob is 200 never_fetched with an empty series and version 0", async () => {
     const h = await harness({ metadata: { status: 404, body: "dataset not found" } });
     const res = await get(h, SERIES);
 
@@ -396,7 +396,7 @@ describe("series_state", () => {
     // one "no data" marker. `seriesState` — which is what decides everything
     // about a dataset that EXISTS — can never return `never_fetched`, however
     // old or empty the series is; that value comes solely from the branch
-    // that saw Orange 404 the dataset.
+    // that saw Bob 404 the dataset.
     const nowMs = NOW_MS;
     for (const points of [[], [{ tMs: nowMs - 400 * MS_PER_DAY, v: 1 }], [{ tMs: nowMs, v: 1 }]]) {
       expect(seriesState(points, 5, nowMs)).not.toBe("never_fetched");
@@ -567,7 +567,7 @@ describe("series_auth", () => {
     expect(logged).not.toContain("download_url");
   });
 
-  it("series_auth: a malformed hypothesis id is 400 invalid and never reaches Orange", async () => {
+  it("series_auth: a malformed hypothesis id is 400 invalid and never reaches Bob", async () => {
     const h = await harness();
     const res = await get(h, `/api/hypotheses/hyp-1a2b3c4d/series/${METRIC}`);
 
@@ -576,7 +576,7 @@ describe("series_auth", () => {
     expect(h.stub.requests).toEqual([]);
   });
 
-  it("series_auth: an Orange outage on the metadata read is unavailable, not never_fetched", async () => {
+  it("series_auth: an Bob outage on the metadata read is unavailable, not never_fetched", async () => {
     const h = await harness({ metadata: { status: 503, body: "upstream down" } });
     const res = await get(h, SERIES);
 

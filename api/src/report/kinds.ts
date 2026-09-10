@@ -195,7 +195,7 @@ export function reportDecisionLabels(
  * silently reverts to B's template with a fresh `status: accepted` row
  * asserting the human chose it (owner ruling 2026-08-26, fix round 2).
  *
- * The value is an Orange memory id. It must satisfy the K8s label charset —
+ * The value is an Bob memory id. It must satisfy the K8s label charset —
  * `reportDecisionLabels` refuses one that does not, rather than writing a row
  * nothing can find.
  */

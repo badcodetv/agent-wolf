@@ -9,7 +9,7 @@
  * `<id>-<slug>`, evaluates the spec's conditions against those numbers, and
  * Wolf itself appends a `challenged` transition when one trips.
  *
- * Orange's `dataset_put` stamps provenance from the token
+ * Bob's `dataset_put` stamps provenance from the token
  * (`mcp_datasets.go:631-632`) but imposes NO name ownership: a session may
  * write ANY name in its project, and `dataset_get` may read any name too.
  * Measured 2026-08-27 from inside a session container: a write to

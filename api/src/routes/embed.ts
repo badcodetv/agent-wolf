@@ -1,6 +1,6 @@
 /**
  * The embed-token route — one of the two places Wolf hands the browser
- * something that came from Orange (design/2026-08-20-agent-wolf.md, W11).
+ * something that came from Bob (design/2026-08-20-agent-wolf.md, W11).
  *
  *   GET /api/hypotheses/:id/embed-token
  *     → 200 { token, expires_at_sec, embed_url }
@@ -9,7 +9,7 @@
  *
  * ## The three things here that are correctness, not style
  *
- * 1. **No `ttl_seconds` is sent, ever.** Orange's `clampEmbedTTL`
+ * 1. **No `ttl_seconds` is sent, ever.** Bob's `clampEmbedTTL`
  *    (`go/cmd/agentd/embedtoken.go`) reads absent-or-zero as its own 900s
  *    default and clamps anything else into `[60, 3600]`. Hazard H1 of
  *    `docs/19-embedding.md` is that an embed token carries PROJECT-WIDE
@@ -21,7 +21,7 @@
  *    outbound body has no `ttl_seconds` key at all.
  *
  * 2. **`expires_at_sec` is unix SECONDS**, because that is the token's own
- *    `exp` claim, read back off the signed token by Orange rather than
+ *    `exp` claim, read back off the signed token by Bob rather than
  *    recomputed. W13 subtracts 120 from it to schedule a refresh; the unit is
  *    in the name because subtracting 120 from milliseconds gives a token that
  *    never refreshes, and 120 000 from seconds one that refreshes instantly —
@@ -65,7 +65,7 @@ export interface EmbedTokenResponse {
  * `publicUrl` arrives with its trailing slashes already trimmed by
  * `loadConfig`, so this is a plain concatenation and not a `new URL()` join
  * (which would silently drop a path prefix on a base like
- * `https://example.test/orange`).
+ * `https://example.test/bob`).
  */
 export function embedUrlFor(publicUrl: string, id: string): string {
   return `${publicUrl}/embed/session/${sessionNameForHypothesis(id)}`;
@@ -86,7 +86,7 @@ export function createEmbedRouter(options: CreateEmbedRouterOptions): Router {
   // precisely because a session container has no cookie, and a guard mounted
   // any wider than the route it protects is how they get 401ed somewhere no
   // unit test looks. Placed BEFORE the handler, so a caller with no cookie is
-  // refused before a single byte goes to Orange — `embed.test.ts` asserts the
+  // refused before a single byte goes to Bob — `embed.test.ts` asserts the
   // upstream recorded zero requests.
   router.get(
     "/api/hypotheses/:id/embed-token",
@@ -96,10 +96,10 @@ export function createEmbedRouter(options: CreateEmbedRouterOptions): Router {
         const id = requireHypothesisId(req.params["id"]);
         const sessionName = sessionNameForHypothesis(id);
 
-        // No TTL argument: Orange's own 900s default is the one we want, and
+        // No TTL argument: Bob's own 900s default is the one we want, and
         // the client omits the key entirely when none is passed. A 404 here —
         // absent session, malformed name, or a name belonging to another
-        // project, which Orange deliberately does not distinguish — becomes a
+        // project, which Bob deliberately does not distinguish — becomes a
         // `not_found` WolfError through the client's standard status mapping.
         // This route is therefore not an existence oracle, and does not try
         // to be one.
@@ -114,7 +114,7 @@ export function createEmbedRouter(options: CreateEmbedRouterOptions): Router {
         const body: EmbedTokenResponse = {
           token,
           expires_at_sec: expiresAtSec,
-          embed_url: embedUrlFor(config.orangePublicUrl, id),
+          embed_url: embedUrlFor(config.bobPublicUrl, id),
         };
         res.status(200).json(body);
       })().catch(next);

@@ -21,7 +21,7 @@ export type WolfErrorKind =
   | "invalid" // caller error; carries field-level details
   | "conflict" // CAS or state-machine rejection
   | "forbidden" // authenticated but not allowed
-  | "misconfigured" // an env var or an Orange-side setting is wrong; names the variable
+  | "misconfigured" // an env var or an Bob-side setting is wrong; names the variable
   | "internal"; // WE have a bug — an unhandled throw. NOT retryable. Message never echoed to the client.
 
 /** Default HTTP status per kind, used when the caller does not override it. */
@@ -40,7 +40,7 @@ export interface WolfErrorOptions {
   status?: number;
   /** Field-level detail (e.g. `{ variable: "WOLF_API_KEY" }`, a zod issue list). */
   details?: unknown;
-  /** The verbatim body of an upstream (Orange) error response, if any. */
+  /** The verbatim body of an upstream (Bob) error response, if any. */
   upstreamBody?: string;
   /** The underlying cause, if this error wraps another. */
   cause?: unknown;

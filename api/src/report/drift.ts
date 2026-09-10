@@ -5,7 +5,7 @@
  * design/2026-08-20-agent-wolf.md § W20 ("Drift detection") is the ticket.
  * `detectDrift` is PURE — it takes the two slot sets already extracted by
  * earlier tickets (W16's `parseTemplate().slotIds`, W15/kinds.ts's
- * `parseReportContent().slots`) and does no I/O, no Orange read, no route
+ * `parseReportContent().slots`) and does no I/O, no Bob read, no route
  * work. W22's board integration is the caller: it reads the template and the
  * latest `kind=report` through the store, parses both, and passes the two
  * slot shapes in here.

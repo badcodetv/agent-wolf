@@ -28,7 +28,7 @@ import {
 // design/2026-08-20-agent-wolf.md, W9's acceptance criteria. Test names are
 // prefixed `provision_`.
 //
-// Orange is mocked with undici's MockAgent (the pinned mechanism), and the
+// Bob is mocked with undici's MockAgent (the pinned mechanism), and the
 // stub RECORDS EVERY OUTBOUND REQUEST IN ORDER. That is not incidental: two
 // of this ticket's criteria are orderings, and a test that asserts a SET of
 // calls — "all five happened" — does not gate either of them. It is the exact
@@ -38,7 +38,7 @@ import {
 // `draft` after a failed go-live" is a real read of what was written rather
 // than a restatement of the assertion above it.
 
-const ORANGE = "http://orange.test:4100";
+const BOB = "http://bob.test:4100";
 const API_KEY = "wolf-project-api-key-for-tests";
 const OWNER = "kai@badcode.dev";
 const ID = "1a2b3c4d";
@@ -58,7 +58,7 @@ const WORKED_SPEC = readFileSync(
   "utf8",
 ).trim();
 
-// ── The stub Orange ─────────────────────────────────────────────────────
+// ── The stub Bob ─────────────────────────────────────────────────────
 
 interface Recorded {
   method: string;
@@ -189,7 +189,7 @@ class Stub {
           const path = String(opts.path);
           const body = typeof opts.body === "string" ? opts.body : "";
           this.requests.push({ method, path, body });
-          const answer = this.route(method, new URL(path, ORANGE), body);
+          const answer = this.route(method, new URL(path, BOB), body);
           return {
             statusCode: answer.status,
             data: answer.body as never,
@@ -376,7 +376,7 @@ class Stub {
       const pages = this.config.deliveries ?? [[]];
       const all = pages[Math.min(this.deliveryCalls, pages.length - 1)] ?? [];
       this.deliveryCalls += 1;
-      // Orange filters on `?status=` server-side, and so does this stub: the
+      // Bob filters on `?status=` server-side, and so does this stub: the
       // drain asks for `pending` only, which is what lets a tick session
       // already RUNNING finish rather than hold teardown up.
       const wantStatus = url.searchParams.get("status");
@@ -418,7 +418,7 @@ beforeEach(() => {
   mockAgent = new MockAgent();
   mockAgent.disableNetConnect();
   setGlobalDispatcher(mockAgent);
-  pool = mockAgent.get(ORANGE);
+  pool = mockAgent.get(BOB);
 });
 
 afterEach(async () => {
@@ -440,7 +440,7 @@ function harness(
   const stub = new Stub(pool, stubConfig);
   stub.install();
   const logger = createLogger({ logLevel: "silent" });
-  const client = createBobClient({ baseUrl: ORANGE, apiKey: API_KEY, logger });
+  const client = createBobClient({ baseUrl: BOB, apiKey: API_KEY, logger });
   const store = createHypothesisStore({ client, logger });
   // A fake clock, so the drain bound is exercised for real without the test
   // waiting a real minute.
@@ -580,7 +580,7 @@ describe("provision_go_live", () => {
   it("provision_go_live: the NEWEST candidate wins, whatever its provenance", async () => {
     const older = candidate('{"thesis": "the superseded one"}');
     const newer = candidate();
-    // Seeded oldest-first; the stub serves them newest-first, as Orange does.
+    // Seeded oldest-first; the stub serves them newest-first, as Bob does.
     const h = harness({ memories: [draftState(), older, newer] });
     await h.provisioner.goLive({ id: ID, email: OWNER });
 
@@ -615,7 +615,7 @@ describe("provision_go_live", () => {
     expect(parsed.cron).not.toContain("@");
   });
 
-  it("provision_go_live: WOLF_SCHEDULE_CRON is what reaches Orange, so X1 can run * * * * *", async () => {
+  it("provision_go_live: WOLF_SCHEDULE_CRON is what reaches Bob, so X1 can run * * * * *", async () => {
     const h = harness({ memories: [draftState(), candidate()] }, { scheduleCron: "* * * * *" });
     await h.provisioner.goLive({ id: ID, email: OWNER });
     const post = h.stub.requests.find((r) => r.path === "/agent/schedules" && r.method === "POST");
@@ -688,7 +688,7 @@ describe("provision_rollback", () => {
   it("provision_rollback: a failure at STEP 1 leaves no live row, no worker and no schedule", async () => {
     const h = harness({
       memories: [draftState(), candidate()],
-      fail: { "POST /agent/memories": { status: 503, body: "orange is down" } },
+      fail: { "POST /agent/memories": { status: 503, body: "bob is down" } },
     });
     await expect(h.provisioner.goLive({ id: ID, email: OWNER })).rejects.toThrow();
 
@@ -748,7 +748,7 @@ describe("provision_rollback", () => {
     const original = h.client.appendMemory.bind(h.client);
     h.client.appendMemory = async (params) => {
       appends += 1;
-      if (appends === 2) throw new WolfError("unavailable", "orange went away");
+      if (appends === 2) throw new WolfError("unavailable", "bob went away");
       return original(params);
     };
 
@@ -1212,7 +1212,7 @@ describe("provision_serialisation_go_live", () => {
   it("provision_serialisation_go_live: two concurrent go-lives provision ONE worker and ONE schedule", async () => {
     // The store's mutex guards the state append alone. Go-live is four calls
     // wide, so without a mutex around the WHOLE of it both callers pass the
-    // `draft` pre-flight and Orange ends up with two daily schedules for one
+    // `draft` pre-flight and Bob ends up with two daily schedules for one
     // hypothesis — two ticks a day, two writers racing the same dataset CAS.
     const h = harness({ memories: [draftState(), candidate()] });
     const results = await Promise.allSettled([

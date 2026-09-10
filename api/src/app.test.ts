@@ -9,7 +9,7 @@ import { loadConfig } from "./config.js";
 /** A config good enough to build the app: a well-formed MCP token (W7 —
  * `createWolfMcp` refuses to build without one), the three variables W8's
  * `assertSessionConfigured` requires at boot (session secret, allowlist,
- * Orange API key), and no route table, so gateway discovery does not depend
+ * Bob API key), and no route table, so gateway discovery does not depend
  * on the machine running the test. */
 function testConfig(env: NodeJS.ProcessEnv = {}) {
   return loadConfig(
@@ -166,14 +166,14 @@ describe("createApp", () => {
     // `stripped_count: null`, so asserting the block's presence would prove
     // nothing at all.
     /**
-     * ⚠️ An ANSWER-ONLY Orange stub, deliberately: it dispatches on path and
+     * ⚠️ An ANSWER-ONLY Bob stub, deliberately: it dispatches on path and
      * on the selector's `kind=` term and ignores `limit`, `latest_per` and
      * `include_retracted`. Honest here because the two cases below are about
      * what `createApp` WIRES TOGETHER, not about query semantics — those are
      * graded in `routes/hypotheses.test.ts` against a stub that does honour
      * all three (R180).
      */
-    const ORANGE = "http://orange.test:4100";
+    const BOB = "http://bob.test:4100";
     const ID = "1a1a1a1a";
     const TEMPLATE =
       '<section><div data-wolf-fallback>no chart</div>' +
@@ -210,10 +210,10 @@ describe("createApp", () => {
       setGlobalDispatcher(agent);
       try {
         agent
-          .get(ORANGE)
+          .get(BOB)
           .intercept({ method: "GET", path: () => true })
           .reply((opts) => {
-            const url = new URL(String(opts.path), ORANGE);
+            const url = new URL(String(opts.path), BOB);
             const kind = (url.searchParams.get("selector") ?? "")
               .split(",")
               .find((term) => term.startsWith("kind="))
@@ -255,7 +255,7 @@ describe("createApp", () => {
     }
 
     async function fetchSignedIn(path: string): Promise<{ status: number; json: any }> {
-      const { base, cookie } = await signedInBase({ BOB_BASE_URL: ORANGE });
+      const { base, cookie } = await signedInBase({ BOB_BASE_URL: BOB });
       const res = await fetch(`${base}${path}`, { headers: { cookie } });
       return { status: res.status, json: await res.json() };
     }

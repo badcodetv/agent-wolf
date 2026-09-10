@@ -4,10 +4,10 @@ Two kinds of file live here:
 
 - `worked-spec.json` — W3's transcription of the plan's own worked spec example.
   Not a captured response; see W3.
-- **Everything else** — Orange HTTP **response bodies captured verbatim** from a
+- **Everything else** — Bob HTTP **response bodies captured verbatim** from a
   running build, for W5. Byte-for-byte what `agentd` wrote to the socket
   (compact JSON, one trailing newline). Nothing here was reformatted,
-  hand-edited or hand-shaped; if a body looks odd, that is what Orange returns.
+  hand-edited or hand-shaped; if a body looks odd, that is what Bob returns.
 
 ## The build they came from
 
@@ -31,7 +31,7 @@ these bodies come from — `POST /agent/memories`, `GET /agent/memories`,
 ## How each row was written
 
 - Every **trusted** row (empty provenance) was appended through the real
-  `POST /agent/memories` route (O7) with the project API key, and Orange
+  `POST /agent/memories` route (O7) with the project API key, and Bob
   answered `201`. That route stamps provenance empty and refuses a body that
   tries to supply it — verified during the capture: a body carrying
   `"created_by_worker": ""` is rejected `400` with
@@ -45,7 +45,7 @@ these bodies come from — `POST /agent/memories`, `GET /agent/memories`,
   `CreatedBySession` fields it fills from the calling session's actor. There is
   no HTTP path that can write those fields, by design: the only credential that
   stamps them is a session token minted inside a container. **The response
-  bodies below are still Orange's own serialisation of those rows, read back
+  bodies below are still Bob's own serialisation of those rows, read back
   over HTTP from the running build.**
 - The sessions were created through the real `POST /agent/session` route and
   really provisioned containers from `agentkit-example:dev` (status `running`
@@ -139,7 +139,7 @@ address may never be a label value.
 ## The second capture (W5 fix round 1, 2026-08-21)
 
 The board's fast path originally read **without** `include_retracted=1`, exactly
-as the plan's board criterion is written. That leaves a hole: Orange applies its
+as the plan's board criterion is written. That leaves a hole: Bob applies its
 retraction filter **before** the `latest_per` reduction, so a hostile retraction
 of Wolf's *newest* state row does not hide the hypothesis — it promotes the
 **older trusted row beneath it**, which passes every clause of `isTrusted`. The

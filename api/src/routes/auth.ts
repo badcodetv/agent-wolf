@@ -26,7 +26,7 @@
  *                              sign-out button fail exactly when a user most
  *                              wants it to work — an expired session.
  *
- * ⚠️ **Orange verifying a credential is necessary, never sufficient.**
+ * ⚠️ **Bob verifying a credential is necessary, never sufficient.**
  * `POST /auth/verify-google` is an identity oracle and nothing more: it
  * mints no token, grants no project and knows nothing about Wolf's users
  * (`go/cmd/agentd/googleauth.go`, `verifyResponse`'s doc comment). The
@@ -82,12 +82,12 @@ function parseBody<T>(schema: z.ZodType<T>, body: unknown, what: string): T {
  * plan's criteria do not name.
  *
  *   200 → continue.
- *   401 → `forbidden` ("invalid credential"). Orange answers 401 for every
+ *   401 → `forbidden` ("invalid credential"). Bob answers 401 for every
  *         rejection — bad signature, wrong audience, unverified address —
  *         deliberately, so it must not be reported as anything finer.
  *   404 → **`misconfigured` naming `GOOGLE_CLIENT_ID`**: `registerVerifyGoogle`
- *         mounts nothing when that variable is unset ON ORANGE, and a
- *         configuration hole must not read as a rejected user. The Orange
+ *         mounts nothing when that variable is unset ON BOB, and a
+ *         configuration hole must not read as a rejected user. The Bob
  *         client already maps this one (W2), so it arrives here as
  *         `misconfigured` and is rethrown untouched.
  *   403 → the route is API-key-only (`authenticatedByAPIKey`), so a 403 means
@@ -104,7 +104,7 @@ function classifyVerifyFailure(err: unknown): never {
     if (err.status === 403) {
       throw WolfError.misconfigured(
         "WOLF_API_KEY",
-        "WOLF_API_KEY: Orange refused wolf-api's credential on POST /auth/verify-google — " +
+        "WOLF_API_KEY: Bob refused wolf-api's credential on POST /auth/verify-google — " +
           "that route answers only to a project API key (X-API-Key)",
       );
     }
@@ -137,9 +137,9 @@ export function createAuthRouter(options: CreateAuthRouterOptions): Router {
       classifyVerifyFailure(err);
     }
 
-    // Orange only ever returns `email_verified: true` on a 200 today. Checked
+    // Bob only ever returns `email_verified: true` on a 200 today. Checked
     // anyway: the field exists so a caller reads the fact rather than knowing
-    // the rule, and a future Orange that relaxes it must not silently sign
+    // the rule, and a future Bob that relaxes it must not silently sign
     // somebody in here.
     if (!identity.emailVerified || identity.email === "") {
       throw new WolfError("forbidden", "invalid credential");

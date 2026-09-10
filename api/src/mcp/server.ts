@@ -14,7 +14,7 @@
  *   token with no scheme."
  *
  * ⚠️ `Authorization: Bearer ${WOLF_MCP_TOKEN}` cannot work and is not
- * accepted here even when the value is correct. Orange validates MCP header
+ * accepted here even when the value is correct. Bob validates MCP header
  * values as whole-value `${VAR}` references only and rejects
  * `"Bearer ${WOLF_MCP_TOKEN}"` outright (`go/agentdb/sessions.go:55,88-89`),
  * so W12's project MCP config can carry
@@ -47,7 +47,7 @@ import { constantTimeEquals } from "./seriesdownload.js";
 import { registerSpecValidateTool } from "./specvalidate.js";
 import { registerSeriesTools, type MarketDataAccess } from "./tools.js";
 
-/** The MCP server's name. `mcp__<name>__<tool>` is how Orange derives the
+/** The MCP server's name. `mcp__<name>__<tool>` is how Bob derives the
  * tool names a prompt calls (`go/agentdb/sessions.go:49-51`), so changing
  * this silently renames every tool W12's researcher prompt calls. */
 export const MCP_SERVER_NAME = "wolf";

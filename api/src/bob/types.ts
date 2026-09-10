@@ -1,5 +1,5 @@
 /**
- * Wire types for every Orange route `api/src/bob/client.ts` calls.
+ * Wire types for every Bob route `api/src/bob/client.ts` calls.
  *
  * design/2026-08-20-agent-wolf.md § "Environment facts you must not
  * rediscover the hard way": "Timestamp units differ across the product
@@ -10,7 +10,7 @@
  * can forget.
  *
  * Every field this module exposes is camelCase, regardless of the
- * casing Orange's JSON uses on the wire (`created_by_worker`,
+ * casing Bob's JSON uses on the wire (`created_by_worker`,
  * `size_bytes`, …) — `client.ts` is what translates between the two.
  * This mirrors the rest of this package (`WolfConfig`, `Logger`, …) and
  * is what lets `createAtMs` / `createdByWorker` / `retractedBy` read the
@@ -29,7 +29,7 @@
 /** A unix timestamp in **milliseconds** — memories, datasets, evaluations. */
 export type UnixMs = number & { readonly __unit: "ms" };
 
-/** A unix timestamp in **seconds** — Orange sessions, embed-token expiry, `agent_*` tables. */
+/** A unix timestamp in **seconds** — Bob sessions, embed-token expiry, `agent_*` tables. */
 export type UnixSec = number & { readonly __unit: "s" };
 
 /** The only sanctioned way to produce a `UnixMs` from a plain number. */
@@ -269,7 +269,7 @@ export interface VerifyGoogleResult {
  * `Artifact`). Distinct from a snapshot: an artifact is one file, a snapshot is
  * a whole filesystem.
  *
- * ⚠️ **This is the one Orange route whose wire is already camelCase.** The
+ * ⚠️ **This is the one Bob route whose wire is already camelCase.** The
  * memories, datasets, workers and schedules routes all send snake_case
  * (`created_by_worker`, `size_bytes`, …) and `client.ts` translates; the Go
  * `Artifact` struct is tagged `filePath` / `mimeType` / `fileSize` / `isDir`
@@ -284,20 +284,20 @@ export interface VerifyGoogleResult {
  */
 export interface ArtifactRecord {
   id: string;
-  /** Orange's session uuid. Kept here and dropped at Wolf's own route — the browser addresses a session by NAME. */
+  /** Bob's session uuid. Kept here and dropped at Wolf's own route — the browser addresses a session by NAME. */
   sessionId: string;
   /** The dedup key, with `sessionId`. Spelt with or without a leading slash depending on who wrote it. */
   filePath: string;
   /** `"file" | "code" | "image" | "data" | "webapp"`, and extensible — kept as a string on purpose. */
   artifactType: string;
-  /** `"live" | "extracted" | "lost" | "extraction_failed"`. A string, so a fifth value Orange adds does not become a parse failure here. */
+  /** `"live" | "extracted" | "lost" | "extraction_failed"`. A string, so a fifth value Bob adds does not become a parse failure here. */
   status: string;
   label: string;
   description: string;
   mimeType: string;
   /** `fileSize` on the wire. Bytes. */
   fileSizeBytes: number;
-  /** `"tool" | "auto" | "upload"` — write-once in Orange. */
+  /** `"tool" | "auto" | "upload"` — write-once in Bob. */
   source: string;
   /** When true, the bytes are one blob per file under a PREFIX; the file route serves nothing for it. */
   isDir: boolean;
