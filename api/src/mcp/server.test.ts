@@ -2,7 +2,7 @@
  * W7: the `wolf` MCP server — `series_search` and `series_fetch` over
  * Streamable HTTP, authenticated by the bare `X-Wolf-Mcp-Token` header.
  *
- * design/2026-08-20-agent-wolf.md § W7 (agent-orange repo). Test names are
+ * design/2026-08-20-agent-wolf.md § W7 (agent-bob repo). Test names are
  * prefixed `mcp_` per the ticket. No test reaches the network: every
  * connector is injected.
  */

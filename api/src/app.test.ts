@@ -197,12 +197,12 @@ describe("createApp", () => {
     }
 
     /** `<kind>` → the `memories` page; `byId` → `GET /agent/memories/{id}`. */
-    interface OrangeRows {
+    interface BobRows {
       byKind?: Record<string, Record<string, unknown>[]>;
       byId?: Record<string, unknown>;
     }
 
-    async function withOrange<T>(rows: OrangeRows, fn: () => Promise<T>): Promise<T> {
+    async function withBob<T>(rows: BobRows, fn: () => Promise<T>): Promise<T> {
       const agent = new MockAgent();
       agent.disableNetConnect();
       agent.enableNetConnect((host) => host.startsWith("127.0.0.1") || host.startsWith("localhost"));
@@ -255,7 +255,7 @@ describe("createApp", () => {
     }
 
     async function fetchSignedIn(path: string): Promise<{ status: number; json: any }> {
-      const { base, cookie } = await signedInBase({ ORANGE_BASE_URL: ORANGE });
+      const { base, cookie } = await signedInBase({ BOB_BASE_URL: ORANGE });
       const res = await fetch(`${base}${path}`, { headers: { cookie } });
       return { status: res.status, json: await res.json() };
     }
@@ -281,14 +281,14 @@ describe("createApp", () => {
           created_at: 1787334040000,
         },
       },
-    } satisfies OrangeRows;
+    } satisfies BobRows;
 
     it("wires composeReportStats into the detail route — stripped_count is a number, not null", async () => {
       // The discriminator is `stripped_count`: a NUMBER only when a producer
       // was wired in. Unwired the block is still served with
       // `stripped_count: null`, so asserting the block's presence would prove
       // nothing at all.
-      const res = await withOrange(lockedTemplate, detail);
+      const res = await withBob(lockedTemplate, detail);
 
       expect(res.status).toBe(200);
       expect(res.json.report.has_template).toBe(true);
@@ -320,7 +320,7 @@ describe("createApp", () => {
         worker: `researcher-${ID}`,
         session: "sess-tick",
       });
-      const res = await withOrange(
+      const res = await withBob(
         {
           byKind: { ...lockedTemplate.byKind, report: [forged, own] },
           byId: {
@@ -375,7 +375,7 @@ describe("createApp", () => {
         worker: `researcher-${ID}`,
         session: "sess-tick",
       });
-      const res = await withOrange(
+      const res = await withBob(
         {
           byKind: { ...lockedTemplate.byKind, report: [own] },
           byId: {

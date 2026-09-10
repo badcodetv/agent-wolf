@@ -15,7 +15,7 @@ import {
 import { createErrorHandler } from "../app.js";
 import { loadConfig, type WolfConfig } from "../config.js";
 import { createLogger } from "../logger.js";
-import { createOrangeClient } from "../orange/client.js";
+import { createBobClient } from "../bob/client.js";
 import { setSessionCookie } from "../auth/session.js";
 import {
   SESSION_NAME_PATTERN,
@@ -458,7 +458,7 @@ function config(): WolfConfig {
       WOLF_SESSION_SECRET: SECRET,
       WOLF_ALLOWED_EMAILS: OWNER,
       WOLF_API_KEY: API_KEY,
-      ORANGE_BASE_URL: ORANGE,
+      BOB_BASE_URL: ORANGE,
       NODE_ENV: "test",
     },
     { readRouteTable: () => undefined },
@@ -507,7 +507,7 @@ async function harness(stubConfig: StubConfig, opts: HarnessOptions = {}): Promi
   const statsCalls: { id: string; sessions?: SessionLookup }[] = [];
   const cfg = config();
   const logger = createLogger({ logLevel: "silent" });
-  const client = createOrangeClient({ baseUrl: cfg.orangeBaseUrl, apiKey: cfg.orangeApiKey, logger });
+  const client = createBobClient({ baseUrl: cfg.orangeBaseUrl, apiKey: cfg.orangeApiKey, logger });
   // ONE store, exactly as createApp builds it: the transition mutex is per
   // INSTANCE, so a router that built its own would stop serialising.
   const store = createHypothesisStore({ client, logger });
@@ -624,12 +624,12 @@ describe("stub_attention_requests", () => {
     created_at: 1787334311, expires_at: 1787334911, answered_at: 0, timed_out_at: 0,
   };
 
-  function client(): ReturnType<typeof createOrangeClient> {
+  function client(): ReturnType<typeof createBobClient> {
     const stub = new Stub(pool, {
       attention: JSON.stringify({ attention_requests: [ANSWERED, TIMED_OUT, OPEN] }),
     });
     stub.install();
-    return createOrangeClient({
+    return createBobClient({
       baseUrl: ORANGE,
       apiKey: API_KEY,
       logger: createLogger({ logLevel: "silent" }),
@@ -674,7 +674,7 @@ describe("stub_attention_requests", () => {
       }),
     });
     stub.install();
-    const rows = await createOrangeClient({
+    const rows = await createBobClient({
       baseUrl: ORANGE, apiKey: API_KEY, logger: createLogger({ logLevel: "silent" }),
     }).listAttentionRequests({ state: "open" });
     expect(rows.map((r) => r.id)).toEqual(["ar-expired"]);
@@ -693,7 +693,7 @@ describe("stub_attention_requests", () => {
       }),
     });
     stub.install();
-    const rows = await createOrangeClient({
+    const rows = await createBobClient({
       baseUrl: ORANGE, apiKey: API_KEY, logger: createLogger({ logLevel: "silent" }),
     }).listAttentionRequests({ state: "open" });
     expect(rows.map((r) => r.id)).toEqual(["ar-legacy"]);

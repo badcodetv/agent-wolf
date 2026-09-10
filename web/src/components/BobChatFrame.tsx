@@ -60,11 +60,11 @@ export const MIN_REFRESH_DELAY_MS = 1_000;
 const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 
 /**
- * `${VITE_ORANGE_PUBLIC_URL}/embed/session/hyp-<id>#token=<token>`.
+ * `${VITE_BOB_PUBLIC_URL}/embed/session/hyp-<id>#token=<token>`.
  *
  * The origin comes from the build variable, never from a literal here and
  * never from the API's own `embed_url`: the browser is what has to reach it,
- * and `ORANGE_PUBLIC_URL` on the API side is the same origin expressed for a
+ * and `BOB_PUBLIC_URL` on the API side is the same origin expressed for a
  * different consumer. (They must agree — see `.env.example`.)
  */
 export function embedSrc(hypothesisId: string, token: string): string {
@@ -85,17 +85,17 @@ interface MintedToken {
   generation: number;
 }
 
-export interface OrangeChatFrameProps {
+export interface BobChatFrameProps {
   /** The BARE 8-hex id. The `hyp-` prefix is added by `sessionNameForHypothesis`, once. */
   hypothesisId: string;
   /** The accessible name of the frame. */
   title?: string;
 }
 
-export default function OrangeChatFrame({
+export default function BobChatFrame({
   hypothesisId,
   title = "Agent Wolf interview conversation",
-}: OrangeChatFrameProps) {
+}: BobChatFrameProps) {
   const [minted, setMinted] = useState<MintedToken | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const generation = useRef(0);
@@ -157,7 +157,7 @@ export default function OrangeChatFrame({
   if (minted === null) {
     return (
       <Skeleton
-        data-testid="orange-chat-frame-loading"
+        data-testid="bob-chat-frame-loading"
         variant="rectangular"
         // 100%, not a pixel box: the placeholder must not resize the rail when
         // the real frame replaces it.
@@ -170,7 +170,7 @@ export default function OrangeChatFrame({
     <iframe
       // The key is the whole refresh mechanism: a new token is a new document.
       key={minted.generation}
-      data-testid="orange-chat-frame"
+      data-testid="bob-chat-frame"
       title={title}
       src={embedSrc(hypothesisId, minted.token)}
       // `height: 100%` and nothing else. No `height` attribute, no min-height

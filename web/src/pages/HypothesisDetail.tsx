@@ -1,5 +1,5 @@
 /**
- * `/hypotheses/:id` — the detail page. UI design § 5 (agent-orange repo).
+ * `/hypotheses/:id` — the detail page. UI design § 5 (agent-bob repo).
  *
  * ```
  * ┌──────────────────────────────────────────────┬──────────────────────┐
@@ -17,7 +17,7 @@
  *
  * 🔴 **The rail is a SIBLING of the scrolling column, not a child of it.**
  * That is the whole of D4's sizing argument: a sticky column's height is the
- * viewport's, known without measuring anything, so `OrangeChatFrame` gets a
+ * viewport's, known without measuring anything, so `BobChatFrame` gets a
  * meaningful `height: 100%` without anyone trying to measure a cross-origin
  * document from outside it. W13 built `ChatRail` and owns every part of that;
  * this page passes it a bare id and does not re-implement the column.
@@ -39,9 +39,9 @@
  *  1. the charts section — one series per metric of the locked spec;
  *  2. (W29) the artifacts panel — `…/artifacts`, a list this page has no other
  *     way to get, since the detail payload does not carry it;
- *  3. **the RAIL** — `ChatRail` (`:60` below) renders `OrangeChatFrame`
+ *  3. **the RAIL** — `ChatRail` (`:60` below) renders `BobChatFrame`
  *     (`ChatRail.tsx:89`), which calls `fetchEmbedToken`
- *     (`OrangeChatFrame.tsx:106`) on every mount. It is easy to miss because
+ *     (`BobChatFrame.tsx:106`) on every mount. It is easy to miss because
  *     the rail is a sibling of the scrolling column rather than a block
  *     inside it — but it is on this page, and every page-level test stubs it
  *     as `[TOKEN]`.

@@ -1,7 +1,7 @@
 /**
  * W7: the byte route — `GET /series/download?token=…`.
  *
- * design/2026-08-20-agent-wolf.md § W7 (agent-orange repo). Test names are
+ * design/2026-08-20-agent-wolf.md § W7 (agent-bob repo). Test names are
  * prefixed `mcp_` per the ticket. Nothing here reaches the network: every
  * connector is either injected or driven by a counting fake `fetch`.
  */

@@ -41,8 +41,8 @@ import { Router, type Request, type Response } from "express";
 import { WolfError } from "../errors.js";
 import type { Logger } from "../logger.js";
 import type { WolfConfig } from "../config.js";
-import type { OrangeClient } from "../orange/client.js";
-import type { UnixSec } from "../orange/types.js";
+import type { BobClient } from "../bob/client.js";
+import type { UnixSec } from "../bob/types.js";
 import { requireSignedIn } from "../auth/session.js";
 import { HYPOTHESIS_ID_PATTERN, sessionNameForHypothesis } from "../hypothesis/store.js";
 
@@ -50,7 +50,7 @@ import { HYPOTHESIS_ID_PATTERN, sessionNameForHypothesis } from "../hypothesis/s
 export interface EmbedTokenResponse {
   token: string;
   expires_at_sec: UnixSec;
-  /** `${ORANGE_PUBLIC_URL}/embed/session/hyp-<id>` — no fragment. */
+  /** `${BOB_PUBLIC_URL}/embed/session/hyp-<id>` — no fragment. */
   embed_url: string;
 }
 
@@ -72,7 +72,7 @@ export function embedUrlFor(publicUrl: string, id: string): string {
 }
 
 export interface CreateEmbedRouterOptions {
-  client: OrangeClient;
+  client: BobClient;
   config: WolfConfig;
   logger: Logger;
 }

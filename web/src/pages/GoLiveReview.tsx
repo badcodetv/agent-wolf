@@ -1,7 +1,7 @@
 /**
  * `/hypotheses/:id/golive` — the screen where a human approves a candidate
  * report template before go-live. UI design § 2, § 2b, § 5 and § 6b
- * (agent-orange repo, `design/2026-08-24-agent-wolf-ui.md`).
+ * (agent-bob repo, `design/2026-08-24-agent-wolf-ui.md`).
  *
  * ```
  * ┌─────────────────────────────────────────────────────────────┐

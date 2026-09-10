@@ -185,7 +185,7 @@ a false story about throttling.**
 ### The five recorded bodies
 
 ```sh
-UA='agent-wolf/0.1 (+https://github.com/binocarlos/badcode-agent-orange)'
+UA='agent-wolf/0.1 (+https://github.com/badcodetv/agent-bob)'
 P1=1766102400   # 2025-12-19T00:00:00Z
 P2=1767744000   # 2026-01-07T00:00:00Z
 D=api/src/marketdata/__fixtures__

@@ -54,18 +54,18 @@ describe("the two VITE_* build variables", () => {
   it("are the only two — no third VITE_ variable has crept in", () => {
     const text = readFileSync(ENV_MODULE, "utf8");
     const found = new Set(text.match(/VITE_[A-Z0-9_]+/g) ?? []);
-    expect([...found].sort()).toEqual(["VITE_GOOGLE_CLIENT_ID", "VITE_ORANGE_PUBLIC_URL"]);
+    expect([...found].sort()).toEqual(["VITE_GOOGLE_CLIENT_ID", "VITE_BOB_PUBLIC_URL"]);
   });
 
   it("are declared as build ARGs in web/Dockerfile's build stage, before yarn build", () => {
     const dockerfile = readFileSync(join(webRoot, "Dockerfile"), "utf8");
-    expect(dockerfile).toMatch(/^ARG VITE_ORANGE_PUBLIC_URL=/m);
+    expect(dockerfile).toMatch(/^ARG VITE_BOB_PUBLIC_URL=/m);
     expect(dockerfile).toMatch(/^ARG VITE_GOOGLE_CLIENT_ID=?/m);
     // An ARG alone is not visible to vite; only an ENV in the build stage is.
-    expect(dockerfile).toMatch(/^ENV VITE_ORANGE_PUBLIC_URL=/m);
+    expect(dockerfile).toMatch(/^ENV VITE_BOB_PUBLIC_URL=/m);
     expect(dockerfile).toMatch(/^ENV VITE_GOOGLE_CLIENT_ID=/m);
     const buildIndex = dockerfile.indexOf("RUN yarn build");
-    expect(buildIndex).toBeGreaterThan(dockerfile.indexOf("ENV VITE_ORANGE_PUBLIC_URL"));
+    expect(buildIndex).toBeGreaterThan(dockerfile.indexOf("ENV VITE_BOB_PUBLIC_URL"));
     expect(buildIndex).toBeGreaterThan(dockerfile.indexOf("ENV VITE_GOOGLE_CLIENT_ID"));
   });
 
@@ -73,13 +73,13 @@ describe("the two VITE_* build variables", () => {
     const compose = readFileSync(join(repoRoot, "docker-compose.yml"), "utf8");
     const webBlock = compose.slice(compose.indexOf("\n  wolf-web:"));
     expect(webBlock).toMatch(/\n {6}args:\n/);
-    expect(webBlock).toMatch(/VITE_ORANGE_PUBLIC_URL: \$\{VITE_ORANGE_PUBLIC_URL/);
+    expect(webBlock).toMatch(/VITE_BOB_PUBLIC_URL: \$\{VITE_BOB_PUBLIC_URL/);
     expect(webBlock).toMatch(/VITE_GOOGLE_CLIENT_ID: \$\{VITE_GOOGLE_CLIENT_ID/);
   });
 
   it("are documented in .env.example", () => {
     const example = readFileSync(join(repoRoot, ".env.example"), "utf8");
-    expect(example).toMatch(/^VITE_ORANGE_PUBLIC_URL=/m);
+    expect(example).toMatch(/^VITE_BOB_PUBLIC_URL=/m);
     expect(example).toMatch(/^VITE_GOOGLE_CLIENT_ID=/m);
   });
 });

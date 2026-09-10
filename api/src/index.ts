@@ -2,7 +2,7 @@ import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { createLogger } from "./logger.js";
 import { WolfError } from "./errors.js";
-import { createOrangeClient } from "./orange/client.js";
+import { createBobClient } from "./bob/client.js";
 import { createHypothesisStore } from "./hypothesis/store.js";
 import { createPoller } from "./hypothesis/poller.js";
 
@@ -96,7 +96,7 @@ function main(): void {
     // other tickets. The per-id transition mutex is shared at module scope in
     // store.ts precisely so those two stores still serialise state changes
     // against each other.
-    const client = createOrangeClient({
+    const client = createBobClient({
       baseUrl: config.orangeBaseUrl,
       apiKey: config.orangeApiKey,
       logger,

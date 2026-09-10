@@ -228,7 +228,7 @@ export function goLive(id: string): Promise<unknown> {
  * `GET /api/hypotheses/:id/embed-token` — `{ token, expires_at_sec, embed_url }`.
  *
  * ⚠️ `expires_at_sec` is unix **SECONDS**. Multiply before comparing with
- * `Date.now()`; see `components/OrangeChatFrame.tsx`.
+ * `Date.now()`; see `components/BobChatFrame.tsx`.
  */
 export function fetchEmbedToken(id: string): Promise<EmbedTokenResponse> {
   return getJson<EmbedTokenResponse>(`/api/hypotheses/${encodeURIComponent(id)}/embed-token`);

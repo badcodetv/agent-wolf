@@ -1,6 +1,6 @@
 /**
  * Channel P of the trust language — `design/2026-08-24-agent-wolf-ui.md` § 2
- * "Channel P — provenance. Always on. Never alarming." (agent-orange repo).
+ * "Channel P — provenance. Always on. Never alarming." (agent-bob repo).
  *
  * A **stable property** of the content: did Wolf's deterministic evaluator
  * compute this, or did a model in a container write it?

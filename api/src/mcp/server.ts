@@ -2,7 +2,7 @@
  * W7 — the `wolf` MCP server, over Streamable HTTP.
  *
  * design/2026-08-20-agent-wolf.md § "The MCP server name and its auth
- * header" (agent-orange repo):
+ * header" (agent-bob repo):
  *
  * Three tools: `series_search` and `series_fetch` (market data) and
  * `spec_validate` (the interviewer's schema check before it deposits a

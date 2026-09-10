@@ -20,7 +20,7 @@ import {
 // design/2026-08-20-agent-wolf.md, tickets W12 and W2b. Every test drives
 // bootstrapProject through undici's MockAgent (§ "Pinned technology
 // choices": no live network in any unit test) exactly the way
-// src/orange/client.test.ts drives createOrangeClient — bootstrapProject
+// src/orange/client.test.ts drives createBobClient — bootstrapProject
 // uses that same client internally for every read and write, including
 // `GET /agent/workers/{name}` via `client.getWorker` (W2b's twenty-third
 // route; the raw `fetch` workaround documented in earlier revisions of
@@ -38,7 +38,7 @@ function prompt(name: string): string {
   return readFileSync(join(repoRoot, "prompts", name), "utf8");
 }
 // W2b: the raw `fetch` this module used to make for GET /agent/workers/{name}
-// is gone — every Orange call now goes through OrangeClient.
+// is gone — every Orange call now goes through BobClient.
 describe("bootstrap-project.ts contains no raw fetch( call (W2b)", () => {
   it("its source has no fetch( call", () => {
     const src = readFileSync(join(here, "bootstrap-project.ts"), "utf8");
@@ -465,7 +465,7 @@ describe("prompt contract — the literals every other ticket depends on", () =>
     // every session by default; the ONLY thing that was missing was the
     // prompt telling the model to use it. The exact name matters: Orange's
     // reducer only looks for the question-card marker on a tool whose name
-    // contains `ask_user` (agent-orange web/src/agentEventReducer.ts:243).
+    // contains `ask_user` (agent-bob web/src/agentEventReducer.ts:243).
     expect(INTERVIEWER_PROMPT.includes("mcp__ui__ask_user")).toBe(true);
   });
 

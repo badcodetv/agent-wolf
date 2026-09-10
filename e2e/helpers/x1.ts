@@ -45,9 +45,9 @@ function run(
   });
 }
 
-export const ORANGE_BASE = process.env.X1_ORANGE_BASE ?? "http://localhost:8090";
+export const BOB_BASE = process.env.X1_BOB_BASE ?? "http://localhost:8090";
 export const WOLF_BASE = process.env.X1_WOLF_BASE ?? "http://localhost:8091";
-export const DIND = process.env.X1_DIND_CONTAINER ?? "agent-orange-dind-1";
+export const DIND = process.env.X1_DIND_CONTAINER ?? "agent-bob-dind-1";
 export const LOGIN_EMAIL = process.env.X1_LOGIN_EMAIL ?? "kai@badcode.dev";
 export const LOGIN_PASSWORD = process.env.X1_LOGIN_PASSWORD ?? "x1-dev-login";
 
@@ -88,7 +88,7 @@ if (API_KEY === "") {
 
 // ── Orange, with the project API key ────────────────────────────────────────
 
-export interface OrangeResponse<T> {
+export interface BobResponse<T> {
   status: number;
   body: T;
   text: string;
@@ -98,14 +98,14 @@ export async function orange<T = unknown>(
   method: string,
   path: string,
   body?: unknown,
-): Promise<OrangeResponse<T>> {
+): Promise<BobResponse<T>> {
   const headers: Record<string, string> = { "X-API-Key": API_KEY };
   let payload: string | undefined;
   if (body !== undefined) {
     headers["Content-Type"] = "application/json";
     payload = JSON.stringify(body);
   }
-  const res = await fetch(`${ORANGE_BASE}${path}`, { method, headers, body: payload });
+  const res = await fetch(`${BOB_BASE}${path}`, { method, headers, body: payload });
   const text = await res.text();
 
   // 🔴 `unauthorized` IS NEVER TRANSIENT — ABORT, DO NOT RETRY.
@@ -186,7 +186,7 @@ export async function datasetMeta(name: string): Promise<DatasetMeta | null> {
   return res.body;
 }
 
-export interface OrangeSession {
+export interface BobSession {
   id: string;
   name: string;
   worker: string;
@@ -201,7 +201,7 @@ export interface OrangeSession {
  * CALLING principal's own user_email (`go/httpapi/history.go:111-116`), and an
  * API key's synthetic email is not what the dispatcher stamps on a job session
  * — so a plain listing returns the `hyp-<id>` sessions and NONE of the per-tick
- * ones. Wolf's own client has always passed it (`api/src/orange/client.ts:698`).
+ * ones. Wolf's own client has always passed it (`api/src/bob/client.ts:698`).
  */
 /**
  * 🔴 A LISTING THAT CAME BACK FULL IS NOT A LISTING, IT IS A PAGE.
@@ -242,18 +242,18 @@ function assertNotTruncated(rows: unknown[], what: string): void {
   );
 }
 
-export async function sessions(worker?: string): Promise<OrangeSession[]> {
+export async function sessions(worker?: string): Promise<BobSession[]> {
   const q = new URLSearchParams({ user_email: "*", limit: String(LIST_LIMIT) });
   if (worker !== undefined) q.set("worker", worker);
-  const res = await orange<OrangeSession[]>("GET", `/agent/sessions?${q.toString()}`);
+  const res = await orange<BobSession[]>("GET", `/agent/sessions?${q.toString()}`);
   expect(res.status, `GET /agent/sessions → ${res.text.slice(0, 200)}`).toBe(200);
   const rows = Array.isArray(res.body) ? res.body : [];
   assertNotTruncated(rows, "/agent/sessions");
   return rows;
 }
 
-export async function sessionByName(name: string): Promise<OrangeSession | null> {
-  const res = await orange<OrangeSession>(
+export async function sessionByName(name: string): Promise<BobSession | null> {
+  const res = await orange<BobSession>(
     "GET",
     `/agent/sessions/by-name/${encodeURIComponent(name)}`,
   );
@@ -510,7 +510,7 @@ export async function createAndGoLive(
   // 3. The interview itself. One message; the mock rule matching
   //    `interviewMarker` answers it. The response is an SSE stream that ends
   //    when the turn does, so awaiting the body is awaiting the turn.
-  const chat = await fetch(`${ORANGE_BASE}/agent/session/${session.id}/message`, {
+  const chat = await fetch(`${BOB_BASE}/agent/session/${session.id}/message`, {
     method: "POST",
     headers: { "X-API-Key": API_KEY, "Content-Type": "application/json" },
     body: JSON.stringify({

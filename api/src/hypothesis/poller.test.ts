@@ -11,7 +11,7 @@ import {
 
 import { createLogger } from "../logger.js";
 import { loadConfig } from "../config.js";
-import { createOrangeClient, type OrangeClient } from "../orange/client.js";
+import { createBobClient, type BobClient } from "../bob/client.js";
 import {
   createHypothesisStore,
   evaluationLineWithoutTimestamp,
@@ -439,7 +439,7 @@ afterEach(async () => {
 
 interface Harness {
   stub: Stub;
-  client: OrangeClient;
+  client: BobClient;
   store: HypothesisStore;
   poller: Poller;
   /** Moves both the poller's clock and the stub's memory-stamping clock. */
@@ -450,7 +450,7 @@ function harness(config: StubConfig, pollIntervalSeconds = 300): Harness {
   const stub = new Stub(pool, config);
   stub.install();
   const logger = createLogger({ logLevel: "silent" });
-  const client = createOrangeClient({ baseUrl: ORANGE, apiKey: API_KEY, logger });
+  const client = createBobClient({ baseUrl: ORANGE, apiKey: API_KEY, logger });
   const store = createHypothesisStore({ client, logger });
   let clock = NOW_MS;
   const poller = createPoller({

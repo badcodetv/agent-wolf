@@ -61,9 +61,9 @@ describe("api/ import boundary", () => {
     expect(report.tsconfigPathsViolations).toEqual([]);
   });
 
-  it("never mentions agent-orange in any import specifier", async () => {
+  it("never mentions agent-bob in any import specifier", async () => {
     const report = await runCheck();
-    expect(report.agentOrangeMentionViolations).toEqual([]);
+    expect(report.agentBobMentionViolations).toEqual([]);
   });
 
   it("has no file:/link:/portal: dependency resolving outside the repo", async () => {

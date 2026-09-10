@@ -10,7 +10,7 @@
  * `docker-compose.yml` passes them through `build.args` on `wolf-web`, and
  * `.env.example` documents them. W13's Validation proves the chain
  * empirically rather than declaratively: it builds the image with
- * `--build-arg VITE_ORANGE_PUBLIC_URL=http://localhost:8090` and greps the
+ * `--build-arg VITE_BOB_PUBLIC_URL=http://localhost:8090` and greps the
  * served bundle for that literal, which no config dump can establish.
  *
  * Both are read INSIDE the functions, not at module load. Vite still replaces
@@ -21,7 +21,7 @@
 
 interface WolfImportMetaEnv {
   /** Orange's BROWSER-reachable origin — the base of the chat embed URL. */
-  readonly VITE_ORANGE_PUBLIC_URL?: string;
+  readonly VITE_BOB_PUBLIC_URL?: string;
   /** The Google Identity Services client id used by the sign-in page. */
   readonly VITE_GOOGLE_CLIENT_ID?: string;
   readonly MODE?: string;
@@ -32,11 +32,11 @@ function env(): WolfImportMetaEnv {
 }
 
 /**
- * The default Orange public origin: agent-orange's own compose stack
+ * The default Orange public origin: agent-bob's own compose stack
  * publishes its `web` service on 8080. Matches `api/src/config.ts`'s
  * `DEFAULT_ORANGE_PUBLIC_URL` and `web/Dockerfile`'s `ARG` default.
  *
- * ⚠️ It must be the same origin as the API's `ORANGE_PUBLIC_URL`, and it must
+ * ⚠️ It must be the same origin as the API's `BOB_PUBLIC_URL`, and it must
  * appear in the `wolf` project's `allowed_origins` in Orange's project map —
  * the embed page's `frame-ancestors` CSP is built from that list, so an
  * origin missing there means the browser blocks the chat rail outright, with
@@ -59,7 +59,7 @@ function trimTrailingSlashes(value: string): string {
  * same reason.
  */
 export function orangePublicUrl(): string {
-  const raw = env().VITE_ORANGE_PUBLIC_URL;
+  const raw = env().VITE_BOB_PUBLIC_URL;
   const trimmed = typeof raw === "string" ? raw.trim() : "";
   return trimTrailingSlashes(trimmed === "" ? DEFAULT_ORANGE_PUBLIC_URL : trimmed);
 }

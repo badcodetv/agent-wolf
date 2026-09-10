@@ -4,7 +4,7 @@
 # service in docker-compose.yml. Default matches .env.example (8100) if
 # unset. wolf-api shares dind's netns (see docker-compose.yml comments), so
 # "dind" is the only compose-DNS name that reaches it — matches
-# deploy/web.nginx.conf's `proxy_pass http://dind:8099` in the agent-orange
+# deploy/web.nginx.conf's `proxy_pass http://dind:8099` in the agent-bob
 # repo, same indirection, different target.
 server {
     listen 80;

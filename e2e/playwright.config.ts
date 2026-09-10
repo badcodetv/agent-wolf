@@ -20,7 +20,7 @@ export default defineConfig({
   testMatch: ["features/*.spec.ts"],
   timeout: 10 * 60_000,
   expect: { timeout: 30_000 },
-  // Parallel across FILES, serial within one — the same pairing agent-orange's
+  // Parallel across FILES, serial within one — the same pairing agent-bob's
   // stack rig uses. Each spec file owns its own hypothesis (its own session,
   // worker, schedule and datasets), so the files share nothing but the host
   // port pool and DinD. `fullyParallel: true` would break the `serial`

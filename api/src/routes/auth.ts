@@ -41,7 +41,7 @@ import { z } from "zod";
 import type { WolfConfig } from "../config.js";
 import { WolfError } from "../errors.js";
 import type { Logger } from "../logger.js";
-import type { OrangeClient } from "../orange/client.js";
+import type { BobClient } from "../bob/client.js";
 import {
   clearSessionCookie,
   isAllowed,
@@ -52,7 +52,7 @@ import {
 } from "../auth/session.js";
 
 export interface CreateAuthRouterOptions {
-  client: OrangeClient;
+  client: BobClient;
   config: WolfConfig;
   logger: Logger;
   /** Injectable clock, so a test can prove the cookie's issue time. */

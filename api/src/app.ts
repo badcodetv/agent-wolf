@@ -6,7 +6,7 @@ import { WolfError } from "./errors.js";
 import { createWolfMcp, originFromMcpUrl } from "./mcp/server.js";
 import { createMarketDataAccess } from "./mcp/tools.js";
 import { assertSessionConfigured } from "./auth/session.js";
-import { createOrangeClient } from "./orange/client.js";
+import { createBobClient } from "./bob/client.js";
 import { createHypothesisStore } from "./hypothesis/store.js";
 import { createAuthRouter } from "./routes/auth.js";
 import { createHypothesesRouter } from "./routes/hypotheses.js";
@@ -192,7 +192,7 @@ export function createApp(logger: Logger, config: WolfConfig): Express {
   // process, so a second store built elsewhere would silently stop serialising
   // transitions". That was true when W8 wrote it and W10 falsified it; the
   // stale text was still here two waves later. R164.)*
-  const client = createOrangeClient({
+  const client = createBobClient({
     baseUrl: config.orangeBaseUrl,
     apiKey: config.orangeApiKey,
     logger,

@@ -59,8 +59,8 @@ import { z } from "zod";
 import { WolfError } from "../errors.js";
 import type { Logger } from "../logger.js";
 import type { WolfConfig } from "../config.js";
-import type { OrangeClient } from "../orange/client.js";
-import type { MemoryRecord, MemorySearchResultRow } from "../orange/types.js";
+import type { BobClient } from "../bob/client.js";
+import type { MemoryRecord, MemorySearchResultRow } from "../bob/types.js";
 import { requireSignedIn, signedInUser } from "../auth/session.js";
 import type { Point } from "../hypothesis/evaluate.js";
 import { parseCanonicalCsvBytes } from "../hypothesis/points.js";
@@ -450,7 +450,7 @@ function frameCacheKey(
 
 export interface CreateReportRouterOptions {
   store: HypothesisStore;
-  client: OrangeClient;
+  client: BobClient;
   config: WolfConfig;
   logger: Logger;
   /** Both caches' size cap; injectable so the eviction path is testable. */

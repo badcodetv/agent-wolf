@@ -2,7 +2,7 @@
  * The canonical dataset CSV — the single normaliser every market-data
  * connector's output goes through before `dataset_put` is called.
  *
- * See design/2026-08-20-agent-wolf.md § "The canonical dataset CSV" (agent-orange
+ * See design/2026-08-20-agent-wolf.md § "The canonical dataset CSV" (agent-bob
  * repo): header exactly `timestamp,value`, RFC3339 in UTC, ascending by
  * timestamp, LF line endings, one metric per file, a single terminating LF
  * after the last data row and NO blank line after it.
@@ -69,7 +69,7 @@ export function normalise(rows: RawMarketDataRow[]): string {
  * `row_count` / `rows`: `max(0, N-1)` where `N` counts a `\n`-terminated run
  * plus a final unterminated run when the last byte is not `\n` — exactly
  * O6a's `RowCount` for `text/csv` (design/2026-08-20-agent-wolf.md, O6a
- * ticket, agent-orange repo). So `"h\na\nb"` and `"h\na\nb\n"` both give 1
+ * ticket, agent-bob repo). So `"h\na\nb"` and `"h\na\nb\n"` both give 1
  * data row's worth over a 2-line body (2 runs → max(0,2-1)=1), `"h\n"`
  * gives 0, and empty gives 0. Never negative.
  *

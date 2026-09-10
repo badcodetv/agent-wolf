@@ -17,7 +17,7 @@ import {
 import { createErrorHandler } from "../app.js";
 import { loadConfig, type WolfConfig } from "../config.js";
 import type { Logger } from "../logger.js";
-import { createOrangeClient } from "../orange/client.js";
+import { createBobClient } from "../bob/client.js";
 import { setSessionCookie } from "../auth/session.js";
 import { MS_PER_DAY } from "../hypothesis/evaluate.js";
 import { createSeriesRouter, seriesState } from "./series.js";
@@ -204,7 +204,7 @@ function config(): WolfConfig {
       WOLF_SESSION_SECRET: SECRET,
       WOLF_ALLOWED_EMAILS: OWNER,
       WOLF_API_KEY: API_KEY,
-      ORANGE_BASE_URL: ORANGE,
+      BOB_BASE_URL: ORANGE,
       NODE_ENV: "test",
     },
     { readRouteTable: () => undefined },
@@ -234,7 +234,7 @@ async function harness(stubConfig: StubConfig = {}, nowMs = NOW_MS): Promise<Har
   stub.install();
   const cfg = config();
   const { logger, lines } = capturingLogger();
-  const client = createOrangeClient({ baseUrl: cfg.orangeBaseUrl, apiKey: cfg.orangeApiKey, logger });
+  const client = createBobClient({ baseUrl: cfg.orangeBaseUrl, apiKey: cfg.orangeApiKey, logger });
 
   const app = express();
   app.use(express.json());

@@ -1,6 +1,6 @@
 /**
  * Channel S of the trust language — `design/2026-08-24-agent-wolf-ui.md` § 2
- * "Channel S — severity. Mostly absent. Escalates." (agent-orange repo).
+ * "Channel S — severity. Mostly absent. Escalates." (agent-bob repo).
  *
  * A **changing state**: how much should you trust this *right now*?
  *

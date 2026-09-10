@@ -1,7 +1,7 @@
 /**
- * The rail — UI design § 5 "The rail" (agent-orange repo).
+ * The rail — UI design § 5 "The rail" (agent-bob repo).
  *
- * The rail is the CONTAINER; `OrangeChatFrame` is what fills it. Splitting
+ * The rail is the CONTAINER; `BobChatFrame` is what fills it. Splitting
  * them is the point: the frame then has a known height (`100%` of a rail whose
  * height is the viewport's) without anyone measuring a cross-origin document,
  * which is not possible from outside it.
@@ -28,7 +28,7 @@ import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import useMediaQuery from "@mui/material/useMediaQuery";
 import { useTheme } from "@mui/material/styles";
-import OrangeChatFrame from "./OrangeChatFrame.js";
+import BobChatFrame from "./BobChatFrame.js";
 
 /**
  * § 5 pinned `clamp(340px, 28vw, 460px)`. WIDENED 2026-09-07 after measuring
@@ -97,7 +97,7 @@ export default function ChatRail({ hypothesisId, heading = "Conversation" }: Cha
         {header}
         {open ? (
           <Box sx={{ height: "70vh" }}>
-            <OrangeChatFrame hypothesisId={hypothesisId} />
+            <BobChatFrame hypothesisId={hypothesisId} />
           </Box>
         ) : null}
       </Box>
@@ -153,7 +153,7 @@ export default function ChatRail({ hypothesisId, heading = "Conversation" }: Cha
         // `flex: 1` gives the frame the rest of the rail. The frame itself
         // carries `height: 100%` and no pixel height at all.
         <Box sx={{ flex: 1, minHeight: 0 }}>
-          <OrangeChatFrame hypothesisId={hypothesisId} />
+          <BobChatFrame hypothesisId={hypothesisId} />
         </Box>
       ) : null}
     </Box>

@@ -19,7 +19,7 @@ import {
   datasetMeta,
   METRIC_SLUG,
   orange,
-  ORANGE_BASE,
+  BOB_BASE,
   retire,
   signIn,
   waitForTick,
@@ -61,7 +61,7 @@ test.describe("dataset round trip", () => {
 
   test("the stored bytes are the canonical dataset CSV, exactly", async () => {
     const res = await fetch(
-      `${ORANGE_BASE}/agent/datasets/${encodeURIComponent(hyp.datasetName)}/download`,
+      `${BOB_BASE}/agent/datasets/${encodeURIComponent(hyp.datasetName)}/download`,
       { headers: { "X-API-Key": process.env.WOLF_API_KEY ?? "" } },
     );
     expect(res.status).toBe(200);

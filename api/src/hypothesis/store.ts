@@ -5,7 +5,7 @@
  * This file owns the trust primitives the rest of the product is graded
  * against — `TRUSTED_KINDS`, `isTrusted`, the session index, the retraction
  * rule and the `Tamper` shape. design/2026-08-20-agent-wolf.md § "The trust
- * model" (agent-orange repo) is the authority; the short version is:
+ * model" (agent-bob repo) is the authority; the short version is:
  *
  *   Orange's memory is a genuine shared bus. It is project-scoped and
  *   append-only, there is no per-worker permission and no origin check, and
@@ -71,13 +71,13 @@ import type {
   SessionListRow,
   UnixMs,
   UnixSec,
-} from "../orange/types.js";
-import type { ListMemoriesParams, ListSessionsParams, OrangeClient } from "../orange/client.js";
+} from "../bob/types.js";
+import type { ListMemoriesParams, ListSessionsParams, BobClient } from "../bob/client.js";
 // The ONE sanctioned plain-number -> UnixMs conversion. W4's `EvaluationResult`
 // types its own timestamps with a plain `number` alias, so every value that
 // crosses from an evaluation into this module's branded `UnixMs` goes through
 // here rather than through a cast.
-import { toMs } from "../orange/types.js";
+import { toMs } from "../bob/types.js";
 import type { EvaluationResult, Reason } from "./evaluate.js";
 import {
   KeyedMutex,
@@ -1321,7 +1321,7 @@ export interface HypothesisStore {
 }
 
 export interface CreateHypothesisStoreOptions {
-  client: OrangeClient;
+  client: BobClient;
   logger?: Logger;
 }
 

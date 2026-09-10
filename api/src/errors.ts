@@ -2,7 +2,7 @@
  * Shared error taxonomy for Agent Wolf. Every route handler, client and
  * background job throws (or returns) a `WolfError`, never a bare `Error`.
  *
- * See design/2026-08-20-agent-wolf.md § "Shared error taxonomy" (agent-orange
+ * See design/2026-08-20-agent-wolf.md § "Shared error taxonomy" (agent-bob
  * repo) — this file is the canonical implementation named there; do not
  * invent a second taxonomy elsewhere in this codebase.
  */

@@ -20,7 +20,7 @@ export default defineConfig({
     setupFiles: ["./src/setupTests.ts"],
     server: {
       deps: {
-        // Load-bearing, not tidiness (W28 criterion; agent-orange R125).
+        // Load-bearing, not tidiness (W28 criterion; agent-bob R125).
         // @agentkit/chat-ui ships ESM that imports @mui/icons-material,
         // whose own ESM build does a *directory* import
         // (".../@mui/material/utils"). Vite externalises node_modules for

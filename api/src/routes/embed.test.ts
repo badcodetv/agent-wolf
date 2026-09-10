@@ -16,7 +16,7 @@ import {
 import { createErrorHandler } from "../app.js";
 import { loadConfig, type WolfConfig } from "../config.js";
 import type { Logger } from "../logger.js";
-import { createOrangeClient } from "../orange/client.js";
+import { createBobClient } from "../bob/client.js";
 import { setSessionCookie } from "../auth/session.js";
 import { createEmbedRouter, embedUrlFor } from "./embed.js";
 
@@ -140,8 +140,8 @@ function config(overrides: Record<string, string> = {}): WolfConfig {
       WOLF_SESSION_SECRET: SECRET,
       WOLF_ALLOWED_EMAILS: OWNER,
       WOLF_API_KEY: API_KEY,
-      ORANGE_BASE_URL: ORANGE,
-      ORANGE_PUBLIC_URL: PUBLIC,
+      BOB_BASE_URL: ORANGE,
+      BOB_PUBLIC_URL: PUBLIC,
       NODE_ENV: "test",
       ...overrides,
     },
@@ -175,7 +175,7 @@ async function harness(stubConfig: StubConfig = {}, cfg: WolfConfig = config()):
   const stub = new Stub(pool, stubConfig);
   stub.install();
   const { logger, lines } = capturingLogger();
-  const client = createOrangeClient({ baseUrl: cfg.orangeBaseUrl, apiKey: cfg.orangeApiKey, logger });
+  const client = createBobClient({ baseUrl: cfg.orangeBaseUrl, apiKey: cfg.orangeApiKey, logger });
 
   const app = express();
   app.use(express.json());
@@ -264,17 +264,17 @@ describe("embed_token", () => {
     expect(res.json.expires_at_sec).toBeLessThan(1e11);
   });
 
-  it("embed_token: embed_url is the BROWSER-reachable Orange origin, never ORANGE_BASE_URL", async () => {
+  it("embed_token: embed_url is the BROWSER-reachable Orange origin, never BOB_BASE_URL", async () => {
     const h = await harness();
     const res = await get(h, `/api/hypotheses/${ID}/embed-token`);
 
     expect(res.json.embed_url).toBe(`${PUBLIC}/embed/session/hyp-${ID}`);
-    // ORANGE_BASE_URL is agentd inside DinD's netns; a browser cannot reach it.
+    // BOB_BASE_URL is agentd inside DinD's netns; a browser cannot reach it.
     expect(res.json.embed_url).not.toContain(ORANGE);
   });
 
-  it("embed_token: ORANGE_PUBLIC_URL's trailing slash never doubles in embed_url", async () => {
-    const h = await harness({}, config({ ORANGE_PUBLIC_URL: `${PUBLIC}/` }));
+  it("embed_token: BOB_PUBLIC_URL's trailing slash never doubles in embed_url", async () => {
+    const h = await harness({}, config({ BOB_PUBLIC_URL: `${PUBLIC}/` }));
     const res = await get(h, `/api/hypotheses/${ID}/embed-token`);
 
     expect(res.json.embed_url).toBe(`${PUBLIC}/embed/session/hyp-${ID}`);

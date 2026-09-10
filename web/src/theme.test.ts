@@ -1,6 +1,6 @@
 /**
  * W28 — the theme is `design/2026-08-24-agent-wolf-ui.md` § 2b in code
- * (agent-orange repo), so these tests are § 2b read back out of the built
+ * (agent-bob repo), so these tests are § 2b read back out of the built
  * theme object. They are deliberately literal: § 2b is the specification four
  * later tickets consume, and a palette that silently drifts from it is exactly
  * the failure W28 exists to prevent.

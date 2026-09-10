@@ -1,15 +1,15 @@
-# X1 — the ONLY file this ticket adds to Agent Orange's compose invocation.
+# X1 — the ONLY file this ticket adds to Agent Bob's compose invocation.
 #
-# It is passed to agent-orange's `docker compose` with a second `-f`, so the
+# It is passed to agent-bob's `docker compose` with a second `-f`, so the
 # mock model script reaches agentd WITHOUT editing a single file in the
-# agent-orange repository (X1's Files line: "No file in agent-orange is edited
+# agent-bob repository (X1's Files line: "No file in agent-bob is edited
 # by this ticket").
 #
 # ⚠️ The bind-mount source is an ABSOLUTE path supplied in ${X1_MOCK_SCRIPT}.
 # Relative paths inside a compose file resolve against the PROJECT directory —
-# which is agent-orange's, because agent-orange's docker-compose.yml is the
+# which is agent-bob's, because agent-bob's docker-compose.yml is the
 # first `-f`. A literal `./e2e/mock/script.json` here would silently resolve to
-# <agent-orange>/e2e/mock/script.json, a path that exists in that repo and
+# <agent-bob>/e2e/mock/script.json, a path that exists in that repo and
 # holds something else entirely. run.sh exports the absolute path.
 #
 # agentd reads the table ONCE, at boot (go/cmd/agentd/modelproxy.go:107-108 →

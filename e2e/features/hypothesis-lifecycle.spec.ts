@@ -299,7 +299,7 @@ test.describe("hypothesis lifecycle", () => {
     // would block this document outright — which reads as a broken UI rather
     // than as a config error. Asserting the frame has a real document body is
     // what tells the two apart.
-    const chatFrame = page.getByTestId("orange-chat-frame");
+    const chatFrame = page.getByTestId("bob-chat-frame");
     await expect(chatFrame).toBeVisible();
     const frame = await chatFrame.elementHandle().then((h) => h?.contentFrame());
     expect(frame, "the embed iframe has no content document — frame-ancestors blocked it").toBeTruthy();

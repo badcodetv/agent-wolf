@@ -14,7 +14,7 @@ import { WolfError } from "./errors.js";
  * choices" and the per-ticket Files lists for what each one adds.
  *
  * `.env.example` also documents topology-only variables
- * (`ORANGE_DIND_CONTAINER`, `WOLF_WEB_PORT`) that this file does NOT read —
+ * (`BOB_DIND_CONTAINER`, `WOLF_WEB_PORT`) that this file does NOT read —
  * they configure docker-compose / nginx, not this process. `WOLF_MCP_URL`
  * IS read here (see § "DinD gateway discovery" below), even though
  * `.env.example` also documents it as a Docker-facing variable: it is both.
@@ -163,7 +163,7 @@ export interface WolfConfig {
    * drain after its schedule is deleted, before proceeding anyway and
    * logging the delivery ids it left behind. A whole count of SECONDS. */
   teardownDrainSeconds: number;
-  /** `ORANGE_BASE_URL` (default `http://localhost:8099`): where Orange's
+  /** `BOB_BASE_URL` (default `http://localhost:8099`): where Orange's
    * agentd answers. In the compose stack wolf-api shares DinD's network
    * namespace, so agentd is on `localhost:8099` — which is why that is the
    * default rather than a compose service name. Pinned here (R92) because
@@ -172,7 +172,7 @@ export interface WolfConfig {
    * A later ticket moves that reader onto this field; W12's bootstrap is
    * deliberately NOT edited here. */
   orangeBaseUrl: string;
-  /** `ORANGE_PUBLIC_URL` (default `http://localhost:8080`): the
+  /** `BOB_PUBLIC_URL` (default `http://localhost:8080`): the
    * BROWSER-reachable Orange origin, and the base of the `embed_url` W11's
    * embed-token route hands the UI.
    *
@@ -181,7 +181,7 @@ export interface WolfConfig {
    * inside DinD's network namespace), which no browser can reach, and the
    * embed page is not served by agentd at all — nginx serves
    * `/embed/session/{name}` from the `web` service
-   * (agent-orange `deploy/web.nginx.conf:19`), which is the only container
+   * (agent-bob `deploy/web.nginx.conf:19`), which is the only container
    * publishing a host port. Trailing slashes are trimmed at parse time so
    * `${orangePublicUrl}/embed/session/hyp-<id>` never doubles a slash.
    *
@@ -279,11 +279,11 @@ export const DEFAULT_WOLF_REPORT_MAX_BYTES = 512_000;
 /** Default per-metric point cap for the report frame's series payload (W16/W18): 5000. */
 export const DEFAULT_WOLF_SERIES_MAX_POINTS = 5000;
 
-/** Default `ORANGE_BASE_URL` (R92): agentd, seen from inside DinD's netns. */
+/** Default `BOB_BASE_URL` (R92): agentd, seen from inside DinD's netns. */
 export const DEFAULT_ORANGE_BASE_URL = "http://localhost:8099";
 
 /**
- * Default `ORANGE_PUBLIC_URL` (W11): the agent-orange stack's `web` service as
+ * Default `BOB_PUBLIC_URL` (W11): the agent-bob stack's `web` service as
  * a BROWSER sees it. 8080 is the port that stack publishes and the origin its
  * own README tells an operator to open — it is emphatically not 8099, which is
  * agentd inside DinD's netns and unreachable from a browser.
@@ -679,12 +679,12 @@ export function loadConfig(
     );
   }
 
-  const orangeBaseUrl = present(env.ORANGE_BASE_URL)?.trim() ?? DEFAULT_ORANGE_BASE_URL;
+  const orangeBaseUrl = present(env.BOB_BASE_URL)?.trim() ?? DEFAULT_ORANGE_BASE_URL;
   if (!/^https?:\/\/[^\s]+$/.test(orangeBaseUrl)) {
     throw WolfError.misconfigured(
-      "ORANGE_BASE_URL",
-      "ORANGE_BASE_URL must be an absolute http(s) URL (e.g. http://localhost:8099), got " +
-        JSON.stringify(env.ORANGE_BASE_URL),
+      "BOB_BASE_URL",
+      "BOB_BASE_URL must be an absolute http(s) URL (e.g. http://localhost:8099), got " +
+        JSON.stringify(env.BOB_BASE_URL),
     );
   }
 
@@ -693,14 +693,14 @@ export function loadConfig(
   // build `embed_url` as a bare `/embed/session/hyp-…`, a same-origin path
   // that resolves against WOLF's own origin and 404s in the iframe.
   // Trailing slashes are trimmed HERE, once, so no caller has to.
-  const orangePublicUrl = (present(env.ORANGE_PUBLIC_URL)?.trim() ?? DEFAULT_ORANGE_PUBLIC_URL)
+  const orangePublicUrl = (present(env.BOB_PUBLIC_URL)?.trim() ?? DEFAULT_ORANGE_PUBLIC_URL)
     .replace(/\/+$/, "");
   if (!/^https?:\/\/[^\s]+$/.test(orangePublicUrl)) {
     throw WolfError.misconfigured(
-      "ORANGE_PUBLIC_URL",
-      "ORANGE_PUBLIC_URL must be an absolute http(s) URL the BROWSER can reach " +
+      "BOB_PUBLIC_URL",
+      "BOB_PUBLIC_URL must be an absolute http(s) URL the BROWSER can reach " +
         "(e.g. http://localhost:8080), got " +
-        JSON.stringify(env.ORANGE_PUBLIC_URL),
+        JSON.stringify(env.BOB_PUBLIC_URL),
     );
   }
 

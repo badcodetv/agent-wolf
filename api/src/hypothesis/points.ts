@@ -1,7 +1,7 @@
 /**
  * The ONE canonical-dataset-CSV parser in the tree.
  *
- * design/2026-08-20-agent-wolf.md § "The canonical dataset CSV" (agent-orange
+ * design/2026-08-20-agent-wolf.md § "The canonical dataset CSV" (agent-bob
  * repo) pins the format, and W10's scope pins the reason there is exactly one
  * parser: two tickets read dataset bytes (this poller and W11's series proxy),
  * and a second copy is how the two silently disagree about what a legitimate

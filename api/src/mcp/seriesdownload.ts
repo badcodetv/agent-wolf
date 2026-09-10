@@ -2,7 +2,7 @@
  * W7 — the byte route the `series_fetch` tool points at:
  * `GET /series/download?token=<t>`.
  *
- * design/2026-08-20-agent-wolf.md § W7 (agent-orange repo):
+ * design/2026-08-20-agent-wolf.md § W7 (agent-bob repo):
  *
  *   "W7 owns the byte route … mounted on wolf-api OUTSIDE the /api prefix
  *   and outside the session-cookie auth W8 installs — a session container

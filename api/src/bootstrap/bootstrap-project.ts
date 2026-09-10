@@ -16,7 +16,7 @@
  * datasets) are W9's, at go-live, and never appear here.
  *
  * **Idempotency.** Project settings, worker and schedule state are all read
- * back through `OrangeClient` before any write — `getProjectSettings`,
+ * back through `BobClient` before any write — `getProjectSettings`,
  * `getWorker`, `listSchedules` — exactly as the ticket's Depends-on note
  * requires. Worker reads used to be the one exception: W2's route list was
  * exhaustive and closed at 22 routes and had no `GET /agent/workers/{name}`
@@ -24,7 +24,7 @@
  * serves that route (`go/httpapi/workers.go:77`). This module worked around
  * it with a narrowly-scoped raw `fetch`. W2b (owner ruling R91) added
  * `client.getWorker(name)` as the client's twenty-third route — the raw
- * fetch is gone and this module now goes through `OrangeClient` exclusively,
+ * fetch is gone and this module now goes through `BobClient` exclusively,
  * with a 404 from `getWorker` (kind `not_found`) read as "does not exist
  * yet".
  */
@@ -34,8 +34,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createLogger, type Logger } from "../logger.js";
 import { WolfError } from "../errors.js";
-import { createOrangeClient, type OrangeClient } from "../orange/client.js";
-import type { ProjectSettings, PutProjectSettingsParams } from "../orange/types.js";
+import { createBobClient, type BobClient } from "../bob/client.js";
+import type { ProjectSettings, PutProjectSettingsParams } from "../bob/types.js";
 import { loadConfig } from "../config.js";
 
 export const WOLF_MCP_HEADER_NAME = "X-Wolf-Mcp-Token";
@@ -70,8 +70,8 @@ export interface BootstrapProjectOptions {
   /** `prompts/critic.md`, read verbatim. */
   criticPrompt: string;
   logger?: Logger;
-  /** Injectable so a test can assert `client.ts` is what performs every read and write, without constructing its own. Defaults to `createOrangeClient({ baseUrl, apiKey })`. */
-  client?: OrangeClient;
+  /** Injectable so a test can assert `client.ts` is what performs every read and write, without constructing its own. Defaults to `createBobClient({ baseUrl, apiKey })`. */
+  client?: BobClient;
 }
 
 /**
@@ -82,7 +82,7 @@ export interface BootstrapProjectOptions {
  * no basis for treating a live upstream failure as "worker absent".
  */
 async function readWorker(
-  client: OrangeClient,
+  client: BobClient,
   name: string,
 ): Promise<{ systemPrompt: string; enabled: boolean } | undefined> {
   try {
@@ -123,7 +123,7 @@ function desiredMcpConfig(wolfMcpUrl: string): Record<string, unknown> {
  * would silently clear `system_prompt` and every other setting.
  */
 async function ensureProjectSettings(
-  client: OrangeClient,
+  client: BobClient,
   wolfBaseImage: string,
   mcpConfig: Record<string, unknown>,
 ): Promise<"unchanged" | "updated"> {
@@ -170,7 +170,7 @@ async function ensureProjectSettings(
 }
 
 async function ensureWorker(
-  client: OrangeClient,
+  client: BobClient,
   name: string,
   systemPrompt: string,
 ): Promise<WriteOutcome> {
@@ -187,7 +187,7 @@ async function ensureWorker(
 }
 
 async function ensureCriticSchedule(
-  client: OrangeClient,
+  client: BobClient,
   criticCron: string,
 ): Promise<"unchanged" | "created"> {
   const schedules = await client.listSchedules();
@@ -210,7 +210,7 @@ async function ensureCriticSchedule(
 export async function bootstrapProject(
   options: BootstrapProjectOptions,
 ): Promise<BootstrapProjectResult> {
-  const client = options.client ?? createOrangeClient({ baseUrl: options.baseUrl, apiKey: options.apiKey });
+  const client = options.client ?? createBobClient({ baseUrl: options.baseUrl, apiKey: options.apiKey });
   const logger = options.logger;
 
   const mcpConfig = desiredMcpConfig(options.wolfMcpUrl);
@@ -237,7 +237,7 @@ export async function bootstrapProject(
 // that touches process.env and the filesystem, so scripts/bootstrap-project.ts
 // can stay a two-line wrapper.
 //
-// `ORANGE_BASE_URL` and `WOLF_API_KEY` are read directly from process.env
+// `BOB_BASE_URL` and `WOLF_API_KEY` are read directly from process.env
 // here, NOT through api/src/config.ts's `WolfConfig`. This ticket's Files
 // line restricts config.ts to two variables (`WOLF_BASE_IMAGE`,
 // `WOLF_CRITIC_CRON`) — the file-ownership table serialises config.ts
@@ -257,7 +257,7 @@ function readPromptFile(relativePathFromRepoRoot: string): string {
 }
 
 /**
- * Reads `WOLF_API_KEY`, `ORANGE_BASE_URL` and (via `loadConfig()`)
+ * Reads `WOLF_API_KEY`, `BOB_BASE_URL` and (via `loadConfig()`)
  * `WOLF_MCP_URL`/`WOLF_BASE_IMAGE`/`WOLF_CRITIC_CRON` from `process.env`,
  * the four prompt files from disk, and runs `bootstrapProject`. This is
  * what `scripts/bootstrap-project.ts` calls; it is not itself unit-tested
@@ -274,7 +274,7 @@ export async function runBootstrapFromEnv(): Promise<BootstrapProjectResult> {
         "(the same project API key wolf-api itself uses to call Orange)",
     );
   }
-  const baseUrl = process.env.ORANGE_BASE_URL?.trim() || DEFAULT_ORANGE_BASE_URL;
+  const baseUrl = process.env.BOB_BASE_URL?.trim() || DEFAULT_ORANGE_BASE_URL;
 
   const config = loadConfig();
   const logger = createLogger(config);

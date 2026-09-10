@@ -1,6 +1,6 @@
 /**
  * Grouping and sorting for the attention queue —
- * `design/2026-08-24-agent-wolf-ui.md` § 4 (agent-orange repo).
+ * `design/2026-08-24-agent-wolf-ui.md` § 4 (agent-bob repo).
  *
  * 🔴 **This module does NOT decide which tier a row belongs to.** The tier is
  * `attention_tier`, computed SERVER-SIDE by W27 from § 4's membership table.

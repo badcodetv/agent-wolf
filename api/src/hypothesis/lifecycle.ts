@@ -2,7 +2,7 @@
  * The hypothesis state machine, and the per-id serialisation that makes it
  * mean anything.
  *
- * design/2026-08-20-agent-wolf.md § "Hypothesis lifecycle" (agent-orange repo)
+ * design/2026-08-20-agent-wolf.md § "Hypothesis lifecycle" (agent-bob repo)
  * is the authority for every constant in this file. Its table of legal
  * transitions is transcribed below edge for edge, including the one edge that
  * exists only because of owner decision B3 — `challenged → live`, without which

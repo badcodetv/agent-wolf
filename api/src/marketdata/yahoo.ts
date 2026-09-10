@@ -99,7 +99,7 @@ export const DEFAULT_TIMEOUT_MS = 10_000;
  * `createYahooClient` refuses an empty one rather than making every call
  * fail with a rate-limit error that has nothing to do with rate limits.
  */
-export const DEFAULT_USER_AGENT = "agent-wolf/0.1 (+https://github.com/binocarlos/badcode-agent-orange)";
+export const DEFAULT_USER_AGENT = "agent-wolf/0.1 (+https://github.com/badcodetv/agent-bob)";
 
 /** How many search hits to ask for. Yahoo's own default is larger and noisier. */
 export const DEFAULT_QUOTES_COUNT = 10;

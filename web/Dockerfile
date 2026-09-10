@@ -39,14 +39,14 @@ COPY tsconfig.base.json ./tsconfig.base.json
 # ARG alone is not enough — vite reads the ENVIRONMENT, not the build args —
 # so each ARG is promoted to an ENV, and both sit BEFORE `yarn build`.
 #
-# ⚠️ VITE_ORANGE_PUBLIC_URL must be the same origin as wolf-api's
-# ORANGE_PUBLIC_URL, and it must appear in the `wolf` project's
+# ⚠️ VITE_BOB_PUBLIC_URL must be the same origin as wolf-api's
+# BOB_PUBLIC_URL, and it must appear in the `wolf` project's
 # `allowed_origins` in Orange's project map: the embed page's
 # `frame-ancestors` CSP is built from that list, so a mismatch means the
 # browser blocks the chat rail outright with no error on the Wolf side.
-ARG VITE_ORANGE_PUBLIC_URL=http://localhost:8080
+ARG VITE_BOB_PUBLIC_URL=http://localhost:8080
 ARG VITE_GOOGLE_CLIENT_ID=
-ENV VITE_ORANGE_PUBLIC_URL=$VITE_ORANGE_PUBLIC_URL
+ENV VITE_BOB_PUBLIC_URL=$VITE_BOB_PUBLIC_URL
 ENV VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID
 
 WORKDIR /src/web

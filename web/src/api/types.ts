@@ -245,7 +245,7 @@ export interface ReportBlock {
 export interface EmbedTokenResponse {
   token: string;
   expires_at_sec: UnixSec;
-  /** `${ORANGE_PUBLIC_URL}/embed/session/hyp-<id>` — no fragment, and NOT what the rail uses (see `OrangeChatFrame`). */
+  /** `${BOB_PUBLIC_URL}/embed/session/hyp-<id>` — no fragment, and NOT what the rail uses (see `BobChatFrame`). */
   embed_url: string;
 }
 

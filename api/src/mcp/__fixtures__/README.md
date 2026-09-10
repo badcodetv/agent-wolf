@@ -8,7 +8,7 @@ local stack (session `143b02e97a93…`, hypothesis `4f40b1f7`), pulled
 straight out of Postgres:
 
 ```sh
-docker exec agent-orange-postgres-1 psql -U agentorange -d agentorange -tAc \
+docker exec agent-bob-postgres-1 psql -U agentbob -d agentbob -tAc \
   "select content from memories where id='39e4357b-b931-48c0-be85-f9bce4e6b633';" \
   > api/src/mcp/__fixtures__/spec-candidate-thirteen-errors.txt
 ```

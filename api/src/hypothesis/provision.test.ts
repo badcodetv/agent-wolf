@@ -11,8 +11,8 @@ import {
 
 import { createLogger } from "../logger.js";
 import { WolfError } from "../errors.js";
-import { createOrangeClient, type OrangeClient } from "../orange/client.js";
-import { toSec } from "../orange/types.js";
+import { createBobClient, type BobClient } from "../bob/client.js";
+import { toSec } from "../bob/types.js";
 import { createHypothesisStore, slugifyOwner, type HypothesisStore } from "./store.js";
 import {
   METHOD_BODY_MARKER,
@@ -428,7 +428,7 @@ afterEach(async () => {
 
 interface Harness {
   stub: Stub;
-  client: OrangeClient;
+  client: BobClient;
   store: HypothesisStore;
   provisioner: Provisioner;
 }
@@ -440,7 +440,7 @@ function harness(
   const stub = new Stub(pool, stubConfig);
   stub.install();
   const logger = createLogger({ logLevel: "silent" });
-  const client = createOrangeClient({ baseUrl: ORANGE, apiKey: API_KEY, logger });
+  const client = createBobClient({ baseUrl: ORANGE, apiKey: API_KEY, logger });
   const store = createHypothesisStore({ client, logger });
   // A fake clock, so the drain bound is exercised for real without the test
   // waiting a real minute.

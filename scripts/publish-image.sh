@@ -10,11 +10,11 @@
 # There are two ways to get `installations/wolf` in front of a session, and they
 # are not interchangeable:
 #
-#   load-image-into-dind.sh   builds INSIDE Agent Orange's DinD daemon, FROM a
-#                             local `agent-orange-core:dev`. Works offline,
+#   load-image-into-dind.sh   builds INSIDE Agent Bob's DinD daemon, FROM a
+#                             local `agent-bob-core:dev`. Works offline,
 #                             needs no registry credential — and is the LOCAL
 #                             path, not production's. It also only works when
-#                             agent-orange's stack was started in `local` image
+#                             agent-bob's stack was started in `local` image
 #                             mode: registry mode never builds
 #                             `agentkit-sandbox:dev` into DinD, so the core
 #                             image that script builds FROM does not exist.
@@ -28,21 +28,21 @@
 #                             at the ref this prints and local stops diverging
 #                             from deployed.
 #
-# Run agent-orange's `./stack publish-base <tag>` first: this builds FROM
+# Run agent-bob's `./stack publish-base <tag>` first: this builds FROM
 # session-core, so that tag has to exist in the registry before this can work.
 #
-# Do NOT set agent-orange's own compose BASE_IMAGE to this image. That variable
-# is the *harness* base; agent-orange's init-sandbox rebuilds the bare harness
+# Do NOT set agent-bob's own compose BASE_IMAGE to this image. That variable
+# is the *harness* base; agent-bob's init-sandbox rebuilds the bare harness
 # and tags it with any BASE_IMAGE containing no "/", which would silently
 # overwrite whatever shares the tag. WOLF_BASE_IMAGE is a different thing — a
 # per-project setting Wolf's bootstrap writes into the `wolf` project's
-# settings row, and it never touches agent-orange's BASE_IMAGE.
+# settings row, and it never touches agent-bob's BASE_IMAGE.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-: "${REGISTRY:?set REGISTRY, e.g. REGISTRY=europe-west1-docker.pkg.dev/webkit-servers/agent-orange}"
+: "${REGISTRY:?set REGISTRY, e.g. REGISTRY=europe-west1-docker.pkg.dev/webkit-servers/agent-bob}"
 
 TAG="${1:-dev}"
 CORE_REF="$REGISTRY/session-core:$TAG"
@@ -54,7 +54,7 @@ WOLF_REF="$REGISTRY/session-wolf:$TAG"
 # the old gcr.io ones. A machine with gcr.io configured and not
 # europe-west1-docker.pkg.dev fails with "no basic auth credentials", which
 # reads like a network fault and is not. Checked before the multi-minute build,
-# not after. (Same preflight as agent-orange's deploy/publish-base.sh.)
+# not after. (Same preflight as agent-bob's deploy/publish-base.sh.)
 host="${REGISTRY%%/*}"
 case "$host" in
   *-docker.pkg.dev|gcr.io|*.gcr.io)
@@ -103,7 +103,7 @@ Point Wolf's sessions at it:
 
   WOLF_BASE_IMAGE=$WOLF_REF
 
-agent-orange's ./stack wolf up does that for you. Setting it by hand means
+agent-bob's ./stack wolf up does that for you. Setting it by hand means
 re-running the bootstrap so the "wolf" project's settings row picks it up:
 
   ./stack wolf bootstrap

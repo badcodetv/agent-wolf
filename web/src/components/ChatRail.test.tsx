@@ -57,7 +57,7 @@ describe("ChatRail", () => {
   it("collapses to a thin edge and leaves a restore control", async () => {
     renderWithProviders(<ChatRail hypothesisId={ID} />);
     await flush();
-    expect(screen.getByTestId("orange-chat-frame")).toBeInTheDocument();
+    expect(screen.getByTestId("bob-chat-frame")).toBeInTheDocument();
 
     await act(async () => {
       screen.getByTestId("chat-rail-toggle").click();
@@ -65,7 +65,7 @@ describe("ChatRail", () => {
     });
 
     expect(screen.getByTestId("chat-rail")).toHaveAttribute("data-rail-open", "false");
-    expect(screen.queryByTestId("orange-chat-frame")).toBeNull();
+    expect(screen.queryByTestId("bob-chat-frame")).toBeNull();
     // Restorable: the control is still there, and still says what it does.
     const toggle = screen.getByTestId("chat-rail-toggle");
     expect(toggle).toHaveAttribute("aria-label", "Show the conversation");
@@ -74,7 +74,7 @@ describe("ChatRail", () => {
       toggle.click();
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(screen.getByTestId("orange-chat-frame")).toBeInTheDocument();
+    expect(screen.getByTestId("bob-chat-frame")).toBeInTheDocument();
   });
 });
 
@@ -124,7 +124,7 @@ describe("ChatRail below the md breakpoint", () => {
     expect(rail).toHaveAttribute("data-rail-mode", "tab");
     expect(window.getComputedStyle(rail).position).not.toBe("sticky");
 
-    const frame = screen.getByTestId("orange-chat-frame");
+    const frame = screen.getByTestId("bob-chat-frame");
     // The frame still fills its container and still measures nothing.
     expect(frame.style.height).toBe("100%");
     expect(frame.style.height).not.toMatch(/px/);
@@ -143,18 +143,18 @@ describe("ChatRail below the md breakpoint", () => {
     stubNarrowViewport();
     renderWithProviders(<ChatRail hypothesisId={ID} />);
     await flush();
-    expect(screen.getByTestId("orange-chat-frame")).toBeInTheDocument();
+    expect(screen.getByTestId("bob-chat-frame")).toBeInTheDocument();
 
     await act(async () => {
       screen.getByTestId("chat-rail-toggle").click();
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(screen.queryByTestId("orange-chat-frame")).toBeNull();
+    expect(screen.queryByTestId("bob-chat-frame")).toBeNull();
 
     await act(async () => {
       screen.getByTestId("chat-rail-toggle").click();
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(screen.getByTestId("orange-chat-frame")).toBeInTheDocument();
+    expect(screen.getByTestId("bob-chat-frame")).toBeInTheDocument();
   });
 });

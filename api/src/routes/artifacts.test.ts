@@ -16,7 +16,7 @@ import {
 import { createErrorHandler } from "../app.js";
 import { loadConfig, type WolfConfig } from "../config.js";
 import type { Logger } from "../logger.js";
-import { createOrangeClient } from "../orange/client.js";
+import { createBobClient } from "../bob/client.js";
 import { setSessionCookie } from "../auth/session.js";
 import { createArtifactsRouter, artifactRow } from "./artifacts.js";
 
@@ -39,7 +39,7 @@ const SESSION_NAME = `hyp-${ID}`;
  * projection exists to drop: echoing Orange's row verbatim would publish the
  * storage layout to the browser and to the log.
  */
-const BLOB_PATH = "gs://webkit-servers-agent-orange/sess-99/report.md";
+const BLOB_PATH = "gs://webkit-servers-agent-bob/sess-99/report.md";
 
 /**
  * 🔴 Orange does NOT send this field today (`go/artifacts/artifacts.go`'s
@@ -161,7 +161,7 @@ function config(): WolfConfig {
       WOLF_SESSION_SECRET: SECRET,
       WOLF_ALLOWED_EMAILS: OWNER,
       WOLF_API_KEY: API_KEY,
-      ORANGE_BASE_URL: ORANGE,
+      BOB_BASE_URL: ORANGE,
       NODE_ENV: "test",
     },
     { readRouteTable: () => undefined },
@@ -191,7 +191,7 @@ async function harness(stubConfig: StubConfig = {}): Promise<Harness> {
   stub.install();
   const cfg = config();
   const { logger, lines } = capturingLogger();
-  const client = createOrangeClient({ baseUrl: cfg.orangeBaseUrl, apiKey: cfg.orangeApiKey, logger });
+  const client = createBobClient({ baseUrl: cfg.orangeBaseUrl, apiKey: cfg.orangeApiKey, logger });
 
   const app = express();
   app.use(express.json());

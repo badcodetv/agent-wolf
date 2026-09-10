@@ -1,6 +1,6 @@
 /**
  * Wolf's theme — the single implementation of
- * `design/2026-08-24-agent-wolf-ui.md` § 2b "Visual direction" (agent-orange
+ * `design/2026-08-24-agent-wolf-ui.md` § 2b "Visual direction" (agent-bob
  * repo). W13, W14, W23 and W24 IMPORT from here; none of them adds a second
  * theme, a second palette or its own severity treatment. That is the whole
  * point of W28 running first.

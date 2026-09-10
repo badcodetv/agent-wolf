@@ -6,7 +6,7 @@
 # installed one inside the image — silently replacing the image's Linux
 # native binaries and correct hoisting with whatever happens to be on the
 # host. See design/2026-08-20-agent-wolf.md § W1 acceptance criteria
-# (agent-orange repo).
+# (agent-bob repo).
 node_modules
 **/node_modules
 .git

@@ -40,7 +40,7 @@
  * trusted one.
  */
 
-import type { DatasetMetadata } from "../orange/types.js";
+import type { DatasetMetadata } from "../bob/types.js";
 import { researcherWorkerFor } from "./provision.js";
 
 /**

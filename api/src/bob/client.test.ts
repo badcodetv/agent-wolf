@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WolfError } from "../errors.js";
-import { createOrangeClient } from "./client.js";
+import { createBobClient } from "./client.js";
 
 // design/2026-08-20-agent-wolf.md, W2 (and W2b) acceptance criteria. The
 // route list (23 of them, since W2b's GET /agent/workers/{name}) is
@@ -47,8 +47,8 @@ afterEach(async () => {
   }
 });
 
-function client(logger?: Parameters<typeof createOrangeClient>[0]["logger"]) {
-  return createOrangeClient({ baseUrl: BASE_URL, apiKey: API_KEY, logger });
+function client(logger?: Parameters<typeof createBobClient>[0]["logger"]) {
+  return createBobClient({ baseUrl: BASE_URL, apiKey: API_KEY, logger });
 }
 
 /**
@@ -125,7 +125,7 @@ function queryOf(captured: Captured): Record<string, string> {
   return Object.fromEntries(new URL(captured.path ?? "", BASE_URL).searchParams.entries());
 }
 
-describe("createOrangeClient reads no environment variable", () => {
+describe("createBobClient reads no environment variable", () => {
   it("client.ts and types.ts contain no `process.env`", () => {
     const here = dirname(fileURLToPath(import.meta.url));
     const clientSrc = readFileSync(join(here, "client.ts"), "utf8");

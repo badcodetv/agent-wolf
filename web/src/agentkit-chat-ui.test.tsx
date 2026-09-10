@@ -11,7 +11,7 @@
  *
  * — an error naming MUI's own ESM build rather than anything of ours, which is
  * exactly why an executor would reasonably conclude the package is broken
- * (agent-orange R125). Delete the `inline` entry and this file fails outright.
+ * (agent-bob R125). Delete the `inline` entry and this file fails outright.
  *
  * The theming assertion is the argument for revision 5's tiered reuse and the
  * one thing an iframe can never do: a component built in the OTHER repository,
@@ -25,7 +25,7 @@ import { decomposeColor } from "@mui/material/styles";
 // R136: the DEEP subpath, not the `./components` barrel. The barrel is 46
 // re-exports and importing any one of them pulled all of them — ~36s of
 // module resolution per suite, which a consumer could not opt out of until
-// agent-orange 0.1.1 added a `./components/*` wildcard export. The deep path
+// agent-bob 0.1.1 added a `./components/*` wildcard export. The deep path
 // pulls ONE module. Prefer it in every Wolf ticket.
 // NOTE the DEFAULT import: a deep subpath gives you the module's own export
 // shape, and each component module default-exports itself — the `./components`

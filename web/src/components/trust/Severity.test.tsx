@@ -1,5 +1,5 @@
 /**
- * W28 — Channel S. `design/2026-08-24-agent-wolf-ui.md` § 2 (agent-orange repo).
+ * W28 — Channel S. `design/2026-08-24-agent-wolf-ui.md` § 2 (agent-bob repo).
  *
  * Two load-bearing tests here:
  *

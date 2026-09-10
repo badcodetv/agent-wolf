@@ -7,7 +7,7 @@
  * with **no** `allow-same-origin`, and the CSP that goes with it. W14 ships
  * the box it sits in, because the two rules the box enforces are W14's
  * criteria and they must be testable before W23 exists. This mirrors the
- * `ChatRail` / `OrangeChatFrame` split W13 already made, for the same reason:
+ * `ChatRail` / `BobChatFrame` split W13 already made, for the same reason:
  * a container whose height is decided by the PARENT means the child never has
  * to measure a cross-origin document, which is not possible from outside it.
  *

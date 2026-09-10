@@ -1,7 +1,7 @@
 /**
  * The ONE import-boundary checker for agent-wolf. `web/` and `api/` are both
- * held to "imports nothing from agent-orange" (design/2026-08-20-agent-wolf.md,
- * W1 acceptance criteria, agent-orange repo) and both consume this module —
+ * held to "imports nothing from agent-bob" (design/2026-08-20-agent-wolf.md,
+ * W1 acceptance criteria, agent-bob repo) and both consume this module —
  * do not fork a second implementation per package.
  *
  * Graded surface, exactly as the rewritten W1 criterion enumerates it:
@@ -286,7 +286,7 @@ export interface ImportBoundaryReport {
   viteAliasViolations: string[];
   tsconfigPathsViolations: string[];
   manifestEscapeViolations: string[];
-  agentOrangeMentionViolations: string[];
+  agentBobMentionViolations: string[];
 }
 
 /**
@@ -300,7 +300,7 @@ export async function checkImportBoundary(config: ImportBoundaryConfig): Promise
     config;
   // Root config files (F1) are scanned alongside srcDir, not instead of it:
   // the same specifier-form checks below (relative/absolute/bare,
-  // agent-orange mention) run over both, since a config file is exactly as
+  // agent-bob mention) run over both, since a config file is exactly as
   // capable of importing outside the repo as a source file is.
   const files = [...collectSourceFiles(srcDir), ...(rootConfigFiles ?? []).filter((f) => existsSync(f))];
 
@@ -312,12 +312,12 @@ export async function checkImportBoundary(config: ImportBoundaryConfig): Promise
   const relativeViolations: string[] = [];
   const absoluteViolations: string[] = [];
   const bareViolations: string[] = [];
-  const agentOrangeMentionViolations: string[] = [];
+  const agentBobMentionViolations: string[] = [];
 
   for (const file of files) {
     for (const specifier of allImportSpecifiers(file)) {
-      if (specifier.toLowerCase().includes("agent-orange")) {
-        agentOrangeMentionViolations.push(`${file} imports "${specifier}"`);
+      if (specifier.toLowerCase().includes("agent-bob")) {
+        agentBobMentionViolations.push(`${file} imports "${specifier}"`);
       }
 
       if (specifier.startsWith(".")) {
@@ -422,6 +422,6 @@ export async function checkImportBoundary(config: ImportBoundaryConfig): Promise
     viteAliasViolations,
     tsconfigPathsViolations,
     manifestEscapeViolations,
-    agentOrangeMentionViolations,
+    agentBobMentionViolations,
   };
 }

@@ -13,7 +13,7 @@ Two kinds of file live here:
 
 | | |
 | --- | --- |
-| Repo | `agent-orange` (`github.com/binocarlos/badcode-agent-orange`) |
+| Repo | `agent-bob` (`github.com/badcodetv/agent-bob`) |
 | Commit | **`af0e0cb1f4ed91fc9b00f73e8e51b413d6349eaf`** (`main`, "Wave-4 pre-flight: merge waves 1-3 to main, and two plan fixes") |
 | O11 merged in it as | `53d9bcc` — "Merge O11 (carries O7): POST /agent/memories, and include_retracted" |
 | Captured | **2026-08-21** |
@@ -152,7 +152,7 @@ apart.
 
 | | |
 | --- | --- |
-| Repo / commit | `agent-orange` **`af0e0cb1f4ed91fc9b00f73e8e51b413d6349eaf`** — the same commit as the first capture, extracted with `git archive` and built with `go build -o agentd ./cmd/agentd` |
+| Repo / commit | `agent-bob` **`af0e0cb1f4ed91fc9b00f73e8e51b413d6349eaf`** — the same commit as the first capture, extracted with `git archive` and built with `go build -o agentd ./cmd/agentd` |
 | Captured | **2026-08-21** |
 | Store | the same throwaway `pgvector/pgvector:pg16` instance (port 5436), a **fresh database** (`w5fix`), migrations `001`–`045` applied by `agentd` itself at boot |
 | Model | **mock** — `[agentd] ANTHROPIC_API_KEY unset → MOCK model proxy (set it for a real agent)` in the boot log. No billable agent ran |

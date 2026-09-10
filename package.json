@@ -2,7 +2,7 @@
   "name": "agent-wolf",
   "version": "0.0.0",
   "private": true,
-  "description": "Agent Wolf — trading-hypothesis platform built on Agent Orange. See design/2026-08-20-agent-wolf.md in the agent-orange repo.",
+  "description": "Agent Wolf — trading-hypothesis platform built on Agent Bob. See design/2026-08-20-agent-wolf.md in the agent-bob repo.",
   "workspaces": [
     "api",
     "web",

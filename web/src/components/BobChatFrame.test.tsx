@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, screen } from "@testing-library/react";
-import OrangeChatFrame, {
+import BobChatFrame, {
   MIN_REFRESH_DELAY_MS,
   REFRESH_MARGIN_MS,
   embedSrc,
-} from "./OrangeChatFrame.js";
+} from "./BobChatFrame.js";
 import { expectNothingPersisted, renderWithProviders, stubFetchRoutes } from "../testUtils.js";
 
 const ID = "1a2b3c4d";
@@ -23,7 +23,7 @@ async function flush(): Promise<void> {
 }
 
 function frame(): HTMLIFrameElement {
-  return screen.getByTestId("orange-chat-frame") as HTMLIFrameElement;
+  return screen.getByTestId("bob-chat-frame") as HTMLIFrameElement;
 }
 
 beforeEach(() => {
@@ -52,42 +52,42 @@ describe("the refresh margin", () => {
 });
 
 describe("embedSrc", () => {
-  it("composes the src from VITE_ORANGE_PUBLIC_URL — a hard-coded origin fails this", () => {
-    vi.stubEnv("VITE_ORANGE_PUBLIC_URL", "https://orange.example.test");
+  it("composes the src from VITE_BOB_PUBLIC_URL — a hard-coded origin fails this", () => {
+    vi.stubEnv("VITE_BOB_PUBLIC_URL", "https://orange.example.test");
     expect(embedSrc(ID, "tok-abc")).toBe(
       "https://orange.example.test/embed/session/hyp-1a2b3c4d#token=tok-abc",
     );
   });
 
   it("adds the hyp- prefix exactly once and never to the id itself", () => {
-    vi.stubEnv("VITE_ORANGE_PUBLIC_URL", "https://orange.example.test");
+    vi.stubEnv("VITE_BOB_PUBLIC_URL", "https://orange.example.test");
     const src = embedSrc(ID, "tok-abc");
     expect(src).toContain("/embed/session/hyp-1a2b3c4d#");
     expect(src).not.toContain("hyp-hyp-");
   });
 
   it("survives a base carrying a path prefix and a trailing slash", () => {
-    vi.stubEnv("VITE_ORANGE_PUBLIC_URL", "https://example.test/orange/");
+    vi.stubEnv("VITE_BOB_PUBLIC_URL", "https://example.test/orange/");
     expect(embedSrc(ID, "t")).toBe("https://example.test/orange/embed/session/hyp-1a2b3c4d#token=t");
   });
 
   it("puts the token in the FRAGMENT, which is never sent to a server or written to an access log", () => {
-    vi.stubEnv("VITE_ORANGE_PUBLIC_URL", "https://orange.example.test");
+    vi.stubEnv("VITE_BOB_PUBLIC_URL", "https://orange.example.test");
     const src = embedSrc(ID, "tok-abc");
     expect(src.split("#")[1]).toBe("token=tok-abc");
     expect(src.split("#")[0]).not.toContain("tok-abc");
   });
 });
 
-describe("OrangeChatFrame", () => {
+describe("BobChatFrame", () => {
   it("mints a token on mount and renders it in the frame src", async () => {
-    vi.stubEnv("VITE_ORANGE_PUBLIC_URL", "https://orange.example.test");
+    vi.stubEnv("VITE_BOB_PUBLIC_URL", "https://orange.example.test");
     const stub = stubFetchRoutes({
       [TOKEN_ROUTE]: {
         json: { token: "tok-1", expires_at_sec: nowSec() + 900, embed_url: "ignored" },
       },
     });
-    renderWithProviders(<OrangeChatFrame hypothesisId={ID} />);
+    renderWithProviders(<BobChatFrame hypothesisId={ID} />);
     await flush();
 
     expect(stub.countFor(TOKEN_ROUTE)).toBe(1);
@@ -109,7 +109,7 @@ describe("OrangeChatFrame", () => {
         json: { token: `tok-${i + 1}`, expires_at_sec: nowSec() + 600, embed_url: "" },
       }),
     });
-    renderWithProviders(<OrangeChatFrame hypothesisId={ID} />);
+    renderWithProviders(<BobChatFrame hypothesisId={ID} />);
     await flush();
     expect(stub.countFor(TOKEN_ROUTE)).toBe(1);
 
@@ -124,13 +124,13 @@ describe("OrangeChatFrame", () => {
   });
 
   it("refreshes AND remounts the frame the moment 120s remain — pinned 1ms inside", async () => {
-    vi.stubEnv("VITE_ORANGE_PUBLIC_URL", "https://orange.example.test");
+    vi.stubEnv("VITE_BOB_PUBLIC_URL", "https://orange.example.test");
     const stub = stubFetchRoutes({
       [TOKEN_ROUTE]: (i) => ({
         json: { token: `tok-${i + 1}`, expires_at_sec: nowSec() + 600, embed_url: "" },
       }),
     });
-    renderWithProviders(<OrangeChatFrame hypothesisId={ID} />);
+    renderWithProviders(<BobChatFrame hypothesisId={ID} />);
     await flush();
     const first = frame();
 
@@ -154,7 +154,7 @@ describe("OrangeChatFrame", () => {
         json: { token: `tok-${i + 1}`, expires_at_sec: nowSec() + 60, embed_url: "" },
       }),
     });
-    renderWithProviders(<OrangeChatFrame hypothesisId={ID} />);
+    renderWithProviders(<BobChatFrame hypothesisId={ID} />);
     await flush();
     expect(stub.countFor(TOKEN_ROUTE)).toBe(1);
 
@@ -178,7 +178,7 @@ describe("OrangeChatFrame", () => {
         json: { token: `tok-${i + 1}`, expires_at_sec: nowSec() + 3600, embed_url: "" },
       }),
     });
-    renderWithProviders(<OrangeChatFrame hypothesisId={ID} />);
+    renderWithProviders(<BobChatFrame hypothesisId={ID} />);
     await flush();
     // A 10-digit fixture, as the ticket requires.
     expect(String(nowSec() + 3600)).toMatch(/^\d{10}$/);
@@ -195,7 +195,7 @@ describe("OrangeChatFrame", () => {
         json: { token: `tok-${i + 1}`, expires_at_sec: nowSec() + 600, embed_url: "" },
       }),
     });
-    const view = renderWithProviders(<OrangeChatFrame hypothesisId={ID} />);
+    const view = renderWithProviders(<BobChatFrame hypothesisId={ID} />);
     await flush();
     expectNothingPersisted();
 
@@ -217,7 +217,7 @@ describe("OrangeChatFrame", () => {
         json: { token: `tok-${i + 1}`, expires_at_sec: nowSec() + 600, embed_url: "" },
       }),
     });
-    const view = renderWithProviders(<OrangeChatFrame hypothesisId={ID} />);
+    const view = renderWithProviders(<BobChatFrame hypothesisId={ID} />);
     await flush();
     view.unmount();
     await act(async () => {
@@ -232,7 +232,7 @@ describe("OrangeChatFrame", () => {
     const stub = stubFetchRoutes({
       [TOKEN_ROUTE]: { json: { token: "t", expires_at_sec: nowSec() + 600, embed_url: "" } },
     });
-    renderWithProviders(<OrangeChatFrame hypothesisId={ID} />);
+    renderWithProviders(<BobChatFrame hypothesisId={ID} />);
     await flush();
     expect(stub.countFor(TOKEN_ROUTE)).toBe(1);
 
@@ -249,12 +249,12 @@ describe("OrangeChatFrame", () => {
     stubFetchRoutes({
       [TOKEN_ROUTE]: { status: 404, json: { kind: "not_found", message: "no session for 1a2b3c4d" } },
     });
-    renderWithProviders(<OrangeChatFrame hypothesisId={ID} />);
+    renderWithProviders(<BobChatFrame hypothesisId={ID} />);
     await flush();
 
     const severity = screen.getByTestId("severity");
     expect(severity).toHaveAttribute("data-severity", "degraded");
     expect(severity).toHaveTextContent("no session for 1a2b3c4d");
-    expect(screen.queryByTestId("orange-chat-frame")).toBeNull();
+    expect(screen.queryByTestId("bob-chat-frame")).toBeNull();
   });
 });

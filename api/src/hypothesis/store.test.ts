@@ -11,8 +11,8 @@ import {
 } from "undici";
 
 import { WolfError } from "../errors.js";
-import { createOrangeClient, type OrangeClient } from "../orange/client.js";
-import { toMs, toSec, type DeliveryRecord } from "../orange/types.js";
+import { createBobClient, type BobClient } from "../bob/client.js";
+import { toMs, toSec, type DeliveryRecord } from "../bob/types.js";
 import {
   IN_FLIGHT_DELIVERY_STATUSES,
   countStaleMetrics,
@@ -320,8 +320,8 @@ afterEach(async () => {
   await mockAgent.close();
 });
 
-function orange(): OrangeClient {
-  return createOrangeClient({ baseUrl: BASE_URL, apiKey: API_KEY });
+function orange(): BobClient {
+  return createBobClient({ baseUrl: BASE_URL, apiKey: API_KEY });
 }
 
 function harness(config: StubConfig): { store: HypothesisStore; stub: Stub } {

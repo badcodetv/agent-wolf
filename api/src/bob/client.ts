@@ -13,7 +13,7 @@
  * no method, no type — so these are new surface rather than wiring.
  *
  * The client reads no environment variable: it is constructed with
- * `createOrangeClient({ baseUrl, apiKey })` and the caller supplies both
+ * `createBobClient({ baseUrl, apiKey })` and the caller supplies both
  * (`api/src/config.ts` is owned by other tickets and this file does not
  * touch it). The API key lives only in the `ctx` closure below and is
  * used only to set the `X-API-Key` header — it is never placed in a
@@ -86,7 +86,7 @@ export interface DownloadDatasetParams {
   token?: string;
 }
 
-export interface OrangeClient {
+export interface BobClient {
   createSession(params: { name: string; worker?: string }): Promise<CreateSessionResult>;
   getSessionByName(name: string): Promise<SessionByName>;
   /**
@@ -201,7 +201,7 @@ export interface OrangeClient {
   getSessionArtifactFile(sessionName: string, filePath: string): Promise<ArtifactFile>;
 }
 
-export interface CreateOrangeClientOptions {
+export interface CreateBobClientOptions {
   baseUrl: string;
   apiKey: string;
   /** Defaults to a silent pino instance; pass a real one to see the one-line-per-request log. */
@@ -1073,7 +1073,7 @@ function getSessionArtifactFile(
 
 // ── Construction ───────────────────────────────────────────────────────
 
-export function createOrangeClient(options: CreateOrangeClientOptions): OrangeClient {
+export function createBobClient(options: CreateBobClientOptions): BobClient {
   const ctx: ClientContext = {
     baseUrl: options.baseUrl,
     apiKey: options.apiKey,

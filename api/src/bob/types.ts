@@ -1,5 +1,5 @@
 /**
- * Wire types for every Orange route `api/src/orange/client.ts` calls.
+ * Wire types for every Orange route `api/src/bob/client.ts` calls.
  *
  * design/2026-08-20-agent-wolf.md § "Environment facts you must not
  * rediscover the hard way": "Timestamp units differ across the product

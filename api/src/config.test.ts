@@ -540,7 +540,7 @@ describe("WOLF_BASE_IMAGE / WOLF_CRITIC_CRON (W12)", () => {
 
 // ── W8: the auth + Orange-credential variables ──────────────────────────
 //
-// R92: `ORANGE_BASE_URL` and `WOLF_API_KEY` are pinned HERE, in the typed
+// R92: `BOB_BASE_URL` and `WOLF_API_KEY` are pinned HERE, in the typed
 // config, and documented in `.env.example`. W12's bootstrap still reads them
 // straight from `process.env` with its own default — that reader moves in a
 // later ticket; this is the variables' home.
@@ -548,29 +548,29 @@ describe("WOLF_BASE_IMAGE / WOLF_CRITIC_CRON (W12)", () => {
 describe("loadConfig — W8's variables", () => {
   const noRoutes: RouteSource = { readRouteTable: () => undefined };
 
-  it("defaults ORANGE_BASE_URL to agentd as seen from inside DinD's netns", () => {
+  it("defaults BOB_BASE_URL to agentd as seen from inside DinD's netns", () => {
     expect(loadConfig({}, noRoutes).orangeBaseUrl).toBe("http://localhost:8099");
   });
 
-  it("reads ORANGE_BASE_URL when set, and treats an EMPTY value as unset (R80)", () => {
-    expect(loadConfig({ ORANGE_BASE_URL: "http://orange:8099" }, noRoutes).orangeBaseUrl).toBe(
+  it("reads BOB_BASE_URL when set, and treats an EMPTY value as unset (R80)", () => {
+    expect(loadConfig({ BOB_BASE_URL: "http://orange:8099" }, noRoutes).orangeBaseUrl).toBe(
       "http://orange:8099",
     );
     // docker compose forwards an unset optional variable as "", not as absent.
-    expect(loadConfig({ ORANGE_BASE_URL: "" }, noRoutes).orangeBaseUrl).toBe(
+    expect(loadConfig({ BOB_BASE_URL: "" }, noRoutes).orangeBaseUrl).toBe(
       "http://localhost:8099",
     );
   });
 
-  it("fails fast naming ORANGE_BASE_URL when it is not an absolute http(s) URL", () => {
+  it("fails fast naming BOB_BASE_URL when it is not an absolute http(s) URL", () => {
     for (const bad of ["orange:8099", "/agent", "ftp://orange"]) {
       try {
-        loadConfig({ ORANGE_BASE_URL: bad }, noRoutes);
+        loadConfig({ BOB_BASE_URL: bad }, noRoutes);
         throw new Error(`expected loadConfig to throw for ${JSON.stringify(bad)}`);
       } catch (err) {
         expect(err).toBeInstanceOf(WolfError);
         expect((err as WolfError).kind).toBe("misconfigured");
-        expect((err as WolfError).message).toContain("ORANGE_BASE_URL");
+        expect((err as WolfError).message).toContain("BOB_BASE_URL");
       }
     }
   });
@@ -833,16 +833,16 @@ describe("WOLF_POLL_INTERVAL_SECONDS (W10)", () => {
   });
 });
 
-// design/2026-08-20-agent-wolf.md, W11: `ORANGE_PUBLIC_URL` is the
+// design/2026-08-20-agent-wolf.md, W11: `BOB_PUBLIC_URL` is the
 // BROWSER-reachable Orange origin and the base of every `embed_url`. It is a
-// SECOND variable on purpose — ORANGE_BASE_URL is agentd inside DinD's netns,
+// SECOND variable on purpose — BOB_BASE_URL is agentd inside DinD's netns,
 // which no browser can reach — so the cases below gate that the two never
 // collapse into one. The "reaches the container" half is enforced by the
 // R81/R110 block below.
-describe("ORANGE_PUBLIC_URL (W11)", () => {
+describe("BOB_PUBLIC_URL (W11)", () => {
   const noRoutes = routeSourceReturning(undefined);
 
-  it("defaults to the agent-orange stack's published web origin, NOT agentd", () => {
+  it("defaults to the agent-bob stack's published web origin, NOT agentd", () => {
     const config = loadConfig({}, noRoutes);
     expect(config.orangePublicUrl).toBe(DEFAULT_ORANGE_PUBLIC_URL);
     expect(config.orangePublicUrl).toBe("http://localhost:8080");
@@ -850,9 +850,9 @@ describe("ORANGE_PUBLIC_URL (W11)", () => {
     expect(config.orangePublicUrl).not.toBe(config.orangeBaseUrl);
   });
 
-  it("reads ORANGE_PUBLIC_URL when set, independently of ORANGE_BASE_URL", () => {
+  it("reads BOB_PUBLIC_URL when set, independently of BOB_BASE_URL", () => {
     const config = loadConfig(
-      { ORANGE_PUBLIC_URL: "https://orange.badcode.dev", ORANGE_BASE_URL: "http://localhost:9000" },
+      { BOB_PUBLIC_URL: "https://orange.badcode.dev", BOB_BASE_URL: "http://localhost:9000" },
       noRoutes,
     );
     expect(config.orangePublicUrl).toBe("https://orange.badcode.dev");
@@ -863,26 +863,26 @@ describe("ORANGE_PUBLIC_URL (W11)", () => {
     // Compose forwards an unset optional variable as "", and `"" ?? default`
     // is `""` — which would build embed_url as a same-origin path that
     // resolves against WOLF's own origin and 404s inside the iframe.
-    expect(loadConfig({ ORANGE_PUBLIC_URL: "" }, noRoutes).orangePublicUrl).toBe(
+    expect(loadConfig({ BOB_PUBLIC_URL: "" }, noRoutes).orangePublicUrl).toBe(
       DEFAULT_ORANGE_PUBLIC_URL,
     );
   });
 
   it("trims trailing slashes, so an embed_url never doubles one", () => {
     expect(
-      loadConfig({ ORANGE_PUBLIC_URL: "http://localhost:8080///" }, noRoutes).orangePublicUrl,
+      loadConfig({ BOB_PUBLIC_URL: "http://localhost:8080///" }, noRoutes).orangePublicUrl,
     ).toBe("http://localhost:8080");
   });
 
-  it("fails fast naming ORANGE_PUBLIC_URL when it is not an absolute http(s) URL", () => {
+  it("fails fast naming BOB_PUBLIC_URL when it is not an absolute http(s) URL", () => {
     for (const bad of ["localhost:8080", "/embed", "ftp://orange.test"]) {
       try {
-        loadConfig({ ORANGE_PUBLIC_URL: bad }, noRoutes);
-        expect.unreachable(`ORANGE_PUBLIC_URL=${bad} should have been refused`);
+        loadConfig({ BOB_PUBLIC_URL: bad }, noRoutes);
+        expect.unreachable(`BOB_PUBLIC_URL=${bad} should have been refused`);
       } catch (err) {
         expect(err).toBeInstanceOf(WolfError);
         expect((err as WolfError).kind).toBe("misconfigured");
-        expect((err as WolfError).message).toContain("ORANGE_PUBLIC_URL");
+        expect((err as WolfError).message).toContain("BOB_PUBLIC_URL");
       }
     }
   });
@@ -892,7 +892,7 @@ describe("ORANGE_PUBLIC_URL (W11)", () => {
       join(dirname(fileURLToPath(import.meta.url)), "..", "..", ".env.example"),
       "utf8",
     );
-    expect(example).toContain("ORANGE_PUBLIC_URL=http://localhost:8080");
+    expect(example).toContain("BOB_PUBLIC_URL=http://localhost:8080");
     // O8's allowed_origins is the other half: an origin missing there means
     // the browser blocks the chat iframe with no error on the Wolf side.
     expect(example).toContain("allowed_origins");
@@ -921,7 +921,7 @@ describe("R81/R110: every variable config.ts reads reaches the container", () =>
    * by config.ts — they configure Compose itself, not the wolf-api process.
    * This module's own header comment names them.
    */
-  const COMPOSE_ONLY = new Set(["ORANGE_DIND_CONTAINER", "WOLF_WEB_PORT"]);
+  const COMPOSE_ONLY = new Set(["BOB_DIND_CONTAINER", "WOLF_WEB_PORT"]);
 
   /** `env.FOO` inside a doc comment illustrating the R80 hazard, not a real read. */
   const NOT_A_REAL_READ = new Set(["FOO"]);

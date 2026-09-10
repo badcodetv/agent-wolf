@@ -8,30 +8,30 @@ afterEach(() => {
 
 describe("orangePublicUrl", () => {
   it("returns the built-in variable", () => {
-    vi.stubEnv("VITE_ORANGE_PUBLIC_URL", "https://orange.example.test");
+    vi.stubEnv("VITE_BOB_PUBLIC_URL", "https://orange.example.test");
     expect(orangePublicUrl()).toBe("https://orange.example.test");
   });
 
   it("trims trailing slashes so a caller concatenates a path without doubling the separator", () => {
-    vi.stubEnv("VITE_ORANGE_PUBLIC_URL", "https://orange.example.test///");
+    vi.stubEnv("VITE_BOB_PUBLIC_URL", "https://orange.example.test///");
     expect(orangePublicUrl()).toBe("https://orange.example.test");
   });
 
   it("keeps a path prefix — a base like https://host/orange must survive", () => {
-    vi.stubEnv("VITE_ORANGE_PUBLIC_URL", "https://example.test/orange");
+    vi.stubEnv("VITE_BOB_PUBLIC_URL", "https://example.test/orange");
     expect(orangePublicUrl()).toBe("https://example.test/orange");
   });
 
-  it("falls back to agent-orange's own compose port when the arg was not passed", () => {
-    vi.stubEnv("VITE_ORANGE_PUBLIC_URL", "");
+  it("falls back to agent-bob's own compose port when the arg was not passed", () => {
+    vi.stubEnv("VITE_BOB_PUBLIC_URL", "");
     expect(orangePublicUrl()).toBe(DEFAULT_ORANGE_PUBLIC_URL);
     expect(DEFAULT_ORANGE_PUBLIC_URL).toBe("http://localhost:8080");
   });
 
   it("is read at CALL time, not at module load — which is what lets a test prove composition", () => {
-    vi.stubEnv("VITE_ORANGE_PUBLIC_URL", "https://one.example.test");
+    vi.stubEnv("VITE_BOB_PUBLIC_URL", "https://one.example.test");
     expect(orangePublicUrl()).toBe("https://one.example.test");
-    vi.stubEnv("VITE_ORANGE_PUBLIC_URL", "https://two.example.test");
+    vi.stubEnv("VITE_BOB_PUBLIC_URL", "https://two.example.test");
     expect(orangePublicUrl()).toBe("https://two.example.test");
   });
 });

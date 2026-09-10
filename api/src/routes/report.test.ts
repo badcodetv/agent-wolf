@@ -19,7 +19,7 @@ import { createApp, createErrorHandler } from "../app.js";
 import { WolfError } from "../errors.js";
 import { loadConfig, type WolfConfig } from "../config.js";
 import type { Logger } from "../logger.js";
-import { createOrangeClient } from "../orange/client.js";
+import { createBobClient } from "../bob/client.js";
 import { setSessionCookie } from "../auth/session.js";
 import { createHypothesisStore } from "../hypothesis/store.js";
 import { reportDecisionLabels } from "../report/kinds.js";
@@ -551,7 +551,7 @@ function config(env: NodeJS.ProcessEnv = {}): WolfConfig {
       WOLF_SESSION_SECRET: SECRET,
       WOLF_ALLOWED_EMAILS: OWNER,
       WOLF_API_KEY: API_KEY,
-      ORANGE_BASE_URL: ORANGE,
+      BOB_BASE_URL: ORANGE,
       NODE_ENV: "test",
       ...env,
     },
@@ -604,7 +604,7 @@ async function harness(
 
   const cfg = config();
   const { logger, lines } = capturingLogger();
-  const client = createOrangeClient({ baseUrl: cfg.orangeBaseUrl, apiKey: cfg.orangeApiKey, logger });
+  const client = createBobClient({ baseUrl: cfg.orangeBaseUrl, apiKey: cfg.orangeApiKey, logger });
   const store = createHypothesisStore({ client, logger });
 
   const app = express();
@@ -661,7 +661,7 @@ async function realHarness(
       WOLF_SESSION_SECRET: SECRET,
       WOLF_ALLOWED_EMAILS: OWNER,
       WOLF_API_KEY: API_KEY,
-      ORANGE_BASE_URL: ORANGE,
+      BOB_BASE_URL: ORANGE,
       WOLF_TEST_LOGIN: `${OWNER}:${TEST_PASSWORD}`,
       NODE_ENV: "test",
       ...env,
@@ -1624,7 +1624,7 @@ describe("report_fixture", () => {
    */
   async function fixtureClient(seed: (orange: FakeOrange) => void): Promise<{
     orange: FakeOrange;
-    client: ReturnType<typeof createOrangeClient>;
+    client: ReturnType<typeof createBobClient>;
   }> {
     const orange = new FakeOrange(pool);
     seed(orange);
@@ -1633,7 +1633,7 @@ describe("report_fixture", () => {
     const { logger } = capturingLogger();
     return {
       orange,
-      client: createOrangeClient({ baseUrl: cfg.orangeBaseUrl, apiKey: cfg.orangeApiKey, logger }),
+      client: createBobClient({ baseUrl: cfg.orangeBaseUrl, apiKey: cfg.orangeApiKey, logger }),
     };
   }
 

@@ -2,7 +2,7 @@
  * Vitest setup for web/. Registers @testing-library/jest-dom's matchers
  * (toBeInTheDocument, toHaveTextContent, toHaveAttribute, …) — the pinned
  * component-test stack for this package, see § "Pinned technology choices" in
- * design/2026-08-20-agent-wolf.md (agent-orange repo).
+ * design/2026-08-20-agent-wolf.md (agent-bob repo).
  *
  * Both halves below are done by hand rather than by the one-line
  * `import "@testing-library/jest-dom/vitest"` the README gives, and the reason

@@ -14,7 +14,7 @@ import {
 import { createErrorHandler } from "../app.js";
 import { loadConfig, type WolfConfig } from "../config.js";
 import { createLogger } from "../logger.js";
-import { createOrangeClient } from "../orange/client.js";
+import { createBobClient } from "../bob/client.js";
 import { SESSION_COOKIE_NAME, SESSION_MAX_AGE_MS, setSessionCookie } from "../auth/session.js";
 import { createAuthRouter } from "./auth.js";
 
@@ -70,7 +70,7 @@ function config(env: NodeJS.ProcessEnv = {}): WolfConfig {
       WOLF_SESSION_SECRET: SECRET,
       WOLF_ALLOWED_EMAILS: ALLOWED,
       WOLF_API_KEY: API_KEY,
-      ORANGE_BASE_URL: ORANGE,
+      BOB_BASE_URL: ORANGE,
       NODE_ENV: "test",
       ...env,
     },
@@ -112,7 +112,7 @@ async function harness(cfg: WolfConfig = config(), now?: () => number): Promise<
   app.use(cookieParser(cfg.sessionSecret));
   app.use(
     createAuthRouter({
-      client: createOrangeClient({ baseUrl: cfg.orangeBaseUrl, apiKey: cfg.orangeApiKey, logger }),
+      client: createBobClient({ baseUrl: cfg.orangeBaseUrl, apiKey: cfg.orangeApiKey, logger }),
       config: cfg,
       logger,
       now,

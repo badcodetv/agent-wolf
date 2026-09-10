@@ -48,8 +48,8 @@
 
 import { WolfError } from "../errors.js";
 import type { Logger } from "../logger.js";
-import type { OrangeClient } from "../orange/client.js";
-import { toMs, type UnixMs } from "../orange/types.js";
+import type { BobClient } from "../bob/client.js";
+import { toMs, type UnixMs } from "../bob/types.js";
 import { MS_PER_DAY, evaluate, type EvaluationResult, type Point } from "./evaluate.js";
 import { validateSpec, type Spec } from "./spec.js";
 import { extractSpecJsonText, researcherWorkerFor } from "./provision.js";
@@ -147,7 +147,7 @@ export interface PollerConfig {
 }
 
 export interface CreatePollerOptions {
-  client: OrangeClient;
+  client: BobClient;
   store: HypothesisStore;
   logger: Logger;
   config: PollerConfig;

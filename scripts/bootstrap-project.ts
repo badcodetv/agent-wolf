@@ -13,7 +13,7 @@
  *   npx tsx scripts/bootstrap-project.ts
  *
  * Required in the environment: WOLF_API_KEY (the wolf project's API key).
- * Optional: ORANGE_BASE_URL (default http://localhost:8099, correct for
+ * Optional: BOB_BASE_URL (default http://localhost:8099, correct for
  * the compose stack — wolf-api shares DinD's network namespace), plus
  * whatever api/src/config.ts already reads (WOLF_MCP_URL, WOLF_BASE_IMAGE,
  * WOLF_CRITIC_CRON, …). Safe to re-run: a second run against an

@@ -53,8 +53,8 @@ import { Router, type Request, type Response } from "express";
 
 import { WolfError } from "../errors.js";
 import type { Logger } from "../logger.js";
-import type { OrangeClient } from "../orange/client.js";
-import { toMs, type UnixMs } from "../orange/types.js";
+import type { BobClient } from "../bob/client.js";
+import { toMs, type UnixMs } from "../bob/types.js";
 import { requireSignedIn } from "../auth/session.js";
 import { MS_PER_DAY, type Point } from "../hypothesis/evaluate.js";
 import { parseCanonicalCsvBytes } from "../hypothesis/points.js";
@@ -90,7 +90,7 @@ const KIND_SPEC = "hypothesis-spec";
 const ROW_LIMIT = 50;
 
 export interface CreateSeriesRouterOptions {
-  client: OrangeClient;
+  client: BobClient;
   logger: Logger;
   /** Injectable clock, so staleness is testable without waiting five days. */
   now?: () => number;

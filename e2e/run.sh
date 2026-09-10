@@ -18,10 +18,10 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # WHAT THIS SCRIPT KNOWS THAT NOTHING ELSE IN THE REPO DOES
 #
-# 1. NO BILLABLE CALL, EVER. agent-orange's real `.env` on a developer machine
+# 1. NO BILLABLE CALL, EVER. agent-bob's real `.env` on a developer machine
 #    carries live model credentials and a GCS backend that kills agentd at boot
 #    (README-stack.md § "If you have a real .env: two traps"). Every override in
-#    ORANGE_ENV below is load-bearing, and `assert_mock_mode` fails the run if
+#    BOB_ENV below is load-bearing, and `assert_mock_mode` fails the run if
 #    agentd's own boot line does not say it chose a mock model.
 #
 #    🔴 The boot line is NOT the one X1's acceptance criterion quotes. With a
@@ -36,7 +36,7 @@
 #
 # 2. THE TWO STACKS' DEFAULT PORTS COLLIDE. Orange's mock invocation takes 8081
 #    and Wolf's default WOLF_WEB_PORT is 8081. Pinned here: Orange 8090,
-#    Wolf 8091, and wolf-web is BUILT with VITE_ORANGE_PUBLIC_URL=:8090 (vite
+#    Wolf 8091, and wolf-web is BUILT with VITE_BOB_PUBLIC_URL=:8090 (vite
 #    inlines it; an `environment:` entry cannot reach a built bundle).
 #
 # 3. http://localhost:8091 MUST be in the `wolf` project's allowed_origins or
@@ -98,28 +98,28 @@ set -euo pipefail
 E2E_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WOLF_REPO="$(cd "${E2E_DIR}/.." && pwd)"
 # Two layouts, and BOTH are real. The canonical checkout is a SIBLING
-# (`/…/badcode/agent-wolf` beside `/…/badcode/agent-orange`); a per-ticket
+# (`/…/badcode/agent-wolf` beside `/…/badcode/agent-bob`); a per-ticket
 # worktree sits one level deeper (`/…/badcode/wave18/x1`). The first version of
 # this line knew only the worktree layout, so running from the canonical
 # checkout — which is where it lives — failed to find Orange at all. It failed
 # CLOSED with the right message, which is the correct direction, but a rig that
 # cannot find its own sibling by default is a rig everyone runs with an
 # environment variable they should not need.
-if [ -z "${ORANGE_REPO:-}" ]; then
-  for candidate in "${WOLF_REPO}/../agent-orange" "${WOLF_REPO}/../../agent-orange"; do
+if [ -z "${BOB_REPO:-}" ]; then
+  for candidate in "${WOLF_REPO}/../agent-bob" "${WOLF_REPO}/../../agent-bob"; do
     if [ -f "${candidate}/docker-compose.yml" ]; then
-      ORANGE_REPO="$(cd "${candidate}" && pwd)"
+      BOB_REPO="$(cd "${candidate}" && pwd)"
       break
     fi
   done
 fi
 
-if [ -z "${ORANGE_REPO:-}" ] || [ ! -f "${ORANGE_REPO}/docker-compose.yml" ]; then
-  echo "run.sh: cannot find the agent-orange checkout." >&2
+if [ -z "${BOB_REPO:-}" ] || [ ! -f "${BOB_REPO}/docker-compose.yml" ]; then
+  echo "run.sh: cannot find the agent-bob checkout." >&2
   echo "        Looked for a docker-compose.yml in:" >&2
-  echo "          ${WOLF_REPO}/../agent-orange      (sibling checkout)" >&2
-  echo "          ${WOLF_REPO}/../../agent-orange   (per-ticket worktree)" >&2
-  echo "        Set ORANGE_REPO=/path/to/agent-orange and re-run." >&2
+  echo "          ${WOLF_REPO}/../agent-bob      (sibling checkout)" >&2
+  echo "          ${WOLF_REPO}/../../agent-bob   (per-ticket worktree)" >&2
+  echo "        Set BOB_REPO=/path/to/agent-bob and re-run." >&2
   exit 2
 fi
 
@@ -158,15 +158,15 @@ if ! flock -n 9; then
   exit 3
 fi
 
-ORANGE_PROJECT="${ORANGE_PROJECT:-agent-orange}"
+BOB_PROJECT="${BOB_PROJECT:-agent-bob}"
 WOLF_PROJECT="${WOLF_PROJECT:-agent-wolf}"
-ORANGE_DIND_CONTAINER="${ORANGE_DIND_CONTAINER:-${ORANGE_PROJECT}-dind-1}"
+BOB_DIND_CONTAINER="${BOB_DIND_CONTAINER:-${BOB_PROJECT}-dind-1}"
 
 # The two pinned ports. See note 2 in the header.
-ORANGE_WEB_PORT="${ORANGE_WEB_PORT:-8090}"
+BOB_WEB_PORT="${BOB_WEB_PORT:-8090}"
 WOLF_WEB_PORT="${WOLF_WEB_PORT:-8091}"
 WOLF_API_PORT="${WOLF_API_PORT:-8100}"
-ORANGE_BASE="http://localhost:${ORANGE_WEB_PORT}"
+BOB_BASE="http://localhost:${BOB_WEB_PORT}"
 WOLF_BASE="http://localhost:${WOLF_WEB_PORT}"
 
 X1_LOGIN_EMAIL="${X1_LOGIN_EMAIL:-kai@badcode.dev}"
@@ -185,7 +185,7 @@ redact() {
 # `dcc` is the redacted `docker compose config`, kept as the named helper the
 # plan's § "Executor orientation" prescribes. The two call sites below use
 # `redact` directly because they must run compose through this script's own
-# `orange_compose` / `wolf_compose` wrappers, which carry the environment.
+# `bob_compose` / `wolf_compose` wrappers, which carry the environment.
 dcc() { docker compose "$@" config | redact; }
 
 log()  { printf '\n=== %s\n' "$*"; }
@@ -256,9 +256,9 @@ api() { # api <METHOD> <PATH> [BODY]  — Orange, with the project API key
   local method="$1" path="$2" body="${3:-}"
   if [ -n "${body}" ]; then
     curl -sS -X "${method}" -H "X-API-Key: ${WOLF_API_KEY}" -H 'Content-Type: application/json' \
-      --data-binary "${body}" "${ORANGE_BASE}${path}"
+      --data-binary "${body}" "${BOB_BASE}${path}"
   else
-    curl -sS -X "${method}" -H "X-API-Key: ${WOLF_API_KEY}" "${ORANGE_BASE}${path}"
+    curl -sS -X "${method}" -H "X-API-Key: ${WOLF_API_KEY}" "${BOB_BASE}${path}"
   fi
 }
 
@@ -269,7 +269,7 @@ api() { # api <METHOD> <PATH> [BODY]  — Orange, with the project API key
 # and NONE of the per-tick ones. A cleanup written the obvious way therefore
 # leaks a container and a host port per tick, which is exactly the leak that
 # poisons the next run. Wolf's own client has always passed it
-# (api/src/orange/client.ts:698-701); this rig had to learn it the hard way.
+# (api/src/bob/client.ts:698-701); this rig had to learn it the hard way.
 count_sessions() {
   api GET '/agent/sessions?user_email=*&limit=200' 2>/dev/null \
     | python3 -c 'import json,sys
@@ -327,7 +327,7 @@ cleanup() {
   # prevent. The guard had a hole precisely where it mattered most.
   local probe
   probe="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
-    "${ORANGE_BASE}/agent/sessions?user_email=*&limit=1" -H "X-API-Key: ${WOLF_API_KEY}" 2>/dev/null || echo 000)"
+    "${BOB_BASE}/agent/sessions?user_email=*&limit=1" -H "X-API-Key: ${WOLF_API_KEY}" 2>/dev/null || echo 000)"
   if [ "${probe}" = "401" ] || [ "${probe}" = "403" ]; then
     echo "cleanup: 🔴 Orange REFUSED this run's project API key (HTTP ${probe})." >&2
     echo "cleanup: 🔴 THIS RUN'S SESSIONS ARE LEAKED and still hold host ports." >&2
@@ -496,7 +496,7 @@ fi
 if [ "${1:-}" = "--down" ]; then
   log "stopping both stacks"
   ( cd "${WOLF_REPO}" && docker compose -p "${WOLF_PROJECT}" down ) || true
-  ( cd "${ORANGE_REPO}" && docker compose -p "${ORANGE_PROJECT}" down ) || true
+  ( cd "${BOB_REPO}" && docker compose -p "${BOB_PROJECT}" down ) || true
   exit 0
 fi
 
@@ -523,9 +523,9 @@ PROJECT_MAP=$(cat <<JSON
 JSON
 )
 
-orange_compose() {
-  ( cd "${ORANGE_REPO}" && env \
-      WEB_PORT="${ORANGE_WEB_PORT}" \
+bob_compose() {
+  ( cd "${BOB_REPO}" && env \
+      WEB_PORT="${BOB_WEB_PORT}" \
       ANTHROPIC_API_KEY= CLAUDE_CODE_OAUTH_TOKEN= \
       AGENTKIT_BLOB_BACKEND=fs AGENTKIT_REGISTRY_BACKEND=blobarchive AGENTKIT_REGISTRY_AUTH= \
       AGENTKIT_REGISTRY_ALWAYS_PULL= \
@@ -537,18 +537,18 @@ orange_compose() {
       WOLF_MCP_TOKEN="${WOLF_MCP_TOKEN}" \
       AGENTKIT_MCP_ENV=WOLF_MCP_TOKEN \
       X1_MOCK_SCRIPT="${X1_MOCK_SCRIPT}" \
-      docker compose -p "${ORANGE_PROJECT}" \
-        -f docker-compose.yml -f "${E2E_DIR}/orange-override.yml" "$@" )
+      docker compose -p "${BOB_PROJECT}" \
+        -f docker-compose.yml -f "${E2E_DIR}/bob-override.yml" "$@" )
 }
 
-log "starting agent-orange (web on ${ORANGE_WEB_PORT}, mock model, local fs/blobarchive backends)"
-orange_compose up -d --build
+log "starting agent-bob (web on ${BOB_WEB_PORT}, mock model, local fs/blobarchive backends)"
+bob_compose up -d --build
 
 # agentd reads the mock script table ONCE, at boot. The bind-mount means the
 # file is live, but the process is not — so restart it whenever this rig runs,
 # or a script edited since the last `up` is silently not the one in force.
 log "restarting agentd so it re-reads the mock script table"
-orange_compose restart agentd
+bob_compose restart agentd
 
 # ── 2. The mock-mode assertion (no billable call) ───────────────────────────
 
@@ -562,7 +562,7 @@ assert_mock_mode() {
   # gets re-run rather than believed, and the next reflex is to weaken the
   # assertion. Bounded, and the timeout is itself a failure.
   for i in $(seq 1 60); do
-    logs="$(orange_compose logs agentd 2>&1)"
+    logs="$(bob_compose logs agentd 2>&1)"
     grep -qF 'ANTHROPIC_API_KEY unset → SCRIPTED mock model proxy' <<< "${logs}" && break
     grep -qF 'real model proxy →' <<< "${logs}" && break
     grep -qF 'subscription mode →' <<< "${logs}" && break
@@ -605,7 +605,7 @@ wait_for() { # wait_for <label> <seconds> <command...>
 }
 
 wait_for "orange /agent/sessions" 120 \
-  curl -fsS -o /dev/null -H "X-API-Key: ${WOLF_API_KEY}" "${ORANGE_BASE}/agent/sessions"
+  curl -fsS -o /dev/null -H "X-API-Key: ${WOLF_API_KEY}" "${BOB_BASE}/agent/sessions"
 
 SESSIONS_BEFORE="$(count_sessions)"
 printf 'sessions in project wolf BEFORE the run: %s\n' "${SESSIONS_BEFORE}"
@@ -613,7 +613,7 @@ printf 'sessions in project wolf BEFORE the run: %s\n' "${SESSIONS_BEFORE}"
 # ── 4. The Wolf session image, built INSIDE DinD ────────────────────────────
 
 log "building the wolf session image inside DinD (a host-built image is invisible to sessions)"
-ORANGE_REPO="${ORANGE_REPO}" ORANGE_DIND_CONTAINER="${ORANGE_DIND_CONTAINER}" \
+BOB_REPO="${BOB_REPO}" BOB_DIND_CONTAINER="${BOB_DIND_CONTAINER}" \
   "${WOLF_REPO}/scripts/load-image-into-dind.sh"
 
 # ── 5. Wolf ─────────────────────────────────────────────────────────────────
@@ -622,12 +622,12 @@ ORANGE_REPO="${ORANGE_REPO}" ORANGE_DIND_CONTAINER="${ORANGE_DIND_CONTAINER}" \
 # agentd and wolf-api on. See note 4 in the header for why the boot probe's
 # answer is the wrong one.
 dind_gateway() {
-  docker exec "${ORANGE_DIND_CONTAINER}" ip -4 -o addr show docker0 \
+  docker exec "${BOB_DIND_CONTAINER}" ip -4 -o addr show docker0 \
     | awk '{print $4}' | cut -d/ -f1 | head -1
 }
 
 GATEWAY="$(dind_gateway)"
-[ -n "${GATEWAY}" ] || fail "could not read docker0's address inside ${ORANGE_DIND_CONTAINER}"
+[ -n "${GATEWAY}" ] || fail "could not read docker0's address inside ${BOB_DIND_CONTAINER}"
 printf 'DinD inner docker0 gateway: %s (sessions reach agentd at %s:8099 and wolf-api at %s:%s)\n' \
   "${GATEWAY}" "${GATEWAY}" "${GATEWAY}" "${WOLF_API_PORT}"
 
@@ -637,10 +637,10 @@ wolf_compose() {
   ( cd "${WOLF_REPO}" && env \
       WOLF_WEB_PORT="${WOLF_WEB_PORT}" \
       WOLF_API_PORT="${WOLF_API_PORT}" \
-      ORANGE_DIND_CONTAINER="${ORANGE_DIND_CONTAINER}" \
-      ORANGE_BASE_URL=http://localhost:8099 \
-      ORANGE_PUBLIC_URL="${ORANGE_BASE}" \
-      VITE_ORANGE_PUBLIC_URL="${ORANGE_BASE}" \
+      BOB_DIND_CONTAINER="${BOB_DIND_CONTAINER}" \
+      BOB_BASE_URL=http://localhost:8099 \
+      BOB_PUBLIC_URL="${BOB_BASE}" \
+      VITE_BOB_PUBLIC_URL="${BOB_BASE}" \
       WOLF_MCP_URL="${WOLF_MCP_URL}" \
       WOLF_API_KEY="${WOLF_API_KEY}" \
       WOLF_MCP_TOKEN="${WOLF_MCP_TOKEN}" \
@@ -670,7 +670,7 @@ log "starting agent-wolf (web on ${WOLF_WEB_PORT}, schedule cron '* * * * *' —
 wolf_compose up -d --build
 # The environment above changes between runs (a fresh WOLF_API_KEY each time),
 # so `up -d` recreates wolf-api on its own; wolf-web is a BUILT bundle and is
-# rebuilt by --build whenever VITE_ORANGE_PUBLIC_URL changes.
+# rebuilt by --build whenever VITE_BOB_PUBLIC_URL changes.
 
 wait_for "wolf-web /api/auth/me" 120 \
   bash -c "test \"\$(curl -s -o /dev/null -w '%{http_code}' '${WOLF_BASE}/api/auth/me')\" = 401"
@@ -699,12 +699,12 @@ echo "offline proof: FRED_API_KEY inside wolf-api has length 0 — no live marke
 # WORKS is made by a spec that exercised it.
 log "the two stacks' resolved configuration (secrets redacted — R82)"
 {
-  echo "--- agent-orange/agentd ---"
-  orange_compose config 2>/dev/null | redact \
+  echo "--- agent-bob/agentd ---"
+  bob_compose config 2>/dev/null | redact \
     | grep -E '^ +(ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN|AGENTKIT_MCP_ENV|AGENTKIT_MOCK_MODEL_SCRIPT_FILE|AGENTKIT_BLOB_BACKEND|AGENTKIT_REGISTRY_BACKEND|AGENTKIT_SELF_URL|WOLF_API_KEY|WOLF_MCP_TOKEN):'
   echo "--- agent-wolf ---"
   wolf_compose config 2>/dev/null | redact \
-    | grep -E '^ +(WOLF_API_KEY|WOLF_MCP_TOKEN|WOLF_MCP_URL|WOLF_SCHEDULE_CRON|WOLF_POLL_INTERVAL_SECONDS|WOLF_BASE_IMAGE|ORANGE_PUBLIC_URL|VITE_ORANGE_PUBLIC_URL):'
+    | grep -E '^ +(WOLF_API_KEY|WOLF_MCP_TOKEN|WOLF_MCP_URL|WOLF_SCHEDULE_CRON|WOLF_POLL_INTERVAL_SECONDS|WOLF_BASE_IMAGE|BOB_PUBLIC_URL|VITE_BOB_PUBLIC_URL):'
 } || true
 
 # ── 6. Bootstrap the `wolf` project ─────────────────────────────────────────
@@ -713,7 +713,7 @@ log "the two stacks' resolved configuration (secrets redacted — R82)"
 
 log "bootstrapping the wolf project (settings, interviewer, critic, critic schedule)"
 ( cd "${WOLF_REPO}" && env \
-    ORANGE_BASE_URL="${ORANGE_BASE}" \
+    BOB_BASE_URL="${BOB_BASE}" \
     WOLF_API_KEY="${WOLF_API_KEY}" \
     WOLF_MCP_TOKEN="${WOLF_MCP_TOKEN}" \
     WOLF_MCP_URL="${WOLF_MCP_URL}" \
@@ -738,9 +738,9 @@ log "running playwright${SPEC_FILTER:+ (filter: ${SPEC_FILTER})}"
 set +e
 ( cd "${E2E_DIR}" && env \
     X1_WOLF_BASE="${WOLF_BASE}" \
-    X1_ORANGE_BASE="${ORANGE_BASE}" \
-    X1_ORANGE_PROJECT="${ORANGE_PROJECT}" \
-    X1_DIND_CONTAINER="${ORANGE_DIND_CONTAINER}" \
+    X1_BOB_BASE="${BOB_BASE}" \
+    X1_BOB_PROJECT="${BOB_PROJECT}" \
+    X1_DIND_CONTAINER="${BOB_DIND_CONTAINER}" \
     X1_LOGIN_EMAIL="${X1_LOGIN_EMAIL}" \
     X1_LOGIN_PASSWORD="${X1_LOGIN_PASSWORD}" \
     X1_RUN_MANIFEST="${X1_RUN_MANIFEST}" \

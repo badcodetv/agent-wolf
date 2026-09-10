@@ -2,7 +2,7 @@
  * W7 — the two `wolf` MCP tools, `series_search` and `series_fetch`, and
  * the market-data seam they and the download route share.
  *
- * design/2026-08-20-agent-wolf.md § "Market-data MCP tools" (agent-orange
+ * design/2026-08-20-agent-wolf.md § "Market-data MCP tools" (agent-bob
  * repo):
  *
  *   series_search(query, source?) → { results: [{ source, id, title, unit,

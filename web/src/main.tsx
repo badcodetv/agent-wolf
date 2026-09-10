@@ -9,7 +9,7 @@ import { useWolfTheme } from "./theme.js";
  * reads `prefers-color-scheme`, exactly as the Orange rail Wolf iframes does
  * (`examples/web/src/EmbedSession.tsx:77-80`). A toggle here would let the page
  * and the rail inside it disagree, with no way to reconcile them. See
- * design/2026-08-24-agent-wolf-ui.md § 2b principle 5 (agent-orange repo).
+ * design/2026-08-24-agent-wolf-ui.md § 2b principle 5 (agent-bob repo).
  *
  * It is a hook, so it needs a component: `createRoot(...).render()` cannot call
  * one directly.

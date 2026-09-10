@@ -41,7 +41,7 @@
  * cannot obtain a real Google ID token:
  *
  *     WOLF_TEST_LOGIN="you@example.com:somepassword" \
- *       ../agent-orange/stack wolf up --skip-image
+ *       ../agent-bob/stack wolf up --skip-image
  *
  * It loads an EXISTING hypothesis and sends no message, so it makes no model
  * call and bills nothing.

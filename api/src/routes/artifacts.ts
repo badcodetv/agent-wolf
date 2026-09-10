@@ -47,8 +47,8 @@
 import { Router, type Request, type Response } from "express";
 
 import type { Logger } from "../logger.js";
-import type { OrangeClient } from "../orange/client.js";
-import type { ArtifactRecord } from "../orange/types.js";
+import type { BobClient } from "../bob/client.js";
+import type { ArtifactRecord } from "../bob/types.js";
 import { requireSignedIn } from "../auth/session.js";
 import { sessionNameForHypothesis } from "../hypothesis/store.js";
 import { requireHypothesisId } from "./embed.js";
@@ -103,7 +103,7 @@ export function artifactRow(record: ArtifactRecord): ArtifactRow {
 }
 
 export interface CreateArtifactsRouterOptions {
-  client: OrangeClient;
+  client: BobClient;
   logger: Logger;
 }
 

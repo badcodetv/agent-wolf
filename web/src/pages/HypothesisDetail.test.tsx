@@ -95,7 +95,7 @@ describe("HypothesisDetail (W13's frame; W14 fills the left column)", () => {
     await renderDetail({ [DETAIL]: { json: detailBody() }, [TOKEN]: tokenRoute });
     expect(screen.getByText("Petrodollar / drone parts")).toBeInTheDocument();
     expect(screen.getByTestId("chat-rail")).toHaveAttribute("data-rail-mode", "rail");
-    expect(screen.getByTestId("orange-chat-frame")).toBeInTheDocument();
+    expect(screen.getByTestId("bob-chat-frame")).toBeInTheDocument();
   });
 
   it("takes the Go Live gate from spec_validation and report.has_template, and nothing else", async () => {

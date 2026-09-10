@@ -60,8 +60,8 @@ import { readFileSync } from "node:fs";
 
 import { WolfError } from "../errors.js";
 import type { Logger } from "../logger.js";
-import type { OrangeClient } from "../orange/client.js";
-import type { DeliveryRecord, MemorySearchResultRow } from "../orange/types.js";
+import type { BobClient } from "../bob/client.js";
+import type { DeliveryRecord, MemorySearchResultRow } from "../bob/types.js";
 import { validateSpec, type Spec, type SpecError } from "./spec.js";
 import type { EvaluationResult } from "./evaluate.js";
 import {
@@ -303,7 +303,7 @@ export interface ProvisionerConfig {
 }
 
 export interface CreateProvisionerOptions {
-  client: OrangeClient;
+  client: BobClient;
   store: HypothesisStore;
   logger: Logger;
   config: ProvisionerConfig;

@@ -1,10 +1,10 @@
-# Agent Wolf — local topology. Bring agent-orange up FIRST (its compose
+# Agent Wolf — local topology. Bring agent-bob up FIRST (its compose
 # network and dind container must already exist), then:
 #   cp .env.example .env && docker compose up --build
 # Then open http://localhost:${WOLF_WEB_PORT:-8081}
 #
 # See design/2026-08-20-agent-wolf.md § "Local topology and networking"
-# (agent-orange repo) for why this shape is mandatory, not a convenience:
+# (agent-bob repo) for why this shape is mandatory, not a convenience:
 # agentd shares DinD's network namespace in the standalone stack, so nested
 # session containers cannot resolve compose DNS and cannot reach a wolf-api
 # sitting on the ordinary compose network. wolf-api therefore shares that
@@ -14,12 +14,12 @@ services:
     build:
       context: .
       dockerfile: api/Dockerfile
-    # Shares agent-orange's dind container's network namespace: reaches
+    # Shares agent-bob's dind container's network namespace: reaches
     # agentd at http://localhost:8099 (same netns) and is reachable FROM
     # session containers at http://172.17.0.1:${WOLF_API_PORT}. This service
     # therefore has no `networks:` of its own and publishes no host port —
     # only wolf-web does, below.
-    network_mode: "container:${ORANGE_DIND_CONTAINER:-agent-orange-dind-1}"
+    network_mode: "container:${BOB_DIND_CONTAINER:-agent-bob-dind-1}"
     environment:
       WOLF_API_PORT: ${WOLF_API_PORT:-8100}
       LOG_LEVEL: ${LOG_LEVEL:-info}
@@ -48,16 +48,16 @@ services:
       # here (R81). WOLF_API_KEY, WOLF_ALLOWED_EMAILS and WOLF_SESSION_SECRET
       # are all REQUIRED — wolf-api refuses to boot without them, naming the
       # one that is missing.
-      ORANGE_BASE_URL: ${ORANGE_BASE_URL:-}
+      BOB_BASE_URL: ${BOB_BASE_URL:-}
       # W11's embed URLs: the BROWSER-reachable Orange origin, which is not
-      # ORANGE_BASE_URL (that one is agentd inside DinD's netns). Optional —
+      # BOB_BASE_URL (that one is agentd inside DinD's netns). Optional —
       # it carries its http://localhost:8080 default from api/src/config.ts
       # when left empty — which is exactly why it needs a line here
       # (R81/R110): without one, the origin an operator sets in .env never
       # reaches this container and every embed_url points at localhost:8080
       # regardless. api/src/config.test.ts's "R81/R110" block fails if this
       # line is missing.
-      ORANGE_PUBLIC_URL: ${ORANGE_PUBLIC_URL:-}
+      BOB_PUBLIC_URL: ${BOB_PUBLIC_URL:-}
       WOLF_API_KEY: ${WOLF_API_KEY:-}
       WOLF_ALLOWED_EMAILS: ${WOLF_ALLOWED_EMAILS:-}
       WOLF_SESSION_SECRET: ${WOLF_SESSION_SECRET:-}
@@ -104,7 +104,7 @@ services:
       # read by web/src/env.ts still never reaches the bundle without a line
       # HERE — the same class of omission as R81, one layer further out.
       #
-      # ⚠️ VITE_ORANGE_PUBLIC_URL must equal wolf-api's ORANGE_PUBLIC_URL and
+      # ⚠️ VITE_BOB_PUBLIC_URL must equal wolf-api's BOB_PUBLIC_URL and
       # must be listed in the `wolf` project's `allowed_origins` in Orange's
       # project map. Two variables, one origin, and nothing checks that they
       # agree — see .env.example.
@@ -112,13 +112,13 @@ services:
       # ⚠️ Changing either value requires a REBUILD (`docker compose up -d
       # --build wolf-web`); restarting the container changes nothing.
       args:
-        VITE_ORANGE_PUBLIC_URL: ${VITE_ORANGE_PUBLIC_URL:-http://localhost:8080}
+        VITE_BOB_PUBLIC_URL: ${VITE_BOB_PUBLIC_URL:-http://localhost:8080}
         VITE_GOOGLE_CLIENT_ID: ${VITE_GOOGLE_CLIENT_ID:-}
-    # External: agent-orange's own `docker compose up` must have created
-    # this network already (compose project name "agent-orange" + its
-    # default network name "default" -> "agent-orange_default").
+    # External: agent-bob's own `docker compose up` must have created
+    # this network already (compose project name "agent-bob" + its
+    # default network name "default" -> "agent-bob_default").
     networks:
-      - agent-orange_default
+      - agent-bob_default
     ports:
       - "${WOLF_WEB_PORT:-8081}:80"
     environment:
@@ -130,5 +130,5 @@ services:
     restart: unless-stopped
 
 networks:
-  agent-orange_default:
+  agent-bob_default:
     external: true

@@ -24,13 +24,13 @@ import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { WolfError } from "../errors.js";
 import type { Logger } from "../logger.js";
-import type { OrangeClient } from "../orange/client.js";
+import type { BobClient } from "../bob/client.js";
 import type {
   AttentionRequestRecord,
   MemorySearchResultRow,
   UnixMs,
   UnixSec,
-} from "../orange/types.js";
+} from "../bob/types.js";
 import { requireSignedIn, signedInUser } from "../auth/session.js";
 import { loadConfig, type WolfConfig } from "../config.js";
 import { validateSpec, type SpecError } from "../hypothesis/spec.js";
@@ -442,7 +442,7 @@ export interface CreateHypothesesRouterOptions {
    * holder of one.
    */
   store: HypothesisStore;
-  client: OrangeClient;
+  client: BobClient;
   logger: Logger;
   /** Overridable so tests do not wait real seconds on the create poll. */
   sessionPollIntervalMs?: number;

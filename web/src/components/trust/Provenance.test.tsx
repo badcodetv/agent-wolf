@@ -1,5 +1,5 @@
 /**
- * W28 — Channel P. `design/2026-08-24-agent-wolf-ui.md` § 2 (agent-orange repo).
+ * W28 — Channel P. `design/2026-08-24-agent-wolf-ui.md` § 2 (agent-bob repo).
  *
  * The load-bearing test in this file is the last one: the `model` ground uses
  * **no** semantic palette colour, at any shade, in either mode. If provenance

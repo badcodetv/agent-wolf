@@ -23,7 +23,7 @@ import {
 
 // design/2026-08-20-agent-wolf.md, W1 acceptance criteria (rewritten
 // 2026-08-21 after three failed verification rounds — see R38 in the
-// Discovered Issues Log): "web/ imports nothing from agent-orange" is
+// Discovered Issues Log): "web/ imports nothing from agent-bob" is
 // graded on an explicit, enumerated list of files, specifier forms,
 // specifier kinds and config/manifest escape routes — not on the phrase
 // "any import specifier". The checker itself (file set, specifier forms,
@@ -86,9 +86,9 @@ describe("web/ import boundary", () => {
     expect(report.tsconfigPathsViolations).toEqual([]);
   });
 
-  it("never mentions agent-orange in any import specifier", async () => {
+  it("never mentions agent-bob in any import specifier", async () => {
     const report = await runCheck();
-    expect(report.agentOrangeMentionViolations).toEqual([]);
+    expect(report.agentBobMentionViolations).toEqual([]);
   });
 
   it("has no file:/link:/portal: dependency resolving outside the repo", async () => {
@@ -120,7 +120,7 @@ describe("web/ import boundary", () => {
   // per the criterion's own rule, "the suite must not fail against its own
   // comments": this file is itself scanned by the very checks above, and a
   // literal import statement embedded as a string constant would trip the
-  // relative-import and agent-orange-mention checks against itself.
+  // relative-import and agent-bob-mention checks against itself.
   it("regression: a temporary .jsx file with an outside-the-repo relative import is picked up", () => {
     expect(SOURCE_EXTENSIONS.has(".jsx")).toBe(true);
     expect(SOURCE_EXTENSIONS.has(".js")).toBe(true);

@@ -2,7 +2,7 @@
  * The CHARTS section: one `GET /api/hypotheses/:id/series/:metric` per metric
  * in the locked spec, each rendered by `MetricChart`.
  *
- * The split is the same one `ChatRail`/`OrangeChatFrame` and
+ * The split is the same one `ChatRail`/`BobChatFrame` and
  * `ReportFrameHost`/`ReportPanel` make: this component knows how to ask, and
  * `MetricChart` knows how to draw. Only the drawing has interesting rules, and
  * keeping it free of fetching is what lets its whole suite run over fixtures.

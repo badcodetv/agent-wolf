@@ -15,7 +15,7 @@
  *
  * `ArtifactsPanel.test.tsx` asserts a `live` artifact's status dot against
  * Wolf's `success.main` **as a literal colour**, in both modes — the same
- * assertion `verify-package.sh` makes inside agent-orange, made again here at
+ * assertion `verify-package.sh` makes inside agent-bob, made again here at
  * the point of use, because that is what proves the shared component is themed
  * by its host rather than carrying Orange's palette with it.
  *
