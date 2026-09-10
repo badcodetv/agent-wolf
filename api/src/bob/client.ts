@@ -1,5 +1,5 @@
 /**
- * A typed client for every Orange route Wolf touches — the list is
+ * A typed client for every Bob route Wolf touches — the list is
  * exhaustive and closed at twenty-five routes; see
  * design/2026-08-20-agent-wolf.md § W2's Scope and § W2b's Scope (which
  * added the twenty-third, `GET /agent/workers/{name}`, by owner ruling R91
@@ -93,13 +93,13 @@ export interface BobClient {
    * `POST /agent/session/{id}/message` — one turn, streamed back as SSE.
    *
    * 🔴 **This resolves when the TURN ends, not when the message is accepted**,
-   * because Orange's handler streams the whole turn down this response and
+   * because Bob's handler streams the whole turn down this response and
    * `r.Context()` cancels the turn if the client goes away
    * (`go/httpapi/stream.go:105-137`: "disconnect teardown via r.Context()").
    * So a caller that wants to seed a conversation without waiting must run
    * this in the background and MUST NOT abort it — hanging up early kills the
    * very turn it started. The SSE body is read to completion for exactly that
-   * reason and then thrown away; the events are persisted on Orange's side and
+   * reason and then thrown away; the events are persisted on Bob's side and
    * the browser reads them from the session's own stream.
    */
   sendMessage(sessionId: string, content: string): Promise<void>;
@@ -107,7 +107,7 @@ export interface BobClient {
    * `GET /agent/session/{id}/status` — is a turn in flight?
    *
    * `activeQueryId` is the id of the turn currently running, or `null` when
-   * Orange says nothing is running. Those two are DIFFERENT from "the probe
+   * Bob says nothing is running. Those two are DIFFERENT from "the probe
    * failed", which throws: a caller must never read a failed probe as "idle".
    */
   getSessionStatus(sessionId: string): Promise<{ activeQueryId: string | null }>;
@@ -118,7 +118,7 @@ export interface BobClient {
   listMemories(params?: ListMemoriesParams): Promise<MemorySearchResultRow[]>;
   /**
    * `GET /agent/memories/{id}` — FULL content, not the 500-character snippet
-   * the list route returns. Deliberately not retraction-filtered on the Orange
+   * the list route returns. Deliberately not retraction-filtered on the Bob
    * side (`go/agentdb/memories.go:281-283`: "fetching a specific id is an
    * explicit request for that row"), which is what lets W15's report reads
    * serve a template a hostile retraction tried to hide.
@@ -131,7 +131,7 @@ export interface BobClient {
    * carrying `name=<name>`.
    *
    * ⚠️ `kind` is filtered CLIENT-SIDE and cannot be pushed to the server.
-   * Orange's route builds the selector as exactly `"name=" + name`
+   * Bob's route builds the selector as exactly `"name=" + name`
    * (`go/httpapi/memories.go:391`) and accepts no other parameter, so it
    * answers with the newest memory of ANY kind carrying that name — and every
    * kind in Wolf's vocabulary shares `name=<hypothesis id>`. Passing `kind`
@@ -177,11 +177,11 @@ export interface BobClient {
   /**
    * `GET /agent/sessions/by-name/{name}/artifacts` (W29) — the METADATA list
    * for one session, addressed by the name Wolf chose (`hyp-<id>`) rather than
-   * by an Orange uuid Wolf would have to hold.
+   * by an Bob uuid Wolf would have to hold.
    *
    * A bare JSON array on the wire (`writeJSON(w, list)`), not a
    * `{"artifacts":[…]}` envelope — unlike memories, datasets and schedules.
-   * A 404 is an absent session (Orange resolves the name first and does not
+   * A 404 is an absent session (Bob resolves the name first and does not
    * distinguish "no such session" from "another project's session", by
    * design), and maps to `not_found` through the default status table.
    */
@@ -194,7 +194,7 @@ export interface BobClient {
    *
    * The path travels as a QUERY parameter and must not be folded into the URL
    * path: a stored `filePath` contains slashes, and encoding them into the
-   * path would address a route that does not exist. Orange normalises the
+   * path would address a route that does not exist. Bob normalises the
    * leading slash for us (`slashVariants`), so `report.md` and `/report.md`
    * find the same row.
    */
@@ -272,7 +272,7 @@ async function safeText(res: Response): Promise<string> {
 function classifyStatus(status: number): WolfErrorKind {
   switch (status) {
     case 401:
-      // W15: this case was MISSING, so an Orange 401 fell through `default`
+      // W15: this case was MISSING, so an Bob 401 fell through `default`
       // and arrived as kind `internal` — "WE have a bug" — for what is in fact
       // a rejected credential. W8 needed `POST /auth/verify-google`'s 401 to
       // read as `forbidden` and worked around it by branching on
@@ -314,11 +314,11 @@ function defaultErrorFor(status: number, method: string, path: string, bodyText:
     // config value that answer always traces back to.
     return new WolfError(
       "misconfigured",
-      `Orange ${method} ${path}: the product layer is not configured (DATABASE_URL)`,
+      `Bob ${method} ${path}: the product layer is not configured (DATABASE_URL)`,
       { status, upstreamBody: bodyText, details: { variable: "DATABASE_URL" } },
     );
   }
-  return new WolfError(kind, `Orange ${method} ${path} failed with status ${status}`, {
+  return new WolfError(kind, `Bob ${method} ${path} failed with status ${status}`, {
     status,
     upstreamBody: bodyText,
   });
@@ -337,8 +337,8 @@ async function doRequest(ctx: ClientContext, opts: RequestOptions): Promise<Requ
   try {
     res = await fetch(url, { method: opts.method, headers, body });
   } catch (err) {
-    ctx.logger.warn({ method: opts.method, path: opts.path }, "orange request: network error");
-    throw new WolfError("unavailable", `Orange is unreachable: ${opts.method} ${opts.path}`, {
+    ctx.logger.warn({ method: opts.method, path: opts.path }, "bob request: network error");
+    throw new WolfError("unavailable", `Bob is unreachable: ${opts.method} ${opts.path}`, {
       cause: err,
     });
   }
@@ -350,15 +350,15 @@ async function doRequest(ctx: ClientContext, opts: RequestOptions): Promise<Requ
       const bodyText = await safeText(res);
       ctx.logger.warn(
         { method: opts.method, path: opts.path, status: res.status },
-        "orange request: unexpected success status",
+        "bob request: unexpected success status",
       );
       throw new WolfError(
         "internal",
-        `Orange ${opts.method} ${opts.path} returned unexpected status ${res.status}`,
+        `Bob ${opts.method} ${opts.path} returned unexpected status ${res.status}`,
         { status: res.status, upstreamBody: bodyText },
       );
     }
-    ctx.logger.info({ method: opts.method, path: opts.path, status: res.status }, "orange request: ok");
+    ctx.logger.info({ method: opts.method, path: opts.path, status: res.status }, "bob request: ok");
     if (opts.parse === "bytes") {
       const bytes = await res.arrayBuffer();
       return { status: res.status, bytes, contentType: res.headers.get("content-type") ?? "" };
@@ -374,7 +374,7 @@ async function doRequest(ctx: ClientContext, opts: RequestOptions): Promise<Requ
   const err = opts.errorOverride?.(res.status, bodyText) ?? defaultErrorFor(res.status, opts.method, opts.path, bodyText);
   ctx.logger.warn(
     { method: opts.method, path: opts.path, status: res.status, kind: err.kind },
-    "orange request: failed",
+    "bob request: failed",
   );
   throw err;
 }
@@ -450,7 +450,7 @@ function labelsField(raw: Record<string, unknown>): Record<string, string> {
   return out;
 }
 
-// ── Response mappers: Orange's snake_case wire → this module's camelCase types ──
+// ── Response mappers: Bob's snake_case wire → this module's camelCase types ──
 
 function mapMemoryRetraction(raw: unknown, where: string): MemoryRetraction {
   if (!isRecord(raw)) throw invalidShape(where, "expected a retraction object");
@@ -493,7 +493,7 @@ function mapMemoryRecord(raw: unknown, where: string): MemoryRecord {
 }
 
 /**
- * `version` is required and must be numeric — an envelope Orange did not
+ * `version` is required and must be numeric — an envelope Bob did not
  * actually send (or a version-less row) is an `invalid` error, never a
  * silently-`undefined` field. W10's version gate compares `version`
  * values on every tick; `undefined !== undefined` is `false`, so a quiet
@@ -608,7 +608,7 @@ function mapProjectSettings(raw: unknown, where: string): ProjectSettings {
 }
 
 /**
- * Orange's artifact row. 🔴 The wire is **camelCase here and nowhere else** on
+ * Bob's artifact row. 🔴 The wire is **camelCase here and nowhere else** on
  * this client — see `ArtifactRecord`'s doc comment. `blobPath` and `meta` are
  * read by nothing: the blob path is the store's own object key.
  */
@@ -664,7 +664,7 @@ function createSession(
         // sees "403 Forbidden", concludes the condition is permanent, and
         // stops retrying the one outage that genuinely clears when a finished
         // session is deleted. The status is restated at 503; the MESSAGE and
-        // `upstreamBody` are Orange's, verbatim, because "host port pool is
+        // `upstreamBody` are Bob's, verbatim, because "host port pool is
         // exhausted" is the only actionable part of it, and the upstream
         // status is preserved in `details` rather than thrown away.
         return new WolfError("unavailable", bodyText, {
@@ -762,7 +762,7 @@ function listSessions(ctx: ClientContext, params?: ListSessionsParams): Promise<
 function appendMemory(ctx: ClientContext, params: AppendMemoryParams): Promise<MemoryRecord> {
   const body: Record<string, unknown> = { labels: params.labels, content: params.content };
   if (params.embed !== undefined) body.embed = params.embed;
-  // Orange's append route answers 201 (R36); any other 2xx is a silent
+  // Bob's append route answers 201 (R36); any other 2xx is a silent
   // contract change and must surface as an error rather than be absorbed.
   return doRequest(ctx, {
     method: "POST",
@@ -809,7 +809,7 @@ function getCurrentMemory(ctx: ClientContext, name: string, kind?: string): Prom
     // The kind assertion is client-side because the route has nowhere to put
     // it — see the interface comment. Reported as `not_found` rather than
     // `invalid`: from the caller's point of view "the current memory named X
-    // is not a Y" is exactly "there is no current Y named X", and Orange
+    // is not a Y" is exactly "there is no current Y named X", and Bob
     // already answers 404 for the neighbouring case.
     if (kind !== undefined && record.labels["kind"] !== kind) {
       throw new WolfError(
@@ -1019,14 +1019,14 @@ function verifyGoogle(ctx: ClientContext, credential: string): Promise<VerifyGoo
     method: "POST",
     path: "/auth/verify-google",
     jsonBody: { credential },
-    // Orange 404s this route when GOOGLE_CLIENT_ID is unset on Orange
+    // Bob 404s this route when GOOGLE_CLIENT_ID is unset on Bob
     // itself — a configuration hole, not a rejected user (§ "One
     // documented exception to that table").
     errorOverride: (status, bodyText) => {
       if (status === 404) {
         return new WolfError(
           "misconfigured",
-          "Orange: GOOGLE_CLIENT_ID is not set — /auth/verify-google is not mounted",
+          "Bob: GOOGLE_CLIENT_ID is not set — /auth/verify-google is not mounted",
           { status, upstreamBody: bodyText, details: { variable: "GOOGLE_CLIENT_ID" } },
         );
       }
@@ -1044,7 +1044,7 @@ function listSessionArtifacts(ctx: ClientContext, sessionName: string): Promise<
     method: "GET",
     path: `/agent/sessions/by-name/${encodeURIComponent(sessionName)}/artifacts`,
   }).then(({ json }) => {
-    // A BARE array, unlike every other list route on this client. Orange
+    // A BARE array, unlike every other list route on this client. Bob
     // normalises a nil slice to `[]` before writing it, so an empty session is
     // an empty array and never `null`.
     if (!Array.isArray(json)) throw invalidShape(where, "expected a bare array");
@@ -1062,7 +1062,7 @@ function getSessionArtifactFile(
     path: `/agent/sessions/by-name/${encodeURIComponent(sessionName)}/artifacts/file`,
     // A QUERY parameter, never a path segment: a stored file path contains
     // slashes and belongs in `?path=`, which is the only thing this route
-    // reads (a session id in the query is ignored by Orange on purpose).
+    // reads (a session id in the query is ignored by Bob on purpose).
     query: { path: filePath },
     parse: "bytes",
   }).then(({ bytes, contentType }) => ({

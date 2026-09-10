@@ -59,7 +59,7 @@ async function listen(app: express.Express): Promise<string> {
  * A minimal app carrying the same three pieces the real one does — the
  * signing secret, a route that mints a cookie, and a router that guards
  * itself — so the cookie's flags and the guard can be exercised without
- * standing up Orange.
+ * standing up Bob.
  */
 async function harness(cfg: WolfConfig = config()): Promise<string> {
   const app = express();

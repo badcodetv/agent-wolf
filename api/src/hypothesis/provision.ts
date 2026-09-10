@@ -8,7 +8,7 @@
  *
  * ## 1. Provisioning order, because rollback has to be possible
  *
- * Orange's memories are append-only: there is no update and no delete, and
+ * Bob's memories are append-only: there is no update and no delete, and
  * "changing" one means appending a newer one. So the trusted
  * `kind=hypothesis, status=live` row must be written **last**. Written
  * earlier, a rollback is unsatisfiable — nothing can take it back, and the
@@ -207,7 +207,7 @@ const KIND_SPEC_AMENDMENT = "spec-amendment";
 const KIND_EVALUATION = "evaluation";
 const KIND_VERDICT = "verdict";
 
-/** The per-hypothesis daily researcher's worker name (§ "Orange atoms"). */
+/** The per-hypothesis daily researcher's worker name (§ "Bob atoms"). */
 export const RESEARCHER_WORKER_PREFIX = "researcher-";
 
 export function researcherWorkerFor(id: string): string {
@@ -226,7 +226,7 @@ const ROW_LIMIT = 50;
  * flight right now" (step 4's exclusion) — and the second needs `running`
  * rows that a `pending` filter would hide. Asking twice would be a second
  * request; one unfiltered page, split client-side, is one. The page is
- * therefore raised to Orange's own clamp ceiling, because it now has to
+ * therefore raised to Bob's own clamp ceiling, because it now has to
  * cover terminal rows as well (`clampLimit`, `go/agentdb/events.go`, caps at
  * 1000).
  */

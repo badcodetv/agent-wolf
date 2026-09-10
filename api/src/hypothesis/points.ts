@@ -183,7 +183,7 @@ export function parseCanonicalCsv(text: string, where?: string): Point[] {
   return points;
 }
 
-/** The bytes an Orange dataset download returns → `Point[]`. UTF-8, always. */
+/** The bytes an Bob dataset download returns → `Point[]`. UTF-8, always. */
 export function parseCanonicalCsvBytes(bytes: ArrayBuffer, where?: string): Point[] {
   return parseCanonicalCsv(new TextDecoder("utf-8").decode(bytes), where);
 }

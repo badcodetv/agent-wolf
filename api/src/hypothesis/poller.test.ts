@@ -30,14 +30,14 @@ import {
 // design/2026-08-20-agent-wolf.md, W10's acceptance criteria. Test names are
 // prefixed `poller_`.
 //
-// Orange is mocked with undici's MockAgent (the pinned mechanism) by a stub
+// Bob is mocked with undici's MockAgent (the pinned mechanism) by a stub
 // that keeps REAL STATE: memories it is POSTed come back on the next read, so
 // "an unchanged evaluation appends nothing" is a fact about what the poller
 // wrote rather than a restatement of the assertion above it. Every request is
 // recorded in order, which is how the version gate ("a second poll issues NO
 // download") is gated at all.
 
-const ORANGE = "http://orange.test:4100";
+const BOB = "http://bob.test:4100";
 const API_KEY = "wolf-project-api-key-for-tests";
 const OWNER = "kai@badcode.dev";
 const ID = "1a2b3c4d";
@@ -91,7 +91,7 @@ const CSV_HOLDING = "timestamp,value\n2026-08-18T00:00:00Z,100\n2026-08-19T00:00
 /** Header only — zero observations, so the condition is INDETERMINATE. */
 const CSV_EMPTY = "timestamp,value\n";
 
-// ── The stub Orange ─────────────────────────────────────────────────────
+// ── The stub Bob ─────────────────────────────────────────────────────
 
 interface Recorded {
   method: string;
@@ -239,7 +239,7 @@ class Stub {
           const path = String(opts.path);
           const body = typeof opts.body === "string" ? opts.body : "";
           this.requests.push({ method, path, body });
-          const answer = this.route(method, new URL(path, ORANGE), body);
+          const answer = this.route(method, new URL(path, BOB), body);
           return {
             statusCode: answer.status,
             data: answer.body as never,
@@ -328,7 +328,7 @@ class Stub {
       let rows = this.memories
         .filter((row) => Object.entries(wanted).every(([k, v]) => row.labels[k] === v))
         .slice()
-        .reverse(); // newest first, exactly as Orange orders them
+        .reverse(); // newest first, exactly as Bob orders them
       if (url.searchParams.get("latest_per") === "name") {
         const seen = new Set<string>();
         rows = rows.filter((row) => {
@@ -428,7 +428,7 @@ beforeEach(() => {
   mockAgent = new MockAgent();
   mockAgent.disableNetConnect();
   setGlobalDispatcher(mockAgent);
-  pool = mockAgent.get(ORANGE);
+  pool = mockAgent.get(BOB);
 });
 
 afterEach(async () => {
@@ -450,7 +450,7 @@ function harness(config: StubConfig, pollIntervalSeconds = 300): Harness {
   const stub = new Stub(pool, config);
   stub.install();
   const logger = createLogger({ logLevel: "silent" });
-  const client = createBobClient({ baseUrl: ORANGE, apiKey: API_KEY, logger });
+  const client = createBobClient({ baseUrl: BOB, apiKey: API_KEY, logger });
   const store = createHypothesisStore({ client, logger });
   let clock = NOW_MS;
   const poller = createPoller({
@@ -1079,7 +1079,7 @@ function tickSessions(count: number, prefix = "sess-tick"): SessionRow[] {
 
 describe("poller_sweep", () => {
   it("poller_sweep: deletes every tick session past the 7th, newest first, WITHOUT consulting status", async () => {
-    // Orange has no "completed" session status: a finished tick reads
+    // Bob has no "completed" session status: a finished tick reads
     // running/active for up to 30 minutes and archived only afterwards, so a
     // status filter either sweeps nothing or deletes a session mid-dataset_put.
     const h = harness({
@@ -1155,7 +1155,7 @@ describe("poller_failures", () => {
       datasets: {
         [`${OTHER_ID}-basket`]: { version: 1, csv: CSV_HOLDING },
       },
-      fail: { [`GET /agent/datasets/${DATASET}`]: { status: 503, body: "orange is down" } },
+      fail: { [`GET /agent/datasets/${DATASET}`]: { status: 503, body: "bob is down" } },
     });
     const report = await h.poller.tick();
 
@@ -1242,7 +1242,7 @@ describe("poller_failures", () => {
   // ── The DATASET half of the trust model ───────────────────────────────
   //
   // 🔴 Memories were provenance-checked at every read and datasets were not,
-  // while BOTH decide status. Orange lets any session in the project write any
+  // while BOTH decide status. Bob lets any session in the project write any
   // dataset name (measured 2026-08-27: a container wrote and read
   // `hyp-victim-fable-probe-rate`, a name it did not own, and got version 2),
   // so a peer container could write TRIPPING values into this hypothesis's

@@ -18,7 +18,7 @@
  *     the state it computed on every tick; a machine that threw would force the
  *     poller to read-then-write under its own lock, which is more code at
  *     exactly the place concurrency bugs live.
- *  2. **The current state is re-read from Orange INSIDE the critical section.**
+ *  2. **The current state is re-read from Bob INSIDE the critical section.**
  *     There is no compare-and-swap on memories, so two writers that both read
  *     `challenged` and both appended would both succeed and the later one would
  *     silently win. Serialisation is per hypothesis id and in-process, which is
@@ -132,7 +132,7 @@ export function missingStateError(id: string, to: HypothesisStatus): WolfError {
 /**
  * An in-process async mutex keyed by a string. Work for the SAME key runs one
  * at a time, in the order it arrived; work for DIFFERENT keys runs
- * concurrently, which is what stops one hypothesis's slow Orange round-trip
+ * concurrently, which is what stops one hypothesis's slow Bob round-trip
  * from stalling every other hypothesis on the board.
  *
  * The tail of each key's chain is dropped once nothing is queued behind it, so

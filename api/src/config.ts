@@ -9,7 +9,7 @@ import { WolfError } from "./errors.js";
  * surface later as a confusing runtime error.
  *
  * Only the variables the scaffold itself needs are read here. Later tickets
- * (Orange client, market-data providers, embed tokens, …) extend this
+ * (Bob client, market-data providers, embed tokens, …) extend this
  * schema — see design/2026-08-20-agent-wolf.md § "Pinned technology
  * choices" and the per-ticket Files lists for what each one adds.
  *
@@ -50,7 +50,7 @@ const countSchema = z.coerce.number().int().min(1);
  *    standing between any process that can reach wolf-api and its
  *    market-data tools; a constant-time compare does not save a short one.
  *  - **`[A-Za-z0-9_-]` only** because the value travels as an HTTP header
- *    (`X-Wolf-Mcp-Token`) and through Orange's MCP header interpolation
+ *    (`X-Wolf-Mcp-Token`) and through Bob's MCP header interpolation
  *    (`${WOLF_MCP_TOKEN}`) and a shell `export` in X1's `run.sh` — spaces,
  *    quotes and `$` are how that chain breaks silently.
  *
@@ -61,7 +61,7 @@ const MCP_TOKEN_PATTERN = /^[A-Za-z0-9_-]{32,128}$/;
 
 /**
  * `WOLF_CRITIC_CRON`'s pinned shape (W12): a plain 5-field cron expression,
- * never a nickname. Orange's schedule store refuses `@weekly` and friends
+ * never a nickname. Bob's schedule store refuses `@weekly` and friends
  * outright (`go/agentdb/schedules.go:827`), so validating the shape here —
  * before it ever reaches `POST /agent/schedules` — turns a bad value into a
  * boot-time `misconfigured` error naming this variable, rather than a
@@ -130,7 +130,7 @@ export interface WolfConfig {
    * through the model's context and the persisted transcript. */
   seriesUrlTtlSeconds: number;
   /** `WOLF_BASE_IMAGE` (default `agent-wolf:dev`): the image every session
-   * in the `wolf` Orange project launches from, written into the project's
+   * in the `wolf` Bob project launches from, written into the project's
    * `base_image` setting by the bootstrap script (W12). Not read anywhere
    * else in this process — this is config for the bootstrap, not for
    * serving requests. */
@@ -163,7 +163,7 @@ export interface WolfConfig {
    * drain after its schedule is deleted, before proceeding anyway and
    * logging the delivery ids it left behind. A whole count of SECONDS. */
   teardownDrainSeconds: number;
-  /** `BOB_BASE_URL` (default `http://localhost:8099`): where Orange's
+  /** `BOB_BASE_URL` (default `http://localhost:8099`): where Bob's
    * agentd answers. In the compose stack wolf-api shares DinD's network
    * namespace, so agentd is on `localhost:8099` — which is why that is the
    * default rather than a compose service name. Pinned here (R92) because
@@ -171,36 +171,36 @@ export interface WolfConfig {
    * hardcoded default: no ticket in its dependency set owned `config.ts`.
    * A later ticket moves that reader onto this field; W12's bootstrap is
    * deliberately NOT edited here. */
-  orangeBaseUrl: string;
+  bobBaseUrl: string;
   /** `BOB_PUBLIC_URL` (default `http://localhost:8080`): the
-   * BROWSER-reachable Orange origin, and the base of the `embed_url` W11's
+   * BROWSER-reachable Bob origin, and the base of the `embed_url` W11's
    * embed-token route hands the UI.
    *
-   * Deliberately a SECOND variable rather than a reuse of `orangeBaseUrl`:
+   * Deliberately a SECOND variable rather than a reuse of `bobBaseUrl`:
    * that one is agentd as *this process* sees it (`http://localhost:8099`,
    * inside DinD's network namespace), which no browser can reach, and the
    * embed page is not served by agentd at all — nginx serves
    * `/embed/session/{name}` from the `web` service
    * (agent-bob `deploy/web.nginx.conf:19`), which is the only container
    * publishing a host port. Trailing slashes are trimmed at parse time so
-   * `${orangePublicUrl}/embed/session/hyp-<id>` never doubles a slash.
+   * `${bobPublicUrl}/embed/session/hyp-<id>` never doubles a slash.
    *
    * ⚠️ Its ORIGIN must also appear in the `wolf` project's
-   * `allowed_origins` on the Orange side (`AGENTKIT_PROJECT_MAP`, O8), or
+   * `allowed_origins` on the Bob side (`AGENTKIT_PROJECT_MAP`, O8), or
    * the embed page's `frame-ancestors` CSP blocks the iframe outright
    * (`go/cmd/agentd/embedcsp.go`). */
-  orangePublicUrl: string;
-  /** `WOLF_API_KEY`: the `wolf` project's Orange API key, sent as
-   * `X-API-Key` on every call wolf-api makes to Orange. Empty when unset —
+  bobPublicUrl: string;
+  /** `WOLF_API_KEY`: the `wolf` project's Bob API key, sent as
+   * `X-API-Key` on every call wolf-api makes to Bob. Empty when unset —
    * `createApp` refuses to build without it, so an unset key is a loud boot
    * failure naming the variable rather than a 403 on the first request.
    * It is a DIFFERENT credential from `WOLF_MCP_TOKEN` (which authenticates
    * a session container TO wolf-api). **Never log this value.** */
-  orangeApiKey: string;
+  bobApiKey: string;
   /** `WOLF_ALLOWED_EMAILS`, parsed: lowercased, whitespace-trimmed full
    * addresses. EMPTY WHEN UNSET, and `createApp` refuses to build on an
    * empty set — an empty allowlist must never silently mean "everyone".
-   * Orange verifying a Google credential is necessary, never sufficient. */
+   * Bob verifying a Google credential is necessary, never sufficient. */
   allowedEmails: ReadonlySet<string>;
   /** `WOLF_SESSION_SECRET`: the key `cookie-parser` signs the `wolf_session`
    * cookie with. Empty when unset; `createApp` refuses to build without it.
@@ -280,7 +280,7 @@ export const DEFAULT_WOLF_REPORT_MAX_BYTES = 512_000;
 export const DEFAULT_WOLF_SERIES_MAX_POINTS = 5000;
 
 /** Default `BOB_BASE_URL` (R92): agentd, seen from inside DinD's netns. */
-export const DEFAULT_ORANGE_BASE_URL = "http://localhost:8099";
+export const DEFAULT_BOB_BASE_URL = "http://localhost:8099";
 
 /**
  * Default `BOB_PUBLIC_URL` (W11): the agent-bob stack's `web` service as
@@ -288,7 +288,7 @@ export const DEFAULT_ORANGE_BASE_URL = "http://localhost:8099";
  * own README tells an operator to open — it is emphatically not 8099, which is
  * agentd inside DinD's netns and unreachable from a browser.
  */
-export const DEFAULT_ORANGE_PUBLIC_URL = "http://localhost:8080";
+export const DEFAULT_BOB_PUBLIC_URL = "http://localhost:8080";
 
 /** Minimum length of `WOLF_SESSION_SECRET`. */
 export const MIN_SESSION_SECRET_LENGTH = 32;
@@ -389,7 +389,7 @@ export function parseTestLogin(raw: string | undefined, nodeEnv: string): TestLo
 // reading taken from inside a nested container disagrees.
 //
 // 🔴 THE FAILURE MODE, because it is why this survived every ticket that
-// consumed the value: a wrong gateway here is written into the Orange
+// consumed the value: a wrong gateway here is written into the Bob
 // project's `mcp_config` as WOLF_MCP_URL, and every `mcp__wolf__*` call
 // from inside a session container then fails.
 //
@@ -577,7 +577,7 @@ export function loadConfig(
   // tests and tools that never mount /mcp) but not by `createWolfMcp`,
   // which every boot goes through — so an unset token is a loud boot
   // failure, never a silently unauthenticated MCP server. A value that IS
-  // set must be well formed; a token that Docker, a shell or Orange's
+  // set must be well formed; a token that Docker, a shell or Bob's
   // `${VAR}` interpolation would mangle is worse than no token, because it
   // fails at first tool call inside a container.
   const mcpToken = env.WOLF_MCP_TOKEN ?? "";
@@ -626,12 +626,12 @@ export function loadConfig(
     throw WolfError.misconfigured(
       "WOLF_CRITIC_CRON",
       "WOLF_CRITIC_CRON must be a plain 5-field cron expression (never a nickname like " +
-        `@weekly — Orange's schedule store rejects those), got ${JSON.stringify(env.WOLF_CRITIC_CRON)}`,
+        `@weekly — Bob's schedule store rejects those), got ${JSON.stringify(env.WOLF_CRITIC_CRON)}`,
     );
   }
 
   // W9's per-hypothesis daily schedule. Same 5-field rule as WOLF_CRITIC_CRON
-  // above, and for the same reason: Orange validates `cron` on write and
+  // above, and for the same reason: Bob validates `cron` on write and
   // refuses nicknames, so `@daily` would fail inside go-live's step 3 —
   // after the locked spec has already been appended, which is a rollback
   // this ticket then has to perform for a value that could have been
@@ -641,7 +641,7 @@ export function loadConfig(
     throw WolfError.misconfigured(
       "WOLF_SCHEDULE_CRON",
       "WOLF_SCHEDULE_CRON must be a plain 5-field cron expression (never a nickname like " +
-        `@daily — Orange's schedule store rejects those), got ${JSON.stringify(env.WOLF_SCHEDULE_CRON)}`,
+        `@daily — Bob's schedule store rejects those), got ${JSON.stringify(env.WOLF_SCHEDULE_CRON)}`,
     );
   }
 
@@ -679,8 +679,8 @@ export function loadConfig(
     );
   }
 
-  const orangeBaseUrl = present(env.BOB_BASE_URL)?.trim() ?? DEFAULT_ORANGE_BASE_URL;
-  if (!/^https?:\/\/[^\s]+$/.test(orangeBaseUrl)) {
+  const bobBaseUrl = present(env.BOB_BASE_URL)?.trim() ?? DEFAULT_BOB_BASE_URL;
+  if (!/^https?:\/\/[^\s]+$/.test(bobBaseUrl)) {
     throw WolfError.misconfigured(
       "BOB_BASE_URL",
       "BOB_BASE_URL must be an absolute http(s) URL (e.g. http://localhost:8099), got " +
@@ -693,9 +693,9 @@ export function loadConfig(
   // build `embed_url` as a bare `/embed/session/hyp-…`, a same-origin path
   // that resolves against WOLF's own origin and 404s in the iframe.
   // Trailing slashes are trimmed HERE, once, so no caller has to.
-  const orangePublicUrl = (present(env.BOB_PUBLIC_URL)?.trim() ?? DEFAULT_ORANGE_PUBLIC_URL)
+  const bobPublicUrl = (present(env.BOB_PUBLIC_URL)?.trim() ?? DEFAULT_BOB_PUBLIC_URL)
     .replace(/\/+$/, "");
-  if (!/^https?:\/\/[^\s]+$/.test(orangePublicUrl)) {
+  if (!/^https?:\/\/[^\s]+$/.test(bobPublicUrl)) {
     throw WolfError.misconfigured(
       "BOB_PUBLIC_URL",
       "BOB_PUBLIC_URL must be an absolute http(s) URL the BROWSER can reach " +
@@ -767,9 +767,9 @@ export function loadConfig(
     pollIntervalSeconds: pollIntervalResult.data,
     reportMaxBytes: reportMaxBytesResult.data,
     seriesMaxPoints: seriesMaxPointsResult.data,
-    orangeBaseUrl,
-    orangePublicUrl,
-    orangeApiKey: env.WOLF_API_KEY ?? "",
+    bobBaseUrl,
+    bobPublicUrl,
+    bobApiKey: env.WOLF_API_KEY ?? "",
     allowedEmails: parseAllowedEmails(env.WOLF_ALLOWED_EMAILS),
     sessionSecret,
     testLogin: parseTestLogin(env.WOLF_TEST_LOGIN, nodeEnv),

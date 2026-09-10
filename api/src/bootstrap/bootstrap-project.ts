@@ -2,7 +2,7 @@
  * The idempotent `wolf` project bootstrap (W12).
  *
  * design/2026-08-20-agent-wolf.md, ticket W12: this module creates EXACTLY
- * four atoms in the `wolf` Orange project, and a second run against an
+ * four atoms in the `wolf` Bob project, and a second run against an
  * already-bootstrapped project must issue no create/PUT call at all:
  *
  *   1. Project settings: `base_image`, `attention_channel` (explicitly
@@ -20,7 +20,7 @@
  * `getWorker`, `listSchedules` — exactly as the ticket's Depends-on note
  * requires. Worker reads used to be the one exception: W2's route list was
  * exhaustive and closed at 22 routes and had no `GET /agent/workers/{name}`
- * (only `PUT` and `DELETE` were wrapped), even though Orange's HTTP API
+ * (only `PUT` and `DELETE` were wrapped), even though Bob's HTTP API
  * serves that route (`go/httpapi/workers.go:77`). This module worked around
  * it with a narrowly-scoped raw `fetch`. W2b (owner ruling R91) added
  * `client.getWorker(name)` as the client's twenty-third route — the raw
@@ -55,7 +55,7 @@ export interface BootstrapProjectResult {
 }
 
 export interface BootstrapProjectOptions {
-  /** Orange's base URL, from wolf-api's own vantage point (shares DinD's netns: `http://localhost:8099` in the compose stack). */
+  /** Bob's base URL, from wolf-api's own vantage point (shares DinD's netns: `http://localhost:8099` in the compose stack). */
   baseUrl: string;
   /** The `wolf` project's API key (`WOLF_API_KEY`). */
   apiKey: string;
@@ -94,7 +94,7 @@ async function readWorker(
   }
 }
 
-/** Structural equality for the plain JSON objects this module compares (`mcp_config`, `attention_channel`). No cycles, no `Map`/`Set` — this only ever sees data that round-tripped through Orange's JSON wire format. */
+/** Structural equality for the plain JSON objects this module compares (`mcp_config`, `attention_channel`). No cycles, no `Map`/`Set` — this only ever sees data that round-tripped through Bob's JSON wire format. */
 function deepEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
@@ -132,7 +132,7 @@ async function ensureProjectSettings(
   // `attention_channel` is DELIBERATELY EMPTY, and must stay that way. Do not
   // "fix" this by inventing a URL.
   //
-  // Orange's only channel kind is an OUTBOUND WEBHOOK: `{"kind": "webhook",
+  // Bob's only channel kind is an OUTBOUND WEBHOOK: `{"kind": "webhook",
   // "url": "https://…"}`, POSTed to by agentd when a worker calls
   // `request_human_attention` (go/cmd/agentd/attention.go:57-103 — it requires
   // an http(s) URL and rejects anything else). Wolf exposes no such receiver:
@@ -241,13 +241,13 @@ export async function bootstrapProject(
 // here, NOT through api/src/config.ts's `WolfConfig`. This ticket's Files
 // line restricts config.ts to two variables (`WOLF_BASE_IMAGE`,
 // `WOLF_CRITIC_CRON`) — the file-ownership table serialises config.ts
-// across many tickets, and adding an Orange base URL / API key pair to its
+// across many tickets, and adding an Bob base URL / API key pair to its
 // typed schema is not this ticket's to make. `WOLF_MCP_URL` and
 // `WOLF_BASE_IMAGE`/`WOLF_CRITIC_CRON` DO come from `loadConfig()`, since
 // they already live there (the first was W1's, the latter two are this
 // ticket's own addition just above).
 
-const DEFAULT_ORANGE_BASE_URL = "http://localhost:8099";
+const DEFAULT_BOB_BASE_URL = "http://localhost:8099";
 
 function readPromptFile(relativePathFromRepoRoot: string): string {
   const here = dirname(fileURLToPath(import.meta.url));
@@ -271,10 +271,10 @@ export async function runBootstrapFromEnv(): Promise<BootstrapProjectResult> {
     throw WolfError.misconfigured(
       "WOLF_API_KEY",
       "WOLF_API_KEY must be set to run the wolf project bootstrap " +
-        "(the same project API key wolf-api itself uses to call Orange)",
+        "(the same project API key wolf-api itself uses to call Bob)",
     );
   }
-  const baseUrl = process.env.BOB_BASE_URL?.trim() || DEFAULT_ORANGE_BASE_URL;
+  const baseUrl = process.env.BOB_BASE_URL?.trim() || DEFAULT_BOB_BASE_URL;
 
   const config = loadConfig();
   const logger = createLogger(config);

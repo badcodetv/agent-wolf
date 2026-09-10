@@ -6,8 +6,8 @@
  *
  * ## Why a poller at all
  *
- * Orange cannot call Wolf. There is no webhook, and a subscription dispatches
- * a WORKER, not an HTTP request — so nothing on the Orange side can tell Wolf
+ * Bob cannot call Wolf. There is no webhook, and a subscription dispatches
+ * a WORKER, not an HTTP request — so nothing on the Bob side can tell Wolf
  * that today's tick finished writing its datasets. Wolf therefore polls, and
  * this file is the only thing that does.
  *
@@ -31,7 +31,7 @@
  *    `kind=evaluation` rows on every tick.
  *
  * 4. **Tick sessions are swept without consulting session status**, because
- *    Orange has no "completed" one: a finished tick session reads
+ *    Bob has no "completed" one: a finished tick session reads
  *    `running`/`active` for up to the 30-minute idle timeout and `archived`
  *    only afterwards. The delivery log is what says whether a container is
  *    working, through the ONE in-flight predicate this file shares with W9's
@@ -264,7 +264,7 @@ export function createPoller(options: CreatePollerOptions): Poller {
     for (const row of rows) {
       if (row.labels["status"] !== "live") continue;
       if (newestTrustedRow([row], sessions) === undefined) continue;
-      // Orange returns newest first, so the LAST match is the oldest row.
+      // Bob returns newest first, so the LAST match is the oldest row.
       oldest = row.createdAtMs;
     }
     return oldest;
@@ -300,7 +300,7 @@ export function createPoller(options: CreatePollerOptions): Poller {
         // `undefined !== undefined`, the comparison that would silently treat
         // a broken response as "unchanged" and re-download nothing forever.
         const meta = await client.getDataset(name);
-        // 🔴 THE DATASET HALF OF THE TRUST MODEL. Orange lets any session in
+        // 🔴 THE DATASET HALF OF THE TRUST MODEL. Bob lets any session in
         // the project write any dataset name, so the bytes behind this name
         // are not evidence about `id` until their WRITER is checked. Refusing
         // here is what stops a peer container's forged series from driving a
@@ -538,7 +538,7 @@ export function createPoller(options: CreatePollerOptions): Poller {
       if (isKind(err, "unavailable")) {
         // The one retryable kind: skip this hypothesis for this tick, no
         // penalty, no state change, try again next interval.
-        logger.warn({ id, err }, "poller: Orange unavailable — skipping this hypothesis");
+        logger.warn({ id, err }, "poller: Bob unavailable — skipping this hypothesis");
       } else {
         logger.error({ id, err }, "poller: hypothesis failed this tick");
       }

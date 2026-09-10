@@ -23,10 +23,10 @@ import { createArtifactsRouter, artifactRow } from "./artifacts.js";
 // design/2026-08-20-agent-wolf.md, W29's acceptance criteria for
 // `GET /api/hypotheses/:id/artifacts`. Test names are prefixed `artifacts_`.
 //
-// Orange is mocked with undici's MockAgent (the pinned mechanism); no live
+// Bob is mocked with undici's MockAgent (the pinned mechanism); no live
 // network anywhere in this file.
 
-const ORANGE = "http://orange.test:4100";
+const BOB = "http://bob.test:4100";
 const API_KEY = "wolf-project-api-key-for-tests";
 const SECRET = "session-secret-for-tests-0123456789abcdef";
 const OWNER = "kai@badcode.dev";
@@ -34,25 +34,25 @@ const ID = "1a2b3c4d";
 const SESSION_NAME = `hyp-${ID}`;
 
 /**
- * The blob path Orange puts on every artifact row. It names the bucket and the
+ * The blob path Bob puts on every artifact row. It names the bucket and the
  * object key of the STORE, and it is the field this route's allow-list
- * projection exists to drop: echoing Orange's row verbatim would publish the
+ * projection exists to drop: echoing Bob's row verbatim would publish the
  * storage layout to the browser and to the log.
  */
 const BLOB_PATH = "gs://webkit-servers-agent-bob/sess-99/report.md";
 
 /**
- * 🔴 Orange does NOT send this field today (`go/artifacts/artifacts.go`'s
+ * 🔴 Bob does NOT send this field today (`go/artifacts/artifacts.go`'s
  * `Artifact` has no such tag). It is on the fake anyway, because "never log a
  * `download_url`" is only a testable criterion if an upstream row can carry
  * one: an allow-list projection drops it, a `res.json(rows)` passthrough does
  * not, and the two are indistinguishable against a fixture that never
  * supplies it.
  */
-const UPSTREAM_DOWNLOAD_URL = `${ORANGE}/agent/artifacts/art-1/download?token=abc`;
+const UPSTREAM_DOWNLOAD_URL = `${BOB}/agent/artifacts/art-1/download?token=abc`;
 
-/** One row of Orange's `GET /agent/sessions/by-name/{name}/artifacts`, camelCase on the wire. */
-function orangeArtifact(over: Record<string, unknown> = {}): Record<string, unknown> {
+/** One row of Bob's `GET /agent/sessions/by-name/{name}/artifacts`, camelCase on the wire. */
+function bobArtifact(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: "art-1",
     sessionId: "sess-99",
@@ -71,7 +71,7 @@ function orangeArtifact(over: Record<string, unknown> = {}): Record<string, unkn
   };
 }
 
-// ── The stub Orange ─────────────────────────────────────────────────────
+// ── The stub Bob ─────────────────────────────────────────────────────
 
 interface Recorded {
   method: string;
@@ -108,7 +108,7 @@ class Stub {
         .reply((opts) => {
           const path = String(opts.path);
           this.requests.push({ method, path });
-          const answer = this.route(method, new URL(path, ORANGE));
+          const answer = this.route(method, new URL(path, BOB));
           return {
             statusCode: answer.status,
             data: answer.body as never,
@@ -124,7 +124,7 @@ class Stub {
     if (match !== null) {
       const name = decodeURIComponent(match[1] ?? "");
       const answer = this.config.artifacts?.[name];
-      // Orange resolves the session name first and 404s an unknown one
+      // Bob resolves the session name first and 404s an unknown one
       // (`go/httpapi/artifacts_download.go:80` → `resolveSessionByName`).
       return answer ?? { status: 404, body: '{"error":"session not found"}' };
     }
@@ -145,7 +145,7 @@ beforeEach(() => {
   mockAgent.disableNetConnect();
   mockAgent.enableNetConnect((host) => host.startsWith("127.0.0.1") || host.startsWith("localhost"));
   setGlobalDispatcher(mockAgent);
-  pool = mockAgent.get(ORANGE);
+  pool = mockAgent.get(BOB);
 });
 
 afterEach(async () => {
@@ -161,7 +161,7 @@ function config(): WolfConfig {
       WOLF_SESSION_SECRET: SECRET,
       WOLF_ALLOWED_EMAILS: OWNER,
       WOLF_API_KEY: API_KEY,
-      BOB_BASE_URL: ORANGE,
+      BOB_BASE_URL: BOB,
       NODE_ENV: "test",
     },
     { readRouteTable: () => undefined },
@@ -191,7 +191,7 @@ async function harness(stubConfig: StubConfig = {}): Promise<Harness> {
   stub.install();
   const cfg = config();
   const { logger, lines } = capturingLogger();
-  const client = createBobClient({ baseUrl: cfg.orangeBaseUrl, apiKey: cfg.orangeApiKey, logger });
+  const client = createBobClient({ baseUrl: cfg.bobBaseUrl, apiKey: cfg.bobApiKey, logger });
 
   const app = express();
   app.use(express.json());
@@ -254,19 +254,19 @@ function listed(rows: Record<string, unknown>[]): Record<string, Answer> {
 // ── The proxy, and its shape ────────────────────────────────────────────
 
 describe("artifacts_list", () => {
-  it("artifacts_list: proxies the metadata list SERVER-SIDE — 200 JSON, never a 3xx, never Orange's address", async () => {
-    const h = await harness({ artifacts: listed([orangeArtifact()]) });
+  it("artifacts_list: proxies the metadata list SERVER-SIDE — 200 JSON, never a 3xx, never Bob's address", async () => {
+    const h = await harness({ artifacts: listed([bobArtifact()]) });
     const res = await get(h, ARTIFACTS);
 
     expect(res.status).toBe(200);
     expect(res.status).toBeLessThan(300);
     expect(res.location).toBeNull();
     expect(res.contentType).toContain("application/json");
-    // Orange sets no CORS headers by design, so handing the browser a URL on
-    // Orange's origin would fail there for a reason nothing here can see —
+    // Bob sets no CORS headers by design, so handing the browser a URL on
+    // Bob's origin would fail there for a reason nothing here can see —
     // and it would put Wolf's project API key within reach of the page.
-    expect(res.raw).not.toContain(ORANGE);
-    expect(res.raw).not.toContain("orange.test");
+    expect(res.raw).not.toContain(BOB);
+    expect(res.raw).not.toContain("bob.test");
     expect(res.raw).not.toContain("download_url");
     expect(res.raw).not.toContain("downloadUrl");
 
@@ -278,7 +278,7 @@ describe("artifacts_list", () => {
   });
 
   it("artifacts_list: projects an ALLOW-LIST — blobPath, sessionId and an unexpected download_url never reach the body", async () => {
-    const h = await harness({ artifacts: listed([orangeArtifact()]) });
+    const h = await harness({ artifacts: listed([bobArtifact()]) });
     const res = await get(h, ARTIFACTS);
 
     expect(res.json).toEqual({
@@ -309,7 +309,7 @@ describe("artifacts_list", () => {
 
   it("artifacts_list: LOGS the read with a count — and no captured pino line carries a download_url, a blob path or the key", async () => {
     const h = await harness({
-      artifacts: listed([orangeArtifact(), orangeArtifact({ id: "art-2", filePath: "/workspace/chart.json" })]),
+      artifacts: listed([bobArtifact(), bobArtifact({ id: "art-2", filePath: "/workspace/chart.json" })]),
     });
     const res = await get(h, ARTIFACTS);
     expect(res.status).toBe(200);
@@ -365,10 +365,10 @@ describe("artifacts_list", () => {
     expect(res.json.kind).toBe("not_found");
   });
 
-  it("artifacts_list: an Orange OUTAGE is `unavailable` — distinguishable from an absent session", async () => {
+  it("artifacts_list: an Bob OUTAGE is `unavailable` — distinguishable from an absent session", async () => {
     // `not_found` and `unavailable` must stay distinguishable: an outage is
     // not a missing session, and only one of the two is retryable. The status
-    // is Orange's own 502, passed through by `defaultErrorFor`; the KIND is
+    // is Bob's own 502, passed through by `defaultErrorFor`; the KIND is
     // what a caller branches on.
     const h = await harness({
       artifacts: { [SESSION_NAME]: { status: 502, body: '{"error":"bad gateway"}' } },
@@ -380,7 +380,7 @@ describe("artifacts_list", () => {
   });
 
   it("artifacts_list: signed OUT is 401, and NOT ONE upstream request is made", async () => {
-    const h = await harness({ artifacts: listed([orangeArtifact()]) });
+    const h = await harness({ artifacts: listed([bobArtifact()]) });
     const res = await get(h, ARTIFACTS, false);
     expect(res.status).toBe(401);
     // The KIND too, levelling this case with the other three error cases in
@@ -392,7 +392,7 @@ describe("artifacts_list", () => {
   });
 
   it("artifacts_list: a malformed id is 400 invalid, before any upstream request", async () => {
-    const h = await harness({ artifacts: listed([orangeArtifact()]) });
+    const h = await harness({ artifacts: listed([bobArtifact()]) });
     const res = await get(h, "/api/hypotheses/NOTANID/artifacts");
     expect(res.status).toBe(400);
     expect(res.json.kind).toBe("invalid");
@@ -403,7 +403,7 @@ describe("artifacts_list", () => {
     // § Vocabulary: the id is bare and the prefix belongs to the session name.
     // A doubled prefix (`hyp-hyp-…`) resolves to no session at all, so the
     // stub — which is keyed by name — answers 404 and this test dies.
-    const h = await harness({ artifacts: listed([orangeArtifact()]) });
+    const h = await harness({ artifacts: listed([bobArtifact()]) });
     const res = await get(h, ARTIFACTS);
     expect(res.status).toBe(200);
     expect(h.stub.requests[0]?.path).toBe(`/agent/sessions/by-name/hyp-${ID}/artifacts`);

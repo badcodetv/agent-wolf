@@ -87,18 +87,18 @@ function main(): void {
     //
     // Started INSIDE the listen callback rather than after it so the first
     // tick cannot race the port actually being bound — the poller talks to
-    // Orange, not to this process, but a poller running while the process is
+    // Bob, not to this process, but a poller running while the process is
     // still failing to bind would delete tick sessions for a service that is
     // about to exit.
     //
-    // This is a SECOND Orange client and a second hypothesis store: createApp
+    // This is a SECOND Bob client and a second hypothesis store: createApp
     // builds its own and returns only the Express app, and app.ts belongs to
     // other tickets. The per-id transition mutex is shared at module scope in
     // store.ts precisely so those two stores still serialise state changes
     // against each other.
     const client = createBobClient({
-      baseUrl: config.orangeBaseUrl,
-      apiKey: config.orangeApiKey,
+      baseUrl: config.bobBaseUrl,
+      apiKey: config.bobApiKey,
       logger,
     });
     const poller = createPoller({

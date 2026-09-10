@@ -6,7 +6,7 @@ import { MockAgent, setGlobalDispatcher, getGlobalDispatcher } from "undici";
  * (design/2026-08-20-agent-wolf.md § "Pinned technology choices": undici's
  * `MockAgent` — no msw, no nock, no live network in any unit test).
  *
- * No production code calls out over HTTP yet (that starts with W2's Orange
+ * No production code calls out over HTTP yet (that starts with W2's Bob
  * client), so this just proves the pattern is wired and available for every
  * later ticket to copy: `mockAgent.disableNetConnect()` means an un-mocked
  * request throws instead of silently hitting the real network.

@@ -22,11 +22,11 @@ import { createAuthRouter } from "./auth.js";
 // the three answers `POST /auth/verify-google` gives. Test names are prefixed
 // `auth_`.
 //
-// Orange is mocked with undici's MockAgent (the pinned mechanism — no msw, no
+// Bob is mocked with undici's MockAgent (the pinned mechanism — no msw, no
 // nock, no live network). Local net connect stays enabled because the app
 // under test is a real express server on 127.0.0.1.
 
-const ORANGE = "http://orange.test:4100";
+const BOB = "http://bob.test:4100";
 const API_KEY = "wolf-project-api-key-for-tests";
 const SECRET = "session-secret-for-tests-0123456789abcdef";
 const OTHER_SECRET = "a-completely-different-secret-0123456789ab";
@@ -54,7 +54,7 @@ beforeEach(() => {
   mockAgent.disableNetConnect();
   mockAgent.enableNetConnect((host) => host.startsWith("127.0.0.1") || host.startsWith("localhost"));
   setGlobalDispatcher(mockAgent);
-  pool = mockAgent.get(ORANGE);
+  pool = mockAgent.get(BOB);
 });
 
 afterEach(async () => {
@@ -70,7 +70,7 @@ function config(env: NodeJS.ProcessEnv = {}): WolfConfig {
       WOLF_SESSION_SECRET: SECRET,
       WOLF_ALLOWED_EMAILS: ALLOWED,
       WOLF_API_KEY: API_KEY,
-      BOB_BASE_URL: ORANGE,
+      BOB_BASE_URL: BOB,
       NODE_ENV: "test",
       ...env,
     },
@@ -79,7 +79,7 @@ function config(env: NodeJS.ProcessEnv = {}): WolfConfig {
 }
 
 /** Answers `POST /auth/verify-google` with one canned response. */
-function orangeAnswers(status: number, body: unknown): void {
+function bobAnswers(status: number, body: unknown): void {
   pool
     .intercept({ method: "POST", path: "/auth/verify-google" })
     .reply((opts) => {
@@ -112,7 +112,7 @@ async function harness(cfg: WolfConfig = config(), now?: () => number): Promise<
   app.use(cookieParser(cfg.sessionSecret));
   app.use(
     createAuthRouter({
-      client: createBobClient({ baseUrl: cfg.orangeBaseUrl, apiKey: cfg.orangeApiKey, logger }),
+      client: createBobClient({ baseUrl: cfg.bobBaseUrl, apiKey: cfg.bobApiKey, logger }),
       config: cfg,
       logger,
       now,
@@ -183,7 +183,7 @@ function cookieAttributes(setCookie: string | null): Set<string> {
 
 describe("auth_google", () => {
   it("auth_google: an allowlisted identity is signed in, and the cookie is set", async () => {
-    orangeAnswers(200, { email: ALLOWED, email_verified: true });
+    bobAnswers(200, { email: ALLOWED, email_verified: true });
     const base = await harness();
 
     const res = await post(base, "/api/auth/google", { credential: CREDENTIAL });
@@ -198,9 +198,9 @@ describe("auth_google", () => {
     expect(JSON.parse(recorded[0]?.body ?? "{}")).toEqual({ credential: CREDENTIAL });
   });
 
-  it("auth_google: an identity Orange VERIFIES but the allowlist does not contain is 403 forbidden, with no cookie", async () => {
-    // Orange verifying a token is necessary, never sufficient.
-    orangeAnswers(200, { email: "stranger@example.com", email_verified: true });
+  it("auth_google: an identity Bob VERIFIES but the allowlist does not contain is 403 forbidden, with no cookie", async () => {
+    // Bob verifying a token is necessary, never sufficient.
+    bobAnswers(200, { email: "stranger@example.com", email_verified: true });
     const base = await harness();
 
     const res = await post(base, "/api/auth/google", { credential: CREDENTIAL });
@@ -211,15 +211,15 @@ describe("auth_google", () => {
   });
 
   it("auth_google: the allowlist match is case-insensitive", async () => {
-    orangeAnswers(200, { email: "KAI@BadCode.dev", email_verified: true });
+    bobAnswers(200, { email: "KAI@BadCode.dev", email_verified: true });
     const base = await harness();
     const res = await post(base, "/api/auth/google", { credential: CREDENTIAL });
     expect(res.status).toBe(200);
     expect(res.json).toEqual({ email: ALLOWED });
   });
 
-  it("auth_google: Orange's 401 is `forbidden` — an invalid credential", async () => {
-    orangeAnswers(401, "invalid credential");
+  it("auth_google: Bob's 401 is `forbidden` — an invalid credential", async () => {
+    bobAnswers(401, "invalid credential");
     const base = await harness();
 
     const res = await post(base, "/api/auth/google", { credential: "not-a-token" });
@@ -230,10 +230,10 @@ describe("auth_google", () => {
     expect(res.setCookie).toBeNull();
   });
 
-  it("auth_google: Orange's 404 is `misconfigured` naming GOOGLE_CLIENT_ID, NOT a rejected user", async () => {
+  it("auth_google: Bob's 404 is `misconfigured` naming GOOGLE_CLIENT_ID, NOT a rejected user", async () => {
     // `registerVerifyGoogle` mounts nothing when GOOGLE_CLIENT_ID is unset on
-    // ORANGE. A configuration hole must not read as a rejected sign-in.
-    orangeAnswers(404, "404 page not found");
+    // BOB. A configuration hole must not read as a rejected sign-in.
+    bobAnswers(404, "404 page not found");
     const base = await harness();
 
     const res = await post(base, "/api/auth/google", { credential: CREDENTIAL });
@@ -243,8 +243,8 @@ describe("auth_google", () => {
     expect(res.json.message).toContain("GOOGLE_CLIENT_ID");
   });
 
-  it("auth_google: Orange's 403 is `misconfigured` naming WOLF_API_KEY — Wolf's credential, not the user's", async () => {
-    orangeAnswers(403, "project api key required");
+  it("auth_google: Bob's 403 is `misconfigured` naming WOLF_API_KEY — Wolf's credential, not the user's", async () => {
+    bobAnswers(403, "project api key required");
     const base = await harness();
 
     const res = await post(base, "/api/auth/google", { credential: CREDENTIAL });
@@ -253,8 +253,8 @@ describe("auth_google", () => {
     expect(res.json.message).toContain("WOLF_API_KEY");
   });
 
-  it("auth_google: a body with no credential is 400 invalid and never reaches Orange", async () => {
-    orangeAnswers(200, { email: ALLOWED, email_verified: true });
+  it("auth_google: a body with no credential is 400 invalid and never reaches Bob", async () => {
+    bobAnswers(200, { email: ALLOWED, email_verified: true });
     const base = await harness();
 
     const res = await post(base, "/api/auth/google", {});
@@ -265,7 +265,7 @@ describe("auth_google", () => {
   });
 
   it("auth_google: an identity with email_verified false is refused even on a 200", async () => {
-    orangeAnswers(200, { email: ALLOWED, email_verified: false });
+    bobAnswers(200, { email: ALLOWED, email_verified: false });
     const base = await harness();
     const res = await post(base, "/api/auth/google", { credential: CREDENTIAL });
     expect(res.status).toBe(403);
@@ -345,7 +345,7 @@ describe("auth_dev_login", () => {
 
 describe("auth_me", () => {
   it("auth_me: 200 { email } for a valid signed cookie on the allowlist", async () => {
-    orangeAnswers(200, { email: ALLOWED, email_verified: true });
+    bobAnswers(200, { email: ALLOWED, email_verified: true });
     const base = await harness();
     const signIn = await post(base, "/api/auth/google", { credential: CREDENTIAL });
 
@@ -374,7 +374,7 @@ describe("auth_me", () => {
   });
 
   it("auth_me: 401 with a cookie signed by a DIFFERENT secret", async () => {
-    orangeAnswers(200, { email: ALLOWED, email_verified: true });
+    bobAnswers(200, { email: ALLOWED, email_verified: true });
     const otherBase = await harness(config({ WOLF_SESSION_SECRET: OTHER_SECRET }));
     const signIn = await post(otherBase, "/api/auth/google", { credential: CREDENTIAL });
 
@@ -386,7 +386,7 @@ describe("auth_me", () => {
   });
 
   it("auth_me: 401 with an expired cookie", async () => {
-    orangeAnswers(200, { email: ALLOWED, email_verified: true });
+    bobAnswers(200, { email: ALLOWED, email_verified: true });
     const longAgo = Date.now() - SESSION_MAX_AGE_MS - 60_000;
     const base = await harness(config(), () => longAgo);
     const signIn = await post(base, "/api/auth/google", { credential: CREDENTIAL });
@@ -398,7 +398,7 @@ describe("auth_me", () => {
   });
 
   it("auth_me: 401 for a validly-signed cookie whose email is no longer on WOLF_ALLOWED_EMAILS", async () => {
-    orangeAnswers(200, { email: ALLOWED, email_verified: true });
+    bobAnswers(200, { email: ALLOWED, email_verified: true });
     const base = await harness(); // ALLOWED is on the allowlist here
     const signIn = await post(base, "/api/auth/google", { credential: CREDENTIAL });
 
@@ -454,7 +454,7 @@ describe("auth_me", () => {
 
 describe("auth_logout", () => {
   it("auth_logout: 204 and clears wolf_session for a signed-in caller", async () => {
-    orangeAnswers(200, { email: ALLOWED, email_verified: true });
+    bobAnswers(200, { email: ALLOWED, email_verified: true });
     const base = await harness();
     const signIn = await post(base, "/api/auth/google", { credential: CREDENTIAL });
 
@@ -499,7 +499,7 @@ describe("auth_logout", () => {
     // name, path, SameSite and Secure specifically — those are asserted
     // attribute for attribute; HttpOnly is checked too since it is the same
     // kind of security-relevant flag and the code path preserves it.
-    orangeAnswers(200, { email: ALLOWED, email_verified: true });
+    bobAnswers(200, { email: ALLOWED, email_verified: true });
     const base = await harness();
     const signIn = await post(base, "/api/auth/google", { credential: CREDENTIAL });
     const minted = cookieAttributes(signIn.setCookie);

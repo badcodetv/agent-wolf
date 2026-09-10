@@ -7,7 +7,7 @@
  * rule and the `Tamper` shape. design/2026-08-20-agent-wolf.md § "The trust
  * model" (agent-bob repo) is the authority; the short version is:
  *
- *   Orange's memory is a genuine shared bus. It is project-scoped and
+ *   Bob's memory is a genuine shared bus. It is project-scoped and
  *   append-only, there is no per-worker permission and no origin check, and
  *   labels are chosen entirely by the caller. A chat session holding the core
  *   MCP tools may do everything a worker may do — which includes appending
@@ -39,7 +39,7 @@
  *   board. The session list cannot be written from inside a container, so that
  *   is what Wolf enumerates.
  * - **Every read of hypothesis state carries `include_retracted=1`** — the
- *   board's one-request fast path included. Orange applies its retraction
+ *   board's one-request fast path included. Bob applies its retraction
  *   filter BEFORE the `latest_per` reduction, so without the flag a hostile
  *   retraction of Wolf's newest row does not hide the hypothesis: it promotes
  *   the OLDER trusted row beneath it, and the board silently rolls back to a
@@ -170,7 +170,7 @@ export const TRUSTED_KINDS: ReadonlySet<string> = frozenSet<string>(TRUSTED_KIND
  * retraction — never the trusted one it attacked.
  *
  * ⚠️ The plan says "exactly one of the two provenance fields is non-empty".
- * Orange does not produce that, and the recorded fixtures show it: the MCP
+ * Bob does not produce that, and the recorded fixtures show it: the MCP
  * caller's `SessionID` is always set for anything written from inside a
  * container, and `Worker` is set as well whenever that session HAS a worker
  * (`go/cmd/agentd/mcpserver.go:534`) — which covers every researcher tick AND
@@ -244,7 +244,7 @@ export const LABEL_VALUE_PATTERN = /^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$/;
 export const MAX_LABEL_VALUE_LENGTH = 63;
 
 /**
- * Email address → legal Orange label value. **Total**: every possible input
+ * Email address → legal Bob label value. **Total**: every possible input
  * yields a legal label, because a mapping with a hole is a 500 on somebody's
  * first login.
  *
@@ -729,7 +729,7 @@ export function parseEvaluationContent(content: string): {
  *
  * `pending` is queued-but-not-dispatched and `running` is executing; every
  * other status is terminal history. Enumerated, never expressed as
- * `!isTerminal(...)`: a new status added to Orange must be classified
+ * `!isTerminal(...)`: a new status added to Bob must be classified
  * deliberately rather than inherited as "in flight" or "safe to delete"
  * depending on which way the negation happened to fall.
  */
@@ -745,7 +745,7 @@ export const IN_FLIGHT_DELIVERY_STATUSES: readonly string[] = Object.freeze([
  * The rule: *never delete a session that is the `session_id` of a delivery
  * currently `pending` or `running` for that worker.*
  *
- * Both callers need it for the same reason. Orange has no "completed" session
+ * Both callers need it for the same reason. Bob has no "completed" session
  * status — a finished tick session reads `running`/`active` for up to the
  * 30-minute idle timeout and `archived` only afterwards — so a status filter
  * either sweeps nothing on a stack with a long idle timeout or deletes a
@@ -785,7 +785,7 @@ export function inFlightSessionIds(
 export interface SessionIndexEntry {
   /** The bare 8-hex hypothesis id. */
   id: string;
-  /** The Orange session id (a uuid-ish hex string), for W8's `atoms`. */
+  /** The Bob session id (a uuid-ish hex string), for W8's `atoms`. */
   sessionId: string;
   /** The session name — always `hyp-<id>`. */
   sessionName: string;
@@ -797,10 +797,10 @@ export interface SessionIndexEntry {
 /** Keyed by BARE id, which is also the `name` label on every memory. */
 export type SessionIndex = ReadonlyMap<string, SessionIndexEntry>;
 
-/** The worker every hypothesis chat session is created with (§ "Orange atoms"). */
+/** The worker every hypothesis chat session is created with (§ "Bob atoms"). */
 export const INTERVIEWER_WORKER = "interviewer";
 
-/** One page of the session walk. Orange's own default is 50, its cap is higher. */
+/** One page of the session walk. Bob's own default is 50, its cap is higher. */
 export const SESSION_PAGE_SIZE = 200;
 
 // ── isTrusted ───────────────────────────────────────────────────────────
@@ -903,7 +903,7 @@ export function newestTrustedRow(
  * two things that only this hypothesis has:
  *
  *   1. its own daily researcher worker, `researcher-<id>`; or
- *   2. its own `hyp-<id>` interview session, by Orange session id.
+ *   2. its own `hyp-<id>` interview session, by Bob session id.
  *
  * Both are stamped by the server from the caller's credential (O7) and neither
  * is settable from a request body, so neither is forgeable from inside a
@@ -914,7 +914,7 @@ export interface ReportOwner {
   /** `researcher-<id>` — the worker this hypothesis's daily tick runs as. */
   worker: string;
   /**
-   * The `hyp-<id>` session's Orange id, or `null` when the lookup in hand
+   * The `hyp-<id>` session's Bob id, or `null` when the lookup in hand
    * cannot say. `null` does not weaken clause 1; it removes clause 2, which
    * is why every caller here passes a lookup that can answer.
    */
@@ -922,7 +922,7 @@ export interface ReportOwner {
 }
 
 /**
- * The `hyp-<id>` session's Orange id, out of whatever session lookup the
+ * The `hyp-<id>` session's Bob id, out of whatever session lookup the
  * caller supplied.
  *
  * Three shapes legitimately reach the report reads and all three are handled
@@ -958,7 +958,7 @@ export function reportOwnerFor(id: string, sessions: SessionLookup): ReportOwner
 
 /**
  * Clause 1 OR clause 2. An empty provenance field never matches: `""` is what
- * Orange stamps when there is no worker or no session, so comparing it to a
+ * Bob stamps when there is no worker or no session, so comparing it to a
  * `null`/absent owner value would make an unattributed row look owned.
  */
 export function isOwnReport(memory: ProvenancedMemory, owner: ReportOwner): boolean {
@@ -1091,7 +1091,7 @@ export interface StateChange {
 /** One hypothesis and its state-change history, from ONE per-name read. */
 export interface HypothesisRead {
   record: HypothesisRecord;
-  /** Newest first, the same order Orange returns and the timeline renders. */
+  /** Newest first, the same order Bob returns and the timeline renders. */
   history: StateChange[];
   /**
    * The per-name read came back FULL, so there may be older state rows this
@@ -1102,7 +1102,7 @@ export interface HypothesisRead {
    * came back short was not capped however few rows are left.
    *
    * It over-reports at the exact boundary — a full page is not proof there is
-   * a next one, and only Orange knows — which is the same rule W32's session
+   * a next one, and only Bob knows — which is the same rule W32's session
    * walk applies, and the right way round: claiming a complete timeline we
    * cannot verify is the worse error on a page a human decides from.
    */
@@ -1304,7 +1304,7 @@ export interface HypothesisStore {
    * change/20-hour test without paying a full read per row.
    *
    * `include_retracted=1` for the same reason every other read here carries
-   * it: without it Orange applies `notRetractedSQL` before the reduction, so
+   * it: without it Bob applies `notRetractedSQL` before the reduction, so
    * a hostile retraction of the newest row silently hands back an older one.
    * A retraction WOLF wrote (empty provenance) is honoured; one written from
    * inside a container is ignored.
@@ -1351,7 +1351,7 @@ const DETAIL_LIMIT = 50;
  *
  * The walk's only exit was ever a short page (`page.length < limit`), so a
  * server that keeps answering with page zero is not an error to it — it is an
- * infinite loop with no timeout, no error and no log. 🔴 **Orange does exactly
+ * infinite loop with no timeout, no error and no log. 🔴 **Bob does exactly
  * that**: `go/httpapi/history.go:107-125` parses `offset` with `strconv.Atoi`
  * and falls back to `0` on ANY parse error rather than rejecting the request,
  * so one regression, a proxy that strips a query parameter, or a route change
@@ -1368,7 +1368,7 @@ const DETAIL_LIMIT = 50;
  *
  * 49 full pages plus a short one is the largest walk that converges; at the
  * default page size of 200 that is 9 999 sessions, two orders of magnitude
- * past anything Wolf can produce (Orange's host port pool caps concurrent
+ * past anything Wolf can produce (Bob's host port pool caps concurrent
  * sessions at 100 by default). Reaching either budget is therefore OUR
  * invariant breaking, which is why it is `internal` rather than `invalid`.
  *
@@ -1436,7 +1436,7 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
       for (const row of page) {
         const id = hypothesisIdFromSessionName(row.name);
         if (id === null) continue; // e.g. a project-level chat session
-        if (index.has(id)) continue; // names are unique in Orange; be defensive anyway
+        if (index.has(id)) continue; // names are unique in Bob; be defensive anyway
         index.set(id, {
           id,
           sessionId: row.id,
@@ -1578,7 +1578,7 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
     // ONE request for the whole board. This is the normal case.
     //
     // ⚠️ `include_retracted=1` is LOAD-BEARING on this request, and the plan's
-    // board criterion omits it. Without it Orange applies `notRetractedSQL`
+    // board criterion omits it. Without it Bob applies `notRetractedSQL`
     // BEFORE the `latest_per` reduction (`go/agentdb/memories.go:467,526` —
     // "when it is true a retracted row participates in that reduction and can
     // win its name's slot"), so a hostile retraction of Wolf's NEWEST state row
@@ -1595,7 +1595,7 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
     // reports `1a2b3c4d` as `draft` where the flagged one reports `live` with
     // the hostile retraction attached.
     //
-    // The fast path survives: the flag costs no extra request (Orange attaches
+    // The fast path survives: the flag costs no extra request (Bob attaches
     // retractions in one further query of its own, server-side), so the
     // all-trusted board is still exactly ONE memory request.
     const rows = await client.listMemories({
@@ -1663,7 +1663,7 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
     return {
       record: resolved.record,
       history: resolved.history,
-      // Off `rows`, the page Orange returned — NOT off `resolved.history`,
+      // Off `rows`, the page Bob returned — NOT off `resolved.history`,
       // which is what is left after the forged and self-retracted rows are
       // dropped. Testing the survivors would report truncation whenever an
       // attack happened to remove enough rows.
@@ -1679,7 +1679,7 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
     sessions: SessionLookup,
   ): Promise<Map<string, EvaluationSummary>> {
     // `include_retracted=1` for the same reason the board read carries it
-    // (see readBoard): without it Orange applies `notRetractedSQL` BEFORE the
+    // (see readBoard): without it Bob applies `notRetractedSQL` BEFORE the
     // `latest_per` reduction, so a hostile retraction of the newest evaluation
     // row hands back the OLDER one — rolling the displayed score back with no
     // sign that anything happened.
@@ -1809,7 +1809,7 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
     sessions: SessionLookup,
   ): Promise<Map<string, ReportSummary>> {
     // `include_retracted=1` for the same reason every other read here carries
-    // it (see readBoard): without it Orange applies `notRetractedSQL` BEFORE
+    // it (see readBoard): without it Bob applies `notRetractedSQL` BEFORE
     // the `latest_per` reduction, so a hostile retraction of the newest report
     // hands back an older one with no sign that anything happened.
     const rows = await client.listMemories({
@@ -1893,7 +1893,7 @@ export function createHypothesisStore(options: CreateHypothesisStoreOptions): Hy
     if (picked.row === null) return { template: null, tamper: picked.tamper };
     // The template HTML is far past the 500-character snippet, so the full row
     // is a second request. `GET /agent/memories/{id}` is deliberately NOT
-    // retraction-filtered on the Orange side, which is what lets a row a
+    // retraction-filtered on the Bob side, which is what lets a row a
     // hostile retraction hid still be read here.
     const full = await client.getMemoryById(picked.row.id);
     const parsed = parseTemplateContent(full.content);

@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { WolfError } from "./errors.js";
 import { parseTemplate } from "./report/template.js";
 import {
-  DEFAULT_ORANGE_PUBLIC_URL,
+  DEFAULT_BOB_PUBLIC_URL,
   DEFAULT_WOLF_POLL_INTERVAL_SECONDS,
   loadConfig,
   parseDocker0GatewayFromProcRoute,
@@ -505,7 +505,7 @@ describe("WOLF_BASE_IMAGE / WOLF_CRITIC_CRON (W12)", () => {
     expect(config.criticCron).toBe("0 4 * * 1");
   });
 
-  it("fails fast naming WOLF_CRITIC_CRON when it is a nickname Orange's schedule store rejects", () => {
+  it("fails fast naming WOLF_CRITIC_CRON when it is a nickname Bob's schedule store rejects", () => {
     // go/agentdb/schedules.go:827 refuses `@weekly` and friends outright.
     for (const bad of ["@weekly", "@daily", "@hourly"]) {
       try {
@@ -538,7 +538,7 @@ describe("WOLF_BASE_IMAGE / WOLF_CRITIC_CRON (W12)", () => {
   });
 });
 
-// ── W8: the auth + Orange-credential variables ──────────────────────────
+// ── W8: the auth + Bob-credential variables ──────────────────────────
 //
 // R92: `BOB_BASE_URL` and `WOLF_API_KEY` are pinned HERE, in the typed
 // config, and documented in `.env.example`. W12's bootstrap still reads them
@@ -549,21 +549,21 @@ describe("loadConfig — W8's variables", () => {
   const noRoutes: RouteSource = { readRouteTable: () => undefined };
 
   it("defaults BOB_BASE_URL to agentd as seen from inside DinD's netns", () => {
-    expect(loadConfig({}, noRoutes).orangeBaseUrl).toBe("http://localhost:8099");
+    expect(loadConfig({}, noRoutes).bobBaseUrl).toBe("http://localhost:8099");
   });
 
   it("reads BOB_BASE_URL when set, and treats an EMPTY value as unset (R80)", () => {
-    expect(loadConfig({ BOB_BASE_URL: "http://orange:8099" }, noRoutes).orangeBaseUrl).toBe(
-      "http://orange:8099",
+    expect(loadConfig({ BOB_BASE_URL: "http://bob:8099" }, noRoutes).bobBaseUrl).toBe(
+      "http://bob:8099",
     );
     // docker compose forwards an unset optional variable as "", not as absent.
-    expect(loadConfig({ BOB_BASE_URL: "" }, noRoutes).orangeBaseUrl).toBe(
+    expect(loadConfig({ BOB_BASE_URL: "" }, noRoutes).bobBaseUrl).toBe(
       "http://localhost:8099",
     );
   });
 
   it("fails fast naming BOB_BASE_URL when it is not an absolute http(s) URL", () => {
-    for (const bad of ["orange:8099", "/agent", "ftp://orange"]) {
+    for (const bad of ["bob:8099", "/agent", "ftp://bob"]) {
       try {
         loadConfig({ BOB_BASE_URL: bad }, noRoutes);
         throw new Error(`expected loadConfig to throw for ${JSON.stringify(bad)}`);
@@ -576,8 +576,8 @@ describe("loadConfig — W8's variables", () => {
   });
 
   it("reads WOLF_API_KEY, and leaves it empty when unset (createApp is what refuses to boot)", () => {
-    expect(loadConfig({ WOLF_API_KEY: "wolf-key" }, noRoutes).orangeApiKey).toBe("wolf-key");
-    expect(loadConfig({}, noRoutes).orangeApiKey).toBe("");
+    expect(loadConfig({ WOLF_API_KEY: "wolf-key" }, noRoutes).bobApiKey).toBe("wolf-key");
+    expect(loadConfig({}, noRoutes).bobApiKey).toBe("");
   });
 
   it("parses WOLF_ALLOWED_EMAILS: comma-separated, trimmed, lowercased", () => {
@@ -834,7 +834,7 @@ describe("WOLF_POLL_INTERVAL_SECONDS (W10)", () => {
 });
 
 // design/2026-08-20-agent-wolf.md, W11: `BOB_PUBLIC_URL` is the
-// BROWSER-reachable Orange origin and the base of every `embed_url`. It is a
+// BROWSER-reachable Bob origin and the base of every `embed_url`. It is a
 // SECOND variable on purpose — BOB_BASE_URL is agentd inside DinD's netns,
 // which no browser can reach — so the cases below gate that the two never
 // collapse into one. The "reaches the container" half is enforced by the
@@ -844,38 +844,38 @@ describe("BOB_PUBLIC_URL (W11)", () => {
 
   it("defaults to the agent-bob stack's published web origin, NOT agentd", () => {
     const config = loadConfig({}, noRoutes);
-    expect(config.orangePublicUrl).toBe(DEFAULT_ORANGE_PUBLIC_URL);
-    expect(config.orangePublicUrl).toBe("http://localhost:8080");
+    expect(config.bobPublicUrl).toBe(DEFAULT_BOB_PUBLIC_URL);
+    expect(config.bobPublicUrl).toBe("http://localhost:8080");
     // 8099 is agentd in DinD's netns; a browser cannot reach it.
-    expect(config.orangePublicUrl).not.toBe(config.orangeBaseUrl);
+    expect(config.bobPublicUrl).not.toBe(config.bobBaseUrl);
   });
 
   it("reads BOB_PUBLIC_URL when set, independently of BOB_BASE_URL", () => {
     const config = loadConfig(
-      { BOB_PUBLIC_URL: "https://orange.badcode.dev", BOB_BASE_URL: "http://localhost:9000" },
+      { BOB_PUBLIC_URL: "https://bob.badcode.dev", BOB_BASE_URL: "http://localhost:9000" },
       noRoutes,
     );
-    expect(config.orangePublicUrl).toBe("https://orange.badcode.dev");
-    expect(config.orangeBaseUrl).toBe("http://localhost:9000");
+    expect(config.bobPublicUrl).toBe("https://bob.badcode.dev");
+    expect(config.bobBaseUrl).toBe("http://localhost:9000");
   });
 
   it("treats an EMPTY value as absent (R80) rather than as a bare-path origin", () => {
     // Compose forwards an unset optional variable as "", and `"" ?? default`
     // is `""` — which would build embed_url as a same-origin path that
     // resolves against WOLF's own origin and 404s inside the iframe.
-    expect(loadConfig({ BOB_PUBLIC_URL: "" }, noRoutes).orangePublicUrl).toBe(
-      DEFAULT_ORANGE_PUBLIC_URL,
+    expect(loadConfig({ BOB_PUBLIC_URL: "" }, noRoutes).bobPublicUrl).toBe(
+      DEFAULT_BOB_PUBLIC_URL,
     );
   });
 
   it("trims trailing slashes, so an embed_url never doubles one", () => {
     expect(
-      loadConfig({ BOB_PUBLIC_URL: "http://localhost:8080///" }, noRoutes).orangePublicUrl,
+      loadConfig({ BOB_PUBLIC_URL: "http://localhost:8080///" }, noRoutes).bobPublicUrl,
     ).toBe("http://localhost:8080");
   });
 
   it("fails fast naming BOB_PUBLIC_URL when it is not an absolute http(s) URL", () => {
-    for (const bad of ["localhost:8080", "/embed", "ftp://orange.test"]) {
+    for (const bad of ["localhost:8080", "/embed", "ftp://bob.test"]) {
       try {
         loadConfig({ BOB_PUBLIC_URL: bad }, noRoutes);
         expect.unreachable(`BOB_PUBLIC_URL=${bad} should have been refused`);

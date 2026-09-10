@@ -75,7 +75,7 @@ describe("points_happy_path", () => {
     expect(only?.tMs).toBe(T_20 + 250);
   });
 
-  it("points_happy_path: parses the bytes an Orange download returns", () => {
+  it("points_happy_path: parses the bytes an Bob download returns", () => {
     const bytes = new TextEncoder().encode(CANONICAL);
     // A copy into a fresh ArrayBuffer: TextEncoder may hand back a view over a
     // larger pool, and the client's `body` is always a whole ArrayBuffer.

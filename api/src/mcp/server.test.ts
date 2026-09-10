@@ -242,7 +242,7 @@ describe("mcp_auth rejects an unauthenticated or wrongly-authenticated call", ()
   });
 
   // The scheme cannot silently diverge from W12's project MCP config:
-  // Orange can only store a whole-value ${VAR} reference, never
+  // Bob can only store a whole-value ${VAR} reference, never
   // "Bearer ${WOLF_MCP_TOKEN}" (go/agentdb/sessions.go:55,88-89).
   it("rejects Authorization: Bearer <valid token> when X-Wolf-Mcp-Token is absent", async () => {
     const { base, fred } = await harness();

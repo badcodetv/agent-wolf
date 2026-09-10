@@ -56,7 +56,7 @@ declare module "express-serve-static-core" {
  * development is, and everything else — including the compose stack, whose
  * `.env.example` sets `NODE_ENV=production` — is expected to be behind TLS.
  * `SameSite=Lax` (not `None`) because Wolf's own page is the only thing that
- * calls these routes; the Orange chat iframe is a *child* frame and carries
+ * calls these routes; the Bob chat iframe is a *child* frame and carries
  * its own embed token, never this cookie.
  */
 export function sessionCookieOptions(config: WolfConfig): CookieOptions {
@@ -217,14 +217,14 @@ export function assertSessionConfigured(config: WolfConfig): void {
     throw WolfError.misconfigured(
       "WOLF_ALLOWED_EMAILS",
       "WOLF_ALLOWED_EMAILS must list at least one address — an empty allowlist would mean " +
-        "every Google account Orange can verify, which is not what an unset variable means",
+        "every Google account Bob can verify, which is not what an unset variable means",
     );
   }
-  if (config.orangeApiKey === "") {
+  if (config.bobApiKey === "") {
     throw WolfError.misconfigured(
       "WOLF_API_KEY",
-      "WOLF_API_KEY must be set — it is the wolf project's Orange API key, and every route " +
-        "wolf-api serves reaches Orange with it",
+      "WOLF_API_KEY must be set — it is the wolf project's Bob API key, and every route " +
+        "wolf-api serves reaches Bob with it",
     );
   }
 }

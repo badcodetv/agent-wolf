@@ -23,14 +23,14 @@ import { createEmbedRouter, embedUrlFor } from "./embed.js";
 // design/2026-08-20-agent-wolf.md, W11's acceptance criteria for
 // `GET /api/hypotheses/:id/embed-token`. Test names are prefixed `embed_`.
 //
-// Orange is mocked with undici's MockAgent (the pinned mechanism — no msw, no
+// Bob is mocked with undici's MockAgent (the pinned mechanism — no msw, no
 // nock, no live network). Every body below is SYNTHETIC and is not presented
 // as a recording: `POST /agent/embed-token`'s real answer is two fields
 // (`go/cmd/agentd/embedtoken.go`'s `embedTokenResponse`), and that is what the
 // stub returns.
 
-const ORANGE = "http://orange.test:4100";
-const PUBLIC = "http://orange-public.test:8080";
+const BOB = "http://bob.test:4100";
+const PUBLIC = "http://bob-public.test:8080";
 const API_KEY = "wolf-project-api-key-for-tests";
 const SECRET = "session-secret-for-tests-0123456789abcdef";
 const OWNER = "kai@badcode.dev";
@@ -44,7 +44,7 @@ const ID = "1a2b3c4d";
  */
 const TOKEN = "eyJhbGciOiJIUzI1NiJ9.WOLF-EMBED-TOKEN-SENTINEL-9f3a1c.sig-4b2e";
 
-// ── The stub Orange ─────────────────────────────────────────────────────
+// ── The stub Bob ─────────────────────────────────────────────────────
 
 interface Recorded {
   method: string;
@@ -85,7 +85,7 @@ class Stub {
             path,
             body: typeof opts.body === "string" ? opts.body : "",
           });
-          const answer = this.route(method, new URL(path, ORANGE).pathname);
+          const answer = this.route(method, new URL(path, BOB).pathname);
           return {
             statusCode: answer.status,
             data: answer.body as never,
@@ -101,7 +101,7 @@ class Stub {
       return (
         this.config.embedToken ?? {
           status: 200,
-          // Orange's real field names: `token` and `expires_at`, the latter
+          // Bob's real field names: `token` and `expires_at`, the latter
           // being the token's own `exp` claim in unix SECONDS.
           body: JSON.stringify({ token: TOKEN, expires_at: 1787334947 }),
         }
@@ -124,7 +124,7 @@ beforeEach(() => {
   mockAgent.disableNetConnect();
   mockAgent.enableNetConnect((host) => host.startsWith("127.0.0.1") || host.startsWith("localhost"));
   setGlobalDispatcher(mockAgent);
-  pool = mockAgent.get(ORANGE);
+  pool = mockAgent.get(BOB);
 });
 
 afterEach(async () => {
@@ -140,7 +140,7 @@ function config(overrides: Record<string, string> = {}): WolfConfig {
       WOLF_SESSION_SECRET: SECRET,
       WOLF_ALLOWED_EMAILS: OWNER,
       WOLF_API_KEY: API_KEY,
-      BOB_BASE_URL: ORANGE,
+      BOB_BASE_URL: BOB,
       BOB_PUBLIC_URL: PUBLIC,
       NODE_ENV: "test",
       ...overrides,
@@ -175,7 +175,7 @@ async function harness(stubConfig: StubConfig = {}, cfg: WolfConfig = config()):
   const stub = new Stub(pool, stubConfig);
   stub.install();
   const { logger, lines } = capturingLogger();
-  const client = createBobClient({ baseUrl: cfg.orangeBaseUrl, apiKey: cfg.orangeApiKey, logger });
+  const client = createBobClient({ baseUrl: cfg.bobBaseUrl, apiKey: cfg.bobApiKey, logger });
 
   const app = express();
   app.use(express.json());
@@ -237,14 +237,14 @@ describe("embed_token", () => {
     expect(body.session).toBe(`hyp-${ID}`);
   });
 
-  it("embed_token: the outbound body carries NO ttl_seconds key at all, so Orange applies its own 900s default", async () => {
+  it("embed_token: the outbound body carries NO ttl_seconds key at all, so Bob applies its own 900s default", async () => {
     const h = await harness();
     await get(h, `/api/hypotheses/${ID}/embed-token`);
 
     const raw = h.stub.embedTokenRequests[0]?.body ?? "";
     const body = JSON.parse(raw);
     // `not.toHaveProperty`, not `toBeUndefined`: the criterion is about the
-    // KEY. `{"ttl_seconds": 0}` would also read as the default on the Orange
+    // KEY. `{"ttl_seconds": 0}` would also read as the default on the Bob
     // side, but `{"ttl_seconds": 3600}` is one careless edit away from it and
     // the ceiling is the one value hazard H1 says never to ask for.
     expect(body).not.toHaveProperty("ttl_seconds");
@@ -252,7 +252,7 @@ describe("embed_token", () => {
     expect(raw).not.toContain("3600");
   });
 
-  it("embed_token: expires_at_sec is unix SECONDS, passed through from Orange's exp claim", async () => {
+  it("embed_token: expires_at_sec is unix SECONDS, passed through from Bob's exp claim", async () => {
     const h = await harness({
       embedToken: { status: 200, body: JSON.stringify({ token: TOKEN, expires_at: 1787334947 }) },
     });
@@ -264,13 +264,13 @@ describe("embed_token", () => {
     expect(res.json.expires_at_sec).toBeLessThan(1e11);
   });
 
-  it("embed_token: embed_url is the BROWSER-reachable Orange origin, never BOB_BASE_URL", async () => {
+  it("embed_token: embed_url is the BROWSER-reachable Bob origin, never BOB_BASE_URL", async () => {
     const h = await harness();
     const res = await get(h, `/api/hypotheses/${ID}/embed-token`);
 
     expect(res.json.embed_url).toBe(`${PUBLIC}/embed/session/hyp-${ID}`);
     // BOB_BASE_URL is agentd inside DinD's netns; a browser cannot reach it.
-    expect(res.json.embed_url).not.toContain(ORANGE);
+    expect(res.json.embed_url).not.toContain(BOB);
   });
 
   it("embed_token: BOB_PUBLIC_URL's trailing slash never doubles in embed_url", async () => {
@@ -341,7 +341,7 @@ describe("embed_token_auth", () => {
 
     expect(res.status).toBe(401);
     expect(res.raw).not.toContain(TOKEN);
-    // The guard runs BEFORE the handler: Orange was never asked. An
+    // The guard runs BEFORE the handler: Bob was never asked. An
     // implementation that minted first and checked after would leak a
     // project-authority token's worth of work to an anonymous caller.
     expect(h.stub.requests).toEqual([]);
@@ -359,7 +359,7 @@ describe("embed_token_auth", () => {
 });
 
 describe("embed_token_not_found", () => {
-  it("embed_token_not_found: Orange's 404 for an absent session becomes 404 not_found", async () => {
+  it("embed_token_not_found: Bob's 404 for an absent session becomes 404 not_found", async () => {
     const h = await harness({ embedToken: { status: 404, body: "session not found" } });
     const res = await get(h, `/api/hypotheses/${ID}/embed-token`);
 
@@ -368,7 +368,7 @@ describe("embed_token_not_found", () => {
   });
 
   it("embed_token_not_found: absent and another-project are ONE answer — the route is not an existence oracle", async () => {
-    // Orange answers 404 for absent, malformed and foreign alike
+    // Bob answers 404 for absent, malformed and foreign alike
     // (go/cmd/agentd/embedtoken.go), and Wolf does not try to tell them apart.
     const h = await harness({ embedToken: { status: 404, body: "session not found" } });
     const res = await get(h, `/api/hypotheses/deadbeef/embed-token`);
@@ -378,7 +378,7 @@ describe("embed_token_not_found", () => {
     expect(JSON.stringify(res.json)).not.toContain("another project");
   });
 
-  it("embed_token_not_found: a malformed hypothesis id is 400 invalid and never reaches Orange", async () => {
+  it("embed_token_not_found: a malformed hypothesis id is 400 invalid and never reaches Bob", async () => {
     const h = await harness();
     // `hyp-`-prefixed: the `hyp-hyp-…` bug § Vocabulary warns about.
     const res = await get(h, `/api/hypotheses/hyp-1a2b3c4d/embed-token`);
@@ -388,12 +388,12 @@ describe("embed_token_not_found", () => {
     expect(h.stub.requests).toEqual([]);
   });
 
-  it("embed_token_not_found: an Orange outage is unavailable, NOT not_found", async () => {
+  it("embed_token_not_found: an Bob outage is unavailable, NOT not_found", async () => {
     const h = await harness({ embedToken: { status: 503, body: "upstream down" } });
     const res = await get(h, `/api/hypotheses/${ID}/embed-token`);
 
     // The two must stay distinguishable: "there is no such hypothesis" and
-    // "Orange is down" are different things for the UI to say.
+    // "Bob is down" are different things for the UI to say.
     expect(res.status).toBe(503);
     expect(res.json.kind).toBe("unavailable");
   });

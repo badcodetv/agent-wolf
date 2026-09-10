@@ -181,7 +181,7 @@ export function createApp(logger: Logger, config: WolfConfig): Express {
   // need a session secret and an allowlist to provision a project.
   assertSessionConfigured(config);
 
-  // ONE Orange client and ONE hypothesis store for the app. The store's
+  // ONE Bob client and ONE hypothesis store for the app. The store's
   // transition mutex is PROCESS-WIDE, not per instance: `store.ts` holds a
   // module-scoped `SHARED_TRANSITION_MUTEX` and every store built in this
   // process uses it, which is what lets `index.ts` deliberately build a second
@@ -193,8 +193,8 @@ export function createApp(logger: Logger, config: WolfConfig): Express {
   // transitions". That was true when W8 wrote it and W10 falsified it; the
   // stale text was still here two waves later. R164.)*
   const client = createBobClient({
-    baseUrl: config.orangeBaseUrl,
-    apiKey: config.orangeApiKey,
+    baseUrl: config.bobBaseUrl,
+    apiKey: config.bobApiKey,
     logger,
   });
   const store = createHypothesisStore({ client, logger });
