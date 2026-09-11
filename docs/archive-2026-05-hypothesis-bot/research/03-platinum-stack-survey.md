@@ -1,6 +1,6 @@
 # Platinum Stack Survey
 
-> Source repo: `/home/kai/projects/bayesprice/Platinum` (a "web app template" in the user's words; in practice a mature multi-service product). Read enough of `CLAUDE.md`, `AGENTS.md`, `docs/agent.md`, `docs/backend-architecture.md`, `frontend/package.json`, and `go.mod` to map the stack. Did not exhaust the codebase — this is a navigation sketch for hypothesis-bot to mirror, not a full audit.
+> Source repo: the Platinum repo (a "web app template" in the user's words; in practice a mature multi-service product). Read enough of `CLAUDE.md`, `AGENTS.md`, `docs/agent.md`, `docs/backend-architecture.md`, `frontend/package.json`, and `go.mod` to map the stack. Did not exhaust the codebase — this is a navigation sketch for hypothesis-bot to mirror, not a full audit.
 
 ## Top-level structure
 
