@@ -1,6 +1,7 @@
 {
   "name": "agent-wolf-api",
   "version": "0.0.0",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "description": "Agent Wolf API — hypothesis lifecycle, Bob client, market-data MCP server. See design/2026-08-20-agent-wolf.md (agent-bob repo).",

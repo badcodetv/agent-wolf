@@ -126,3 +126,7 @@ explicit UTC helpers (no moment/dayjs), zod, and `pino` (JSON to stdout, never a
 `api/src/errors.ts` defines `WolfError` and the seven `WolfErrorKind` values every route, client and
 background job uses — see that file and the design doc's § "Shared error taxonomy". Don't invent
 a second one.
+
+## License
+
+MIT — see [`LICENSE`](LICENSE).

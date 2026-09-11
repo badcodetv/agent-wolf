@@ -1,6 +1,7 @@
 {
   "name": "agent-wolf-e2e",
   "version": "0.0.0",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "description": "X1 — end-to-end verification against the two running stacks. Deliberately NOT a yarn workspace member: it is installed and run only by e2e/run.sh, and adding it to the root `workspaces` array would put Playwright in every developer's install and in both Docker images.",
