@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, screen } from "@testing-library/react";
-import ChatRail, { RAIL_WIDTH } from "./ChatRail.js";
+import ChatRail, { RAIL_WIDTH, RAIL_WIDE_WIDTH } from "./ChatRail.js";
 import { renderWithProviders, stubFetchRoutes } from "../testUtils.js";
 
 const ID = "1a2b3c4d";
@@ -50,8 +50,32 @@ describe("ChatRail", () => {
     // Widened 2026-09-07 — see the constant's comment. The assertion that
     // matters is that it stays a CLAMP: a pixel constant here is what makes a
     // chat panel unusable on one screen size or another.
-    expect(RAIL_WIDTH).toBe("clamp(360px, 32vw, 620px)");
+    expect(RAIL_WIDTH).toBe("clamp(420px, 42vw, 900px)");
     expect(RAIL_WIDTH).toMatch(/^clamp\(/);
+  });
+
+  it("widens to two thirds of the screen and back, and stays a clamp", async () => {
+    renderWithProviders(<ChatRail hypothesisId={ID} />);
+    await flush();
+    const rail = screen.getByTestId("chat-rail");
+    expect(rail).toHaveAttribute("data-rail-wide", "false");
+
+    await act(async () => {
+      screen.getByTestId("chat-rail-widen").click();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(rail).toHaveAttribute("data-rail-wide", "true");
+    expect(window.getComputedStyle(rail).width).toBe(RAIL_WIDE_WIDTH);
+    expect(RAIL_WIDE_WIDTH).toMatch(/^clamp\(/);
+    expect(screen.getByTestId("chat-rail-widen")).toHaveAttribute("aria-label", "Narrow the conversation");
+    // The conversation itself is untouched by widening.
+    expect(screen.getByTestId("bob-chat-frame")).toBeInTheDocument();
+
+    await act(async () => {
+      screen.getByTestId("chat-rail-widen").click();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(window.getComputedStyle(rail).width).toBe(RAIL_WIDTH);
   });
 
   it("collapses to a thin edge and leaves a restore control", async () => {

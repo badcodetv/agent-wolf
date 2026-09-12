@@ -41,8 +41,17 @@ import BobChatFrame from "./BobChatFrame.js";
  * Still a clamp, never a pixel constant: 360px keeps it usable on a small
  * laptop, and the 620px ceiling stops it eating the detail column on an
  * ultrawide.
+ *
+ * WIDENED AGAIN 2026-09-12, on the box's first real use: at 32vw on a 2000px
+ * screen the rail was 640px, and as soon as Bob's embedded Artifacts panel
+ * opened INSIDE it the conversation was left a ~230px column that wrapped
+ * two words a line. The default is now 42vw, and the rail can be widened to
+ * two thirds of the screen (RAIL_WIDE_WIDTH) with one click.
  */
-export const RAIL_WIDTH = "clamp(360px, 32vw, 620px)";
+export const RAIL_WIDTH = "clamp(420px, 42vw, 900px)";
+
+/** The widened rail: for reading a long interview, or with Bob's artifacts panel open. */
+export const RAIL_WIDE_WIDTH = "clamp(420px, 66vw, 1400px)";
 
 /** The thin edge a collapsed rail leaves behind, so the restore control stays reachable. */
 export const RAIL_COLLAPSED_WIDTH = "44px";
@@ -54,10 +63,14 @@ export interface ChatRailProps {
   heading?: ReactNode;
 }
 
-export default function ChatRail({ hypothesisId, heading = "Conversation" }: ChatRailProps) {
+export default function ChatRail({
+  hypothesisId,
+  heading = "Conversation",
+}: ChatRailProps) {
   const theme = useTheme();
   const isNarrow = useMediaQuery(theme.breakpoints.down("md"));
   const [open, setOpen] = useState(true);
+  const [wide, setWide] = useState(false);
 
   const header = (
     <Box
@@ -71,21 +84,47 @@ export default function ChatRail({ hypothesisId, heading = "Conversation" }: Cha
         borderBottom: `1px solid ${theme.palette.divider}`,
       }}
     >
-      <Typography sx={{ fontSize: 13, fontWeight: 600, letterSpacing: "0.04em" }}>
+      <Typography
+        sx={{ fontSize: 13, fontWeight: 600, letterSpacing: "0.04em" }}
+      >
         {heading}
       </Typography>
-      <Tooltip title={open ? "Collapse the conversation" : "Show the conversation"}>
-        <Button
-          data-testid="chat-rail-toggle"
-          size="small"
-          onClick={() => setOpen((was) => !was)}
-          aria-expanded={open}
-          aria-label={open ? "Collapse the conversation" : "Show the conversation"}
-          sx={{ minWidth: 0, px: 1, fontSize: 13, lineHeight: 1 }}
+      <Box sx={{ display: "flex", gap: 0.5 }}>
+        {!isNarrow && open ? (
+          <Tooltip
+            title={wide ? "Narrow the conversation" : "Widen the conversation"}
+          >
+            <Button
+              data-testid="chat-rail-widen"
+              size="small"
+              onClick={() => setWide((was) => !was)}
+              aria-pressed={wide}
+              aria-label={
+                wide ? "Narrow the conversation" : "Widen the conversation"
+              }
+              sx={{ minWidth: 0, px: 1, fontSize: 13, lineHeight: 1 }}
+            >
+              {wide ? "→|" : "|←"}
+            </Button>
+          </Tooltip>
+        ) : null}
+        <Tooltip
+          title={open ? "Collapse the conversation" : "Show the conversation"}
         >
-          {open ? "⟨⟩" : "⟩⟨"}
-        </Button>
-      </Tooltip>
+          <Button
+            data-testid="chat-rail-toggle"
+            size="small"
+            onClick={() => setOpen((was) => !was)}
+            aria-expanded={open}
+            aria-label={
+              open ? "Collapse the conversation" : "Show the conversation"
+            }
+            sx={{ minWidth: 0, px: 1, fontSize: 13, lineHeight: 1 }}
+          >
+            {open ? "⟨⟩" : "⟩⟨"}
+          </Button>
+        </Tooltip>
+      </Box>
     </Box>
   );
 
@@ -93,7 +132,11 @@ export default function ChatRail({ hypothesisId, heading = "Conversation" }: Cha
     // A TAB, not a box: a disclosure control in the flow, and the frame only
     // when it is open. Height is a viewport fraction, never a pixel count.
     return (
-      <Box data-testid="chat-rail" data-rail-mode="tab" sx={{ width: "100%", mb: 2 }}>
+      <Box
+        data-testid="chat-rail"
+        data-rail-mode="tab"
+        sx={{ width: "100%", mb: 2 }}
+      >
         {header}
         {open ? (
           <Box sx={{ height: "70vh" }}>
@@ -109,6 +152,7 @@ export default function ChatRail({ hypothesisId, heading = "Conversation" }: Cha
       data-testid="chat-rail"
       data-rail-mode="rail"
       data-rail-open={open ? "true" : "false"}
+      data-rail-wide={wide ? "true" : "false"}
       sx={{
         // 🔴 `100%` OF THE COLUMN, not `100vh` of the viewport, and no longer
         // sticky (2026-09-07). The rail is now a flex child of a page that is
@@ -125,7 +169,11 @@ export default function ChatRail({ hypothesisId, heading = "Conversation" }: Cha
         // measuring a cross-origin document.
         height: "100%",
         flex: "0 0 auto",
-        width: open ? RAIL_WIDTH : RAIL_COLLAPSED_WIDTH,
+        width: open
+          ? wide
+            ? RAIL_WIDE_WIDTH
+            : RAIL_WIDTH
+          : RAIL_COLLAPSED_WIDTH,
         display: "flex",
         flexDirection: "column",
         borderLeft: `1px solid ${theme.palette.divider}`,
@@ -143,7 +191,13 @@ export default function ChatRail({ hypothesisId, heading = "Conversation" }: Cha
             onClick={() => setOpen(true)}
             aria-expanded={false}
             aria-label="Show the conversation"
-            sx={{ minWidth: 0, px: 1, py: 2, fontSize: 13, writingMode: "vertical-rl" }}
+            sx={{
+              minWidth: 0,
+              px: 1,
+              py: 2,
+              fontSize: 13,
+              writingMode: "vertical-rl",
+            }}
           >
             ⟩⟨
           </Button>
