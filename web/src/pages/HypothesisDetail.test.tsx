@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, screen, within } from "@testing-library/react";
 import { Route, Routes } from "react-router";
-import HypothesisDetail from "./HypothesisDetail.js";
+import HypothesisDetail, { DRAFT_POLL_MS } from "./HypothesisDetail.js";
 import { renderWithProviders, stubFetchRoutes, type FetchRoutes } from "../testUtils.js";
 
 const ID = "1a2b3c4d";
@@ -568,12 +568,13 @@ describe("🔴 a missing block costs a region, never the page", () => {
     expect(screen.getByTestId("report-section")).toHaveAttribute("data-report-frame", "shown");
   });
 
-  it("a draft mid-interview shows NO next-step banner", async () => {
+  it("a draft mid-interview shows the progress line, not a button", async () => {
     await renderDetail({
       [DETAIL]: { json: detailBody({ spec_validation: { valid: false, errors: [] } }) },
       [TOKEN]: tokenRoute,
     });
-    expect(screen.queryByTestId("next-step")).toBeNull();
+    expect(screen.getByTestId("next-step-say")).toHaveTextContent("The interview is shaping your hypothesis");
+    expect(screen.queryByTestId("next-step-link")).toBeNull();
   });
 
   it("a draft whose spec validates DOES get one — the template is a real next step", async () => {
@@ -847,5 +848,65 @@ describe("W23's report panel, in its host", () => {
     expect(screen.getByTestId("report-frame-host")).toBeInTheDocument();
     expect(screen.getByTestId("report-empty")).toBeInTheDocument();
     expect(screen.queryByTestId("report-frame")).toBeNull();
+  });
+});
+
+describe("🔴 a draft notices the interview finishing by itself", () => {
+  // 2026-09-13: a finished interview sat beside a page that still showed no
+  // next step, because the detail was read once on mount and nothing pushes a
+  // deposited candidate to the browser.
+
+  const midInterview = () => ({ json: detailBody({ spec_validation: { valid: false, errors: [] } }) });
+  const finished = () => ({ json: detailBody({ spec_validation: { valid: true, errors: [] } }) });
+
+  async function tick(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  it("re-reads the detail while draft, and shows Review and go live when the spec lands", async () => {
+    const stub = await renderDetail({
+      [DETAIL]: (call) => (call < 2 ? midInterview() : finished()),
+      [TOKEN]: tokenRoute,
+    });
+    expect(stub.countFor(DETAIL)).toBe(1);
+    expect(screen.queryByTestId("next-step-link")).toBeNull();
+
+    await tick(DRAFT_POLL_MS);
+    expect(stub.countFor(DETAIL)).toBe(2);
+    expect(screen.queryByTestId("next-step-link")).toBeNull();
+
+    await tick(DRAFT_POLL_MS);
+    expect(stub.countFor(DETAIL)).toBe(3);
+    expect(screen.getByTestId("next-step-link")).toHaveTextContent("Review and go live");
+  });
+
+  it("does not poll a hypothesis that is not a draft", async () => {
+    const stub = await renderDetail({ [DETAIL]: { json: livePayload() }, [TOKEN]: tokenRoute });
+    await tick(DRAFT_POLL_MS * 3);
+    expect(stub.countFor(DETAIL)).toBe(1);
+  });
+
+  it("stops polling once the status leaves draft", async () => {
+    const stub = await renderDetail({
+      [DETAIL]: (call) => (call === 0 ? midInterview() : { json: livePayload() }),
+      [TOKEN]: tokenRoute,
+    });
+    await tick(DRAFT_POLL_MS);
+    expect(stub.countFor(DETAIL)).toBe(2);
+    await tick(DRAFT_POLL_MS * 3);
+    expect(stub.countFor(DETAIL)).toBe(2);
+  });
+
+  it("keeps the page it has when a background poll fails", async () => {
+    await renderDetail({
+      [DETAIL]: (call) =>
+        call === 0 ? midInterview() : { status: 502, json: { error: { kind: "unavailable", message: "bob down" } } },
+      [TOKEN]: tokenRoute,
+    });
+    await tick(DRAFT_POLL_MS);
+    expect(screen.getByTestId("next-step-say")).toHaveTextContent("The interview is shaping your hypothesis");
+    expect(screen.queryByText(/could not be read/)).toBeNull();
   });
 });

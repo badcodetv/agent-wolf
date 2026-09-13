@@ -30,8 +30,17 @@
  *
  * ## One fetch
  *
- * `GET /api/hypotheses/:id` is read once, here, and handed down as props.
- * There is no second detail fetch and no second detail type.
+ * `GET /api/hypotheses/:id` is read here, and handed down as props. There is
+ * no second detail fetch and no second detail type.
+ *
+ * 🔴 **While the hypothesis is a `draft`, that one read is repeated every
+ * `DRAFT_POLL_MS`** (2026-09-13). The interview deposits its candidates from
+ * inside a container, and nothing pushes that to this page — so a finished
+ * interview used to sit beside a page that still showed no next step until
+ * someone thought to reload. The poll is the same request, re-run; it stops
+ * the moment the status leaves `draft`, skips ticks while the tab is hidden,
+ * and a failed poll keeps the page it already has rather than replacing it
+ * with an error (the first load still reports failure as before).
  *
  * 🔴 **THREE** blocks make requests of their own, and none of them is a second
  * read of the detail payload:
@@ -61,7 +70,7 @@
  * page (R140); a missing optional field must cost a region, never the page.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import Skeleton from "@mui/material/Skeleton";
@@ -113,17 +122,22 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
+/** How often a draft re-reads its detail, so the interview's finish shows up by itself. */
+export const DRAFT_POLL_MS = 5_000;
+
 export default function HypothesisDetail() {
   const params = useParams();
   const id = params["id"] ?? "";
   const [detail, setDetail] = useState<Detail | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
 
-  const load = useCallback(async (): Promise<void> => {
+  const load = useCallback(async (options: { quiet?: boolean } = {}): Promise<void> => {
     try {
       setDetail(await fetchHypothesis(id));
       setFailure(null);
     } catch (err) {
+      // A background poll that fails once must not blank a page that rendered.
+      if (options.quiet === true) return;
       setFailure(err instanceof ApiError ? err.message : "could not read this hypothesis");
     }
   }, [id]);
@@ -131,6 +145,21 @@ export default function HypothesisDetail() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const polling = detail?.hypothesis.status === "draft";
+  const pollInFlight = useRef(false);
+  useEffect(() => {
+    if (!polling) return;
+    const timer = setInterval(() => {
+      // Never stack requests behind a slow API, and never poll a hidden tab.
+      if (pollInFlight.current || document.hidden) return;
+      pollInFlight.current = true;
+      void load({ quiet: true }).finally(() => {
+        pollInFlight.current = false;
+      });
+    }, DRAFT_POLL_MS);
+    return () => clearInterval(timer);
+  }, [polling, load]);
 
   // The condition's STATISTIC lives on the spec, not on the evaluation. Built
   // here because this is where the spec is; `undefined` for anything the spec
