@@ -20,7 +20,11 @@ export const REASON_GLOSS: Record<string, string> = {
   insufficient_coverage: "too few observations in the window to judge",
   non_positive_reference: "the reference value was zero or negative, so a percentage means nothing",
   stale_data: "the series has not been updated recently enough to judge",
-  no_observations: "the window contains no observations at all",
+  // W4 counts only observations dated at or after go-live, so this is every
+  // hypothesis's first day: the chart shows years of history while the table
+  // said "no observations at all", which read as broken (2026-09-13 walk).
+  no_observations:
+    "no observation dated at or after go-live yet — normal until the series publishes its next data point",
   no_ratio_pair: "the two series never had observations on the same day",
 };
 
