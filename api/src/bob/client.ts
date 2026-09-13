@@ -87,7 +87,11 @@ export interface DownloadDatasetParams {
 }
 
 export interface BobClient {
-  createSession(params: { name: string; worker?: string }): Promise<CreateSessionResult>;
+  /**
+   * `POST /agent/session`. `title` is optional; without it Bob's session list
+   * titles the session after its first message.
+   */
+  createSession(params: { name: string; worker?: string; title?: string }): Promise<CreateSessionResult>;
   getSessionByName(name: string): Promise<SessionByName>;
   /**
    * `POST /agent/session/{id}/message` — one turn, streamed back as SSE.
@@ -645,12 +649,12 @@ function mapSessionListRow(raw: unknown, where: string): SessionListRow {
 
 function createSession(
   ctx: ClientContext,
-  params: { name: string; worker?: string },
+  params: { name: string; worker?: string; title?: string },
 ): Promise<CreateSessionResult> {
   return doRequest(ctx, {
     method: "POST",
     path: "/agent/session",
-    jsonBody: { name: params.name, worker: params.worker },
+    jsonBody: { name: params.name, worker: params.worker, title: params.title },
     // "host port pool is exhausted" is operational and actionable; flattening
     // it into the generic 403→forbidden mapping would throw that away, and
     // treating it as non-retryable would be wrong — deleting a finished

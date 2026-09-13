@@ -1137,7 +1137,13 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
       const sessionName = sessionNameForHypothesis(id);
 
       try {
-        await client.createSession({ name: sessionName, worker: INTERVIEWER_WORKER });
+        // Titled, because otherwise Bob's session list titles it after the
+        // seed message, which opens with Wolf's agent-context block.
+        await client.createSession({
+          name: sessionName,
+          worker: INTERVIEWER_WORKER,
+          title: `Interview: ${body.title}`,
+        });
       } catch (err) {
         classifyCreateFailure(err, sessionName);
       }

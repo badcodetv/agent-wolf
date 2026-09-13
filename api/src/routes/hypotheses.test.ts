@@ -1454,6 +1454,7 @@ describe("hypotheses_create", () => {
     expect(createBody.name).toMatch(SESSION_NAME_PATTERN);
     expect(createBody.name).toBe(`hyp-${res.json.id}`);
     expect(createBody.worker).toBe("interviewer");
+    expect(createBody.title).toBe("Interview: Copper is the new oil");
 
     // The state row: bare id in `name`, `draft`, owner SLUG (the full address
     // is illegal as a label value and lives in the content).

@@ -145,6 +145,20 @@ describe("sessions", () => {
     expect(result).toEqual({ id: "sess-1", status: "creating", workflowId: "wf-1" });
   });
 
+  it("POST /agent/session — sends title when given, and no title key when not", async () => {
+    const titled = intercept("POST", 200, { id: "sess-1", status: "creating", workflowId: "wf-1" });
+    await client().createSession({ name: "hyp-1a2b3c4d", worker: "interviewer", title: "Interview: Gold" });
+    expect(JSON.parse(titled.body ?? "{}")).toEqual({
+      name: "hyp-1a2b3c4d",
+      worker: "interviewer",
+      title: "Interview: Gold",
+    });
+
+    const bare = intercept("POST", 200, { id: "sess-2", status: "creating", workflowId: "wf-2" });
+    await client().createSession({ name: "hyp-1a2b3c4e", worker: "interviewer" });
+    expect(JSON.parse(bare.body ?? "{}")).not.toHaveProperty("title");
+  });
+
   it("GET /agent/sessions/by-name/{name} — maps status/create_error/timestamps", async () => {
     const c = intercept("GET", 200, {
       id: "sess-1",
