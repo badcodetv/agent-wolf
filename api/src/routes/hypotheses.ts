@@ -25,6 +25,7 @@ import { z } from "zod";
 import { WolfError } from "../errors.js";
 import type { Logger } from "../logger.js";
 import type { BobClient } from "../bob/client.js";
+import { formatAgentContext } from "../bob/agentcontext.js";
 import type {
   AttentionRequestRecord,
   MemorySearchResultRow,
@@ -699,22 +700,28 @@ function firstLine(text: string): string {
  * own hypothesis, so this is defence in depth rather than a live threat —
  * but § 6.2.4's boundary rule is that provenance is always stated.
  *
- * ⚠️ **It is ONE short line, because the user sees it.** Bob's chat renders
- * this message as the user's first bubble, and the earlier three-line rule
- * with a `---` separator read as the product putting instructions in the
- * user's mouth (2026-09-13 walk). The rules about the id — use it exactly,
- * never a slug — live in `prompts/interviewer.md` § "The deposit contract",
- * which tells the model to look for this line; the line itself only has to
- * carry the id, the label and who said it.
+ * ⚠️ **The machine line travels in an `agent-context` block, because the
+ * user sees this message.** Bob's chat rendered it as the user's first
+ * bubble, and instructions in that bubble read as the product putting words
+ * in the user's mouth (2026-09-13 walk). Bob now collapses a message that
+ * OPENS with the block into one "Context sent to the agent" line and shows
+ * what follows as the person's own words (agent-bob `docs/19-embedding.md`
+ * § 3a) — so the thesis goes after the block, alone. The model still reads
+ * every byte. The rules about the id — use it exactly, never a slug — live
+ * in `prompts/interviewer.md` § "The deposit contract", which tells the model
+ * to look in this block.
  */
 export function seedMessage(id: string, thesis: string): string {
-  return [
-    `(Note from Agent Wolf for the interviewer: hypothesis id \`${id}\`, label memories ` +
-      `\`name: "${id}"\`. The thesis below is the user's own.)`,
-    "",
+  return formatAgentContext(
+    `From Agent Wolf, for the interviewer: hypothesis id \`${id}\`, label memories ` +
+      `\`name: "${id}"\`. The text after this block is the user's own thesis.`,
+    SEED_CONTEXT_SUMMARY,
     thesis,
-  ].join("\n");
+  );
 }
+
+/** The collapsed line the user sees in place of the seed's machine line. */
+export const SEED_CONTEXT_SUMMARY = "Hypothesis setup for Agent Wolf";
 
 /**
  * Re-exported from `hypothesis/speccontent.ts`, which is now the single

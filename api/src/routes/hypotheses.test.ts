@@ -1567,7 +1567,7 @@ describe("hypotheses_create", () => {
     expect(content).toContain(`name: "${id}"`);
     // And it is attributed, so a thesis claiming a different id reads as user
     // text rather than as instruction (§ 6.2.4).
-    expect(content).toContain("from Agent Wolf");
+    expect(content).toContain("From Agent Wolf");
     // The id comes BEFORE the user's words, so no thesis can shadow it.
     expect(content.indexOf(id)).toBeLessThan(content.indexOf(THESIS));
   });
@@ -1579,11 +1579,15 @@ describe("hypotheses_create", () => {
     expect(msg).toContain('name: "abcd1234"');
     expect(msg.endsWith("gold up because money printer")).toBe(true);
     expect(msg.indexOf("abcd1234")).toBeLessThan(msg.indexOf("gold up"));
-    // 🔴 Short, because Bob's chat shows it as the user's first bubble: one
-    // attributed line, a blank line, then the thesis (2026-09-13 walk).
+    // 🔴 The machine line is inside Bob's agent-context block, which must be
+    // the FIRST characters and closed, so Bob's chat collapses it to one line
+    // and shows only the thesis as the user's bubble (2026-09-13 walk;
+    // agent-bob docs/19-embedding.md § 3a).
+    expect(msg.startsWith("<agent-context")).toBe(true);
     expect(msg.split("\n")).toEqual([
-      '(Note from Agent Wolf for the interviewer: hypothesis id `abcd1234`, label memories `name: "abcd1234"`. The thesis below is the user\'s own.)',
-      "",
+      '<agent-context summary="Hypothesis setup for Agent Wolf">',
+      'From Agent Wolf, for the interviewer: hypothesis id `abcd1234`, label memories `name: "abcd1234"`. The text after this block is the user\'s own thesis.',
+      "</agent-context>",
       "gold up because money printer",
     ]);
   });
