@@ -20,6 +20,7 @@ import {
   formatNumber,
   formatPercent,
   formatUtcAxisTick,
+  utcAxisTickFormatterFor,
   formatUtcDate,
   formatUtcDateTime,
   formatUtcWindow,
@@ -65,6 +66,20 @@ describe("formatUtcDate", () => {
 describe("formatUtcAxisTick", () => {
   it("drops the year but keeps the UTC day", () => {
     expect(formatUtcAxisTick(LATE_ON_THE_12TH)).toBe("12 Aug");
+  });
+});
+
+describe("utcAxisTickFormatterFor", () => {
+  it("🔴 puts the year on the axis when the data spans more than a year", () => {
+    const format = utcAxisTickFormatterFor(Date.UTC(2014, 8, 17), LATE_ON_THE_12TH);
+    expect(format(Date.UTC(2021, 9, 9))).toBe("Oct 2021");
+    expect(format(Date.UTC(2022, 3, 9))).toBe("Apr 2022");
+  });
+
+  it("uses full dates across a new year, and drops the year inside one", () => {
+    expect(utcAxisTickFormatterFor(Date.UTC(2025, 10, 1), Date.UTC(2026, 1, 1))(Date.UTC(2025, 11, 12))).toBe("12 Dec 2025");
+    expect(utcAxisTickFormatterFor(Date.UTC(2026, 5, 1), LATE_ON_THE_12TH)(LATE_ON_THE_12TH)).toBe("12 Aug");
+    expect(utcAxisTickFormatterFor(null, null)(LATE_ON_THE_12TH)).toBe("12 Aug");
   });
 });
 

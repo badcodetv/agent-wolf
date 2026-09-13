@@ -55,6 +55,34 @@ export function formatUtcAxisTick(ms: number | null | undefined): string {
   return usable(ms) ? UTC_DAY_MONTH.format(ms) : ABSENT;
 }
 
+const UTC_MONTH_YEAR = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "UTC",
+  month: "short",
+  year: "numeric",
+});
+
+/**
+ * The axis formatter for a series running from `firstMs` to `lastMs`.
+ *
+ * 🔴 A year-less tick is only honest on a range inside one calendar year. A
+ * Bitcoin series with years of history read "9 Oct · 9 Apr · 9 Oct · 9 Apr"
+ * along the axis (2026-09-13 walk), which says nothing about WHEN. So: more
+ * than a year of data ticks as `Oct 2021`; a range crossing a new year ticks
+ * as `12 Dec 2025`; anything else keeps `12 Aug`.
+ */
+export function utcAxisTickFormatterFor(
+  firstMs: number | null | undefined,
+  lastMs: number | null | undefined,
+): (ms: number | null | undefined) => string {
+  if (!usable(firstMs) || !usable(lastMs)) return formatUtcAxisTick;
+  const span = Math.abs(lastMs - firstMs);
+  if (span > 365 * 86_400_000) {
+    return (ms) => (usable(ms) ? UTC_MONTH_YEAR.format(ms) : ABSENT);
+  }
+  if (new Date(firstMs).getUTCFullYear() !== new Date(lastMs).getUTCFullYear()) return formatUtcDate;
+  return formatUtcAxisTick;
+}
+
 /** `12 Aug 2026 23:30 UTC`. The zone is named because the reader is not in it. */
 export function formatUtcDateTime(ms: number | null | undefined): string {
   return usable(ms) ? `${UTC_DATE.format(ms)} ${UTC_TIME.format(ms)} UTC` : ABSENT;

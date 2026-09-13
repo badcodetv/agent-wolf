@@ -56,7 +56,7 @@ import {
   YAxis,
 } from "recharts";
 import Severity from "./trust/Severity.js";
-import { formatNumber, formatUtcAxisTick, formatUtcDate } from "../format.js";
+import { formatNumber, formatUtcDate, utcAxisTickFormatterFor } from "../format.js";
 import { DEFAULT_STALENESS_DAYS, type Point, type SeriesState } from "../api/types.js";
 
 export const MS_PER_DAY = 86_400_000;
@@ -207,7 +207,11 @@ export default function MetricChart({
         domain={["dataMin", domainMax]}
         // 🔴 UTC. See `format.ts` — an observation rendered in the reader's
         // own zone silently moves across a day boundary.
-        tickFormatter={formatUtcAxisTick}
+        // The year appears once the data spans one (2026-09-13 walk).
+        tickFormatter={utcAxisTickFormatterFor(
+          rows[0]?.t,
+          typeof domainMax === "number" ? domainMax : rows[rows.length - 1]?.t,
+        )}
         tick={{ fontSize: 10, fill: theme.palette.text.secondary }}
         stroke={theme.palette.divider}
       />
