@@ -71,6 +71,28 @@ describe("it asks only for the metrics of a LOCKED spec", () => {
     expect(stub.calls.length).toBe(2);
   });
 
+  it("re-reads every series when refreshKey changes, and not on a plain re-render", async () => {
+    // The detail page passes the evaluation's timestamp: a tick that lands
+    // while the page is open redraws the charts; a background poll that
+    // changed nothing does not refetch them.
+    const stub = stubFetchRoutes({
+      [seriesKey("brent_crude")]: { json: series() },
+      [seriesKey("dxy")]: { json: series({ unit: "index" }) },
+    });
+    const view = renderWithProviders(
+      <MetricCharts hypothesisId={ID} spec={SPEC} specSource="hypothesis-spec" refreshKey={1} />,
+    );
+    await waitFor(() => expect(stub.countFor(seriesKey("dxy"))).toBe(1));
+
+    view.rerender(<MetricCharts hypothesisId={ID} spec={SPEC} specSource="hypothesis-spec" refreshKey={1} />);
+    await waitFor(() => expect(screen.getAllByTestId("metric-chart").length).toBe(2));
+    expect(stub.countFor(seriesKey("dxy"))).toBe(1);
+
+    view.rerender(<MetricCharts hypothesisId={ID} spec={SPEC} specSource="hypothesis-spec" refreshKey={2} />);
+    await waitFor(() => expect(stub.countFor(seriesKey("dxy"))).toBe(2));
+    expect(stub.countFor(seriesKey("brent_crude"))).toBe(2);
+  });
+
   it("🔴 asks for NOTHING when the spec is still a candidate", async () => {
     // No routes are stubbed at all: `stubFetchRoutes` throws on any request,
     // so a single fetch here fails the test loudly.

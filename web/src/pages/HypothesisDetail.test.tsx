@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, screen, within } from "@testing-library/react";
 import { Route, Routes } from "react-router";
-import HypothesisDetail, { DRAFT_POLL_MS } from "./HypothesisDetail.js";
+import HypothesisDetail, { DRAFT_POLL_MS, LIVE_POLL_MS } from "./HypothesisDetail.js";
 import { renderWithProviders, stubFetchRoutes, type FetchRoutes } from "../testUtils.js";
 
 const ID = "1a2b3c4d";
@@ -602,7 +602,9 @@ describe("🔴 a missing block costs a region, never the page", () => {
   it("renders when spec_validation is absent entirely", async () => {
     // R140: an absent optional field threw INSIDE render and unmounted the
     // page. This is that regression, kept.
-    const body = fullBody();
+    // A draft, because the Go Live button — the component that used to throw
+    // — only renders on one.
+    const body = detailBody();
     delete (body as Record<string, unknown>)["spec_validation"];
     await renderDetail({ [DETAIL]: { json: body }, [TOKEN]: tokenRoute, [ID_SERIES("brent_crude")]: seriesBody });
     expect(screen.getByTestId("detail-column")).toBeInTheDocument();
@@ -882,13 +884,25 @@ describe("🔴 a draft notices the interview finishing by itself", () => {
     expect(screen.getByTestId("next-step-link")).toHaveTextContent("Review and go live");
   });
 
-  it("does not poll a hypothesis that is not a draft", async () => {
-    const stub = await renderDetail({ [DETAIL]: { json: livePayload() }, [TOKEN]: tokenRoute });
-    await tick(DRAFT_POLL_MS * 3);
+  const confirmedPayload = () => ({
+    json: { ...detailBody(), hypothesis: { ...detailBody().hypothesis, status: "confirmed" } },
+  });
+
+  it("does not poll a hypothesis whose status cannot change by itself", async () => {
+    const stub = await renderDetail({ [DETAIL]: confirmedPayload(), [TOKEN]: tokenRoute });
+    await tick(LIVE_POLL_MS * 3);
     expect(stub.countFor(DETAIL)).toBe(1);
   });
 
-  it("stops polling once the status leaves draft", async () => {
+  it("re-reads a live hypothesis slowly, so a researcher tick shows without a reload", async () => {
+    const stub = await renderDetail({ [DETAIL]: { json: livePayload() }, [TOKEN]: tokenRoute });
+    await tick(DRAFT_POLL_MS * 3);
+    expect(stub.countFor(DETAIL)).toBe(1);
+    await tick(LIVE_POLL_MS);
+    expect(stub.countFor(DETAIL)).toBe(2);
+  });
+
+  it("drops to the slow poll once the status leaves draft", async () => {
     const stub = await renderDetail({
       [DETAIL]: (call) => (call === 0 ? midInterview() : { json: livePayload() }),
       [TOKEN]: tokenRoute,
@@ -897,6 +911,21 @@ describe("🔴 a draft notices the interview finishing by itself", () => {
     expect(stub.countFor(DETAIL)).toBe(2);
     await tick(DRAFT_POLL_MS * 3);
     expect(stub.countFor(DETAIL)).toBe(2);
+  });
+
+  it("offers no Go Live button once the hypothesis is live", async () => {
+    // Both halves of the gate stay true after go-live, so the button used to
+    // render ENABLED on a live page.
+    await renderDetail({
+      [DETAIL]: {
+        json: {
+          ...livePayload({ spec_validation: { valid: true, errors: [] } }),
+          report: { has_template: true, structure_hash: "h", stripped_count: 0, updated_at_ms: null, drift: null, unreadable: false, tamper: null },
+        },
+      },
+      [TOKEN]: tokenRoute,
+    });
+    expect(screen.queryByTestId("go-live-button")).toBeNull();
   });
 
   it("keeps the page it has when a background poll fails", async () => {

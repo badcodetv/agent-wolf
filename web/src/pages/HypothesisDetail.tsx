@@ -125,6 +125,22 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 /** How often a draft re-reads its detail, so the interview's finish shows up by itself. */
 export const DRAFT_POLL_MS = 5_000;
 
+/**
+ * How often a LIVE hypothesis re-reads its detail. A researcher tick takes a
+ * few minutes and nothing pushes its result to the browser, so a page left
+ * open on go-live sat on "no report yet" until a reload (2026-09-13, the first
+ * real-model walk). Slower than the draft poll: a live hypothesis changes at
+ * most once a tick, and one detail read fans out into many Bob reads.
+ */
+export const LIVE_POLL_MS = 60_000;
+
+/** The poll interval for a status, or `null` for a status that does not change by itself. */
+export function pollIntervalFor(status: string | null | undefined): number | null {
+  if (status === "draft") return DRAFT_POLL_MS;
+  if (status === "live") return LIVE_POLL_MS;
+  return null;
+}
+
 export default function HypothesisDetail() {
   const params = useParams();
   const id = params["id"] ?? "";
@@ -146,10 +162,10 @@ export default function HypothesisDetail() {
     void load();
   }, [load]);
 
-  const polling = detail?.hypothesis.status === "draft";
+  const pollMs = pollIntervalFor(detail?.hypothesis.status);
   const pollInFlight = useRef(false);
   useEffect(() => {
-    if (!polling) return;
+    if (pollMs === null) return;
     const timer = setInterval(() => {
       // Never stack requests behind a slow API, and never poll a hidden tab.
       if (pollInFlight.current || document.hidden) return;
@@ -157,9 +173,9 @@ export default function HypothesisDetail() {
       void load({ quiet: true }).finally(() => {
         pollInFlight.current = false;
       });
-    }, DRAFT_POLL_MS);
+    }, pollMs);
     return () => clearInterval(timer);
-  }, [polling, load]);
+  }, [pollMs, load]);
 
   // The condition's STATISTIC lives on the spec, not on the evaluation. Built
   // here because this is where the spec is; `undefined` for anything the spec
@@ -278,12 +294,17 @@ export default function HypothesisDetail() {
                 `templateAccepted` is `undefined` when the block is absent —
                 which blocks nothing, exactly as an absent `spec_validation`
                 does. Silence from the server is not a refusal. */}
-            <GoLiveButton
-              hypothesisId={id}
-              specValidation={detail.spec_validation}
-              templateAccepted={detail.report?.has_template}
-              onDone={() => void load()}
-            />
+            {/* Draft only. On a live hypothesis it rendered ENABLED — both
+                halves of the gate are still true after go-live — offering a
+                launch the server refuses (2026-09-13, seen on the real walk). */}
+            {detail.hypothesis.status === "draft" ? (
+              <GoLiveButton
+                hypothesisId={id}
+                specValidation={detail.spec_validation}
+                templateAccepted={detail.report?.has_template}
+                onDone={() => void load()}
+              />
+            ) : null}
 
             <VerdictBand
               status={detail.hypothesis.status}
@@ -383,6 +404,7 @@ export default function HypothesisDetail() {
                 hypothesisId={id}
                 spec={detail.spec ?? null}
                 specSource={detail.spec_source}
+                refreshKey={detail.evaluation?.evaluated_at_ms ?? null}
               />
             </Section>
 

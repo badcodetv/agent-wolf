@@ -62,9 +62,15 @@ export interface MetricChartsProps {
   hypothesisId: string;
   spec?: HypothesisSpec | null;
   specSource: HypothesisDetail["spec_source"];
+  /**
+   * Re-read every series when this changes. The page passes the evaluation's
+   * timestamp, so a tick that lands while the page is open redraws the charts
+   * without refetching them on every background poll.
+   */
+  refreshKey?: number | null;
 }
 
-export default function MetricCharts({ hypothesisId, spec, specSource }: MetricChartsProps) {
+export default function MetricCharts({ hypothesisId, spec, specSource, refreshKey }: MetricChartsProps) {
   const locked = specSource === "hypothesis-spec";
   const metrics = useMemo(() => (locked ? metricsOf(spec) : []), [locked, spec]);
   // A primitive dependency for the loader below: `metrics` is a fresh array on
@@ -104,7 +110,7 @@ export default function MetricCharts({ hypothesisId, spec, specSource }: MetricC
 
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, refreshKey]);
 
   if (!locked) {
     return (
