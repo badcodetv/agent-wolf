@@ -90,7 +90,7 @@ import Button from "@mui/material/Button";
 import Skeleton from "@mui/material/Skeleton";
 import Typography from "@mui/material/Typography";
 import Link from "@mui/material/Link";
-import { Link as RouterLink, useParams } from "react-router";
+import { Link as RouterLink, useNavigate, useParams } from "react-router";
 import GoLiveButton from "../components/GoLiveButton.js";
 import Provenance from "../components/trust/Provenance.js";
 import Severity from "../components/trust/Severity.js";
@@ -133,6 +133,17 @@ export const ORIGIN_CAVEAT =
 export const NO_CANDIDATE =
   "The interview has not produced a report candidate yet. Keep talking to the agent in the " +
   "conversation rail; it writes one as an interview output.";
+
+/**
+ * Shown in place of the accept button once THIS candidate is the locked
+ * template. Without it the button stayed clickable after a successful accept
+ * and nothing on the screen said the click had done anything (2026-09-13, the
+ * first real-model walk).
+ */
+export const TEMPLATE_ACCEPTED = "Template accepted. Go live when you are ready.";
+
+/** A hypothesis that has already left draft has nothing left to launch here. */
+export const NOT_A_DRAFT = "This hypothesis is no longer a draft, so there is nothing to take live here.";
 
 export const CANDIDATE_INVALID =
   "This candidate does not pass the template validator, so it cannot be accepted. The interview " +
@@ -275,6 +286,7 @@ function tamperOf(err: unknown): Tamper[] {
 export default function GoLiveReview() {
   const params = useParams();
   const id = params["id"] ?? "";
+  const navigate = useNavigate();
 
   const [detail, setDetail] = useState<Detail | null>(null);
   const [detailFailure, setDetailFailure] = useState<string | null>(null);
@@ -365,6 +377,15 @@ export default function GoLiveReview() {
     }
   }
 
+
+  // The server's word, twice over: a locked template exists AND it is this
+  // candidate's bytes. A newer candidate deposited after an accept is not
+  // accepted, and still offers the button.
+  const candidateAccepted =
+    candidate !== null &&
+    detail?.report?.has_template === true &&
+    candidate.structure_hash !== null &&
+    detail.report.structure_hash === candidate.structure_hash;
 
   return (
     <Box data-testid="golive-review" sx={{ maxWidth: 900 }}>
@@ -494,17 +515,23 @@ export default function GoLiveReview() {
 
           {candidate.valid ? (
             <Box sx={{ mt: 1.5, display: "flex", flexDirection: "column", gap: 1 }}>
-              <Box>
-                <Button
-                  data-testid="accept-template"
-                  variant="contained"
-                  size="small"
-                  disabled={accepting}
-                  onClick={() => void accept()}
-                >
-                  Accept this template
-                </Button>
-              </Box>
+              {candidateAccepted ? (
+                <Typography data-testid="accept-done" sx={{ fontSize: 13 }}>
+                  {TEMPLATE_ACCEPTED}
+                </Typography>
+              ) : (
+                <Box>
+                  <Button
+                    data-testid="accept-template"
+                    variant="contained"
+                    size="small"
+                    disabled={accepting}
+                    onClick={() => void accept()}
+                  >
+                    Accept this template
+                  </Button>
+                </Box>
+              )}
               {acceptIssues.length > 0 ? (
                 <Box data-testid="accept-errors" sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
                   <Typography sx={{ fontSize: 13, color: "text.secondary" }}>
@@ -525,15 +552,23 @@ export default function GoLiveReview() {
           is the right rule for the detail page (W22's 422 is the backstop) and
           the wrong thing to show HERE — an enabled launch button over a gate
           nobody has read yet is a click the human cannot take back. */}
-      {detail !== null ? (
+      {detail !== null && detail.hypothesis.status === "draft" ? (
         <Box sx={{ mt: 2 }}>
+          {/* A successful go-live goes back to the detail page: that is where
+              the live hypothesis is, and staying here left a clickable Go
+              live and Accept over a launch that had already happened. */}
           <GoLiveButton
             hypothesisId={id}
             specValidation={detail.spec_validation}
             templateAccepted={detail.report?.has_template === true}
-            onDone={() => void loadDetail()}
+            onDone={() => void navigate(`/hypotheses/${id}`)}
           />
         </Box>
+      ) : null}
+      {detail !== null && detail.hypothesis.status != null && detail.hypothesis.status !== "draft" ? (
+        <Typography data-testid="golive-not-draft" sx={{ fontSize: 13, color: "text.secondary", mt: 2 }}>
+          {NOT_A_DRAFT}
+        </Typography>
       ) : null}
     </Box>
   );

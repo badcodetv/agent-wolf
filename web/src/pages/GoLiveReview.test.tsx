@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, screen, within } from "@testing-library/react";
 import { Route, Routes } from "react-router";
-import GoLiveReview, { otherOrigins } from "./GoLiveReview.js";
+import GoLiveReview, { NOT_A_DRAFT, TEMPLATE_ACCEPTED, otherOrigins } from "./GoLiveReview.js";
 import {
   expectNothingPersisted,
   renderWithProviders,
@@ -13,6 +13,7 @@ const ID = "1a2b3c4d";
 const DETAIL = `GET /api/hypotheses/${ID}`;
 const CANDIDATE = `GET /api/hypotheses/${ID}/report-candidate`;
 const ACCEPT = `POST /api/hypotheses/${ID}/report-template`;
+const GO_LIVE = `POST /api/hypotheses/${ID}/go-live`;
 
 function detailBody(over: Record<string, unknown> = {}) {
   return {
@@ -797,6 +798,113 @@ describe("GoLiveReview: the empty and hostile states", () => {
     });
 
     expect(screen.queryByTestId("go-live-button")).toBeNull();
+  });
+
+  it("replaces the accept button with a confirmation once THIS candidate is the locked template", async () => {
+    // 2026-09-13: after a successful accept the button stayed, clickable, and
+    // nothing said the click had worked.
+    await renderReview({
+      ...OK,
+      [DETAIL]: {
+        json: detailBody({
+          spec_validation: { valid: true, errors: [] },
+          report: {
+            has_template: true,
+            structure_hash: "9f2c1d",
+            stripped_count: null,
+            updated_at_ms: null,
+            drift: null,
+            unreadable: false,
+            tamper: null,
+          },
+        }),
+      },
+      [CANDIDATE]: { json: candidateBody({ structure_hash: "9f2c1d" }) },
+    });
+
+    expect(screen.queryByTestId("accept-template")).toBeNull();
+    expect(screen.getByTestId("accept-done")).toHaveTextContent(TEMPLATE_ACCEPTED);
+    expect(screen.getByTestId("go-live-button")).toBeEnabled();
+  });
+
+  it("still offers the accept button for a NEWER candidate than the locked template", async () => {
+    await renderReview({
+      ...OK,
+      [DETAIL]: {
+        json: detailBody({
+          report: {
+            has_template: true,
+            structure_hash: "old-hash",
+            stripped_count: null,
+            updated_at_ms: null,
+            drift: null,
+            unreadable: false,
+            tamper: null,
+          },
+        }),
+      },
+      [CANDIDATE]: { json: candidateBody({ structure_hash: "9f2c1d" }) },
+    });
+
+    expect(screen.getByTestId("accept-template")).toBeInTheDocument();
+    expect(screen.queryByTestId("accept-done")).toBeNull();
+  });
+
+  it("goes to the detail page after a successful go-live", async () => {
+    // Staying put left a clickable Go live over a launch that had happened.
+    const stub = stubFetchRoutes({
+      [DETAIL]: {
+        json: detailBody({
+          spec_validation: { valid: true, errors: [] },
+          report: {
+            has_template: true,
+            structure_hash: "9f2c1d",
+            stripped_count: null,
+            updated_at_ms: null,
+            drift: null,
+            unreadable: false,
+            tamper: null,
+          },
+        }),
+      },
+      [CANDIDATE]: { json: candidateBody({ structure_hash: "9f2c1d" }) },
+      [GO_LIVE]: { status: 200, json: { status: "live" } },
+    });
+    renderWithProviders(
+      <Routes>
+        <Route path="/hypotheses/:id/golive" element={<GoLiveReview />} />
+        <Route path="/hypotheses/:id" element={<div data-testid="detail-page-stand-in" />} />
+      </Routes>,
+      { route: `/hypotheses/${ID}/golive` },
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      (screen.getByTestId("go-live-button") as HTMLButtonElement).click();
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(stub.countFor(GO_LIVE)).toBe(1);
+    expect(screen.getByTestId("detail-page-stand-in")).toBeInTheDocument();
+  });
+
+  it("offers no go-live button on a hypothesis that is already live", async () => {
+    await renderReview({
+      ...OK,
+      [DETAIL]: {
+        json: { ...detailBody(), hypothesis: { ...detailBody().hypothesis, status: "live" } },
+      },
+    });
+
+    expect(screen.queryByTestId("go-live-button")).toBeNull();
+    expect(screen.getByTestId("golive-not-draft")).toHaveTextContent(NOT_A_DRAFT);
   });
 
   it("links back to the detail page", async () => {
