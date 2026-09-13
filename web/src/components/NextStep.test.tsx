@@ -1,30 +1,35 @@
 import { describe, expect, it } from "vitest";
 import { screen } from "@testing-library/react";
-import NextStep, { nextStepFor } from "./NextStep.js";
+import NextStep, { nextStepFor, REVIEW_AND_GO_LIVE } from "./NextStep.js";
 import { renderWithProviders } from "../testUtils.js";
 
 const ID = "1a2b3c4d";
 
 describe("nextStepFor", () => {
-  it("🔴 a draft mid-interview has NO next step — the conversation is already running", () => {
-    // The create route seeds the interview and waits for the turn to be in
-    // flight before answering, so the interviewer is replying beside this
-    // banner by the time the page renders. Telling the reader to start it
-    // would be noise in the one slot reserved for what actually needs doing.
-    expect(nextStepFor(ID, "draft", false, false)).toBeNull();
+  it("🔴 a draft mid-interview says the interview is working and the page will update", () => {
+    // It used to say nothing (2026-09-07). On 2026-09-13 a first-time user
+    // watched a long tool-call loop beside a silent page and could not tell
+    // whether anything would ever happen. No link, no blocker: just progress.
+    const step = nextStepFor(ID, "draft", false, false);
+    expect(step?.say).toContain("The interview is shaping your hypothesis");
+    expect(step?.say).toContain("updates by itself");
+    expect(step?.working).toBe(true);
+    expect(step?.goTo).toBeUndefined();
   });
 
-  it("🔴 an ABSENT verdict is not a blocker either — it falls to the same silence", () => {
+  it("🔴 an ABSENT verdict is not a blocker either — it is the same progress line", () => {
     // `undefined` means the server did not say. Reading it as `false` would
     // invent a refusal the payload never carried — the same rule GoLiveButton
-    // holds to with `=== false`.
-    expect(nextStepFor(ID, "draft", undefined, undefined)).toBeNull();
+    // holds to with `=== false`. The progress line claims no refusal.
+    expect(nextStepFor(ID, "draft", undefined, undefined)).toEqual(nextStepFor(ID, "draft", false, false));
   });
 
   it("a valid spec with no template sends the reader to the template", () => {
     const step = nextStepFor(ID, "draft", true, false);
     expect(step?.say).toContain("report template");
     expect(step?.goTo?.to).toBe(`/hypotheses/${ID}/golive`);
+    // The interviewer's closing message names this label; they must match.
+    expect(step?.goTo?.label).toBe(REVIEW_AND_GO_LIVE);
   });
 
   it("🔴 BOTH halves satisfied is the only state that says 'go live'", () => {
@@ -34,9 +39,9 @@ describe("nextStepFor", () => {
     // A valid spec with no template points at the template instead.
     expect(nextStepFor(ID, "draft", true, false)?.say).toContain("report template");
     expect(nextStepFor(ID, "draft", true, false)?.say).not.toContain("take this hypothesis live");
-    // An accepted template with an invalid spec is still mid-interview: the
-    // conversation is on screen and running, so there is nothing to say.
-    expect(nextStepFor(ID, "draft", false, true)).toBeNull();
+    // An accepted template with an invalid spec is still mid-interview.
+    expect(nextStepFor(ID, "draft", false, true)?.working).toBe(true);
+    expect(nextStepFor(ID, "draft", false, true)?.goTo).toBeUndefined();
   });
 
   it("live says nothing needs you; challenged asks for the verdict", () => {
@@ -65,7 +70,21 @@ describe("NextStep", () => {
     );
     expect(screen.getByTestId("next-step")).toHaveAttribute("data-status", "draft");
     expect(screen.getByTestId("next-step-say")).toHaveTextContent("report template");
-    expect(screen.getByTestId("next-step-link")).toBeInTheDocument();
+    // Prominent: a primary button, not a quiet link.
+    const button = screen.getByTestId("next-step-link");
+    expect(button).toHaveTextContent("Review and go live");
+    expect(button).toHaveAttribute("href", `/hypotheses/${ID}/golive`);
+    expect(button.className).toContain("MuiButton-contained");
+    expect(screen.queryByTestId("next-step-working")).toBeNull();
+  });
+
+  it("renders the progress line with a progress bar and no button while interviewing", () => {
+    renderWithProviders(
+      <NextStep hypothesisId={ID} status="draft" specValidation={{ valid: false, errors: [] }} />,
+    );
+    expect(screen.getByTestId("next-step-say")).toHaveTextContent("The interview is shaping your hypothesis");
+    expect(screen.getByTestId("next-step-working")).toBeInTheDocument();
+    expect(screen.queryByTestId("next-step-link")).toBeNull();
   });
 
   it("renders nothing at all for a terminal hypothesis", () => {

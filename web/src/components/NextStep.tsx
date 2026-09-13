@@ -18,18 +18,29 @@
  * disagree with that button, which is why it derives from the same fields with
  * the same `=== false` / `=== true` discipline rather than re-deriving
  * readiness from the spec, and why it renders no control of its own except a
- * link to a screen that already exists.
+ * button linking to a screen that already exists.
  *
  * `undefined` is not `false` here either. An absent field means "the server
  * did not say", and the wording falls back to the interview step — the step
  * that is always safe to be on — rather than claiming a blocker the payload
  * never carried.
+ *
+ * ## The finish line is a button (2026-09-13)
+ *
+ * A first real interview ended with a valid spec and nothing on the page
+ * saying so: the detail was fetched once, and the step it would have shown was
+ * a quiet link. The page now polls while in draft (`HypothesisDetail.tsx`),
+ * this component says the interview is working while there is no valid spec,
+ * and the moment one lands the step is a primary **Review and go live**
+ * button — the words the interviewer prompt tells the user to look for
+ * (`prompts/interviewer.md` § "The closing message"; a test pins the pair).
  */
 
 import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import LinearProgress from "@mui/material/LinearProgress";
 import Typography from "@mui/material/Typography";
 import { Link as RouterLink } from "react-router";
-import Link from "@mui/material/Link";
 import type { SpecValidation } from "../api/types.js";
 
 export interface NextStepProps {
@@ -42,11 +53,16 @@ export interface NextStepProps {
   templateAccepted?: boolean;
 }
 
+/** The primary button's label. `prompts/interviewer.md` quotes it verbatim. */
+export const REVIEW_AND_GO_LIVE = "Review and go live";
+
 interface Step {
   /** What to do, in one sentence. */
   say: string;
   /** Where, when there is a screen for it. */
   goTo?: { label: string; to: string };
+  /** Work is happening elsewhere (the interview); show that it is. */
+  working?: boolean;
 }
 
 /**
@@ -65,31 +81,27 @@ export function nextStepFor(
       if (specValid === true && templateAccepted === true) {
         return {
           say: "The spec validates and a report template has been accepted. Review it once more and take this hypothesis live — that locks the scoreboard and starts the daily researcher.",
-          goTo: { label: "Review and go live", to: `/hypotheses/${hypothesisId}/golive` },
+          goTo: { label: REVIEW_AND_GO_LIVE, to: `/hypotheses/${hypothesisId}/golive` },
         };
       }
+      // A valid spec is the finish line of the interview: the interviewer
+      // deposits the report candidate BEFORE the spec, so by now there is a
+      // template to review on the same screen. One button, one label.
       if (specValid === true) {
         return {
-          say: "The spec validates. Next, accept a report template — the layout the daily researcher writes its findings into. Nothing goes live without one.",
-          goTo: { label: "Review the template", to: `/hypotheses/${hypothesisId}/golive` },
+          say: "Your hypothesis is ready for review. Check the scoreboard and the report, accept the report template, then take it live.",
+          goTo: { label: REVIEW_AND_GO_LIVE, to: `/hypotheses/${hypothesisId}/golive` },
         };
       }
-      // 🔴 NOTHING. Removed 2026-09-07, and deliberately.
-      //
-      // This used to say "talk to the interviewer in the Conversation panel",
-      // which was the right advice for about a day — while the thesis was a
-      // field nothing read and the interview genuinely had to be started by
-      // hand. Now the create route seeds the interview with the thesis and
-      // waits for the turn to be in flight before answering, so by the time
-      // this page renders the interviewer is already replying. A banner
-      // telling the reader to start a conversation that is visibly underway
-      // beside it is noise at the top of the page, and noise in the one slot
-      // reserved for the thing that actually needs doing.
-      //
-      // The next real step is the template, and it appears the moment the spec
-      // validates. Until then the conversation IS the next step and it is
-      // already on screen.
-      return null;
+      // Still interviewing. This used to render NOTHING (2026-09-07), on the
+      // grounds that the conversation beside it was visibly running. But a
+      // silent page with a long tool-call loop beside it read as stuck, and
+      // nothing told the reader the page would change by itself when the
+      // interview finished. Not a refusal — no blocker is claimed.
+      return {
+        say: "The interview is shaping your hypothesis — answer in the conversation panel. This page updates by itself when it is ready for review.",
+        working: true,
+      };
     }
     case "live":
       return {
@@ -138,16 +150,21 @@ export default function NextStep({
       <Typography data-testid="next-step-say" sx={{ fontSize: 13 }}>
         {step.say}
       </Typography>
+      {step.working === true ? (
+        <LinearProgress data-testid="next-step-working" sx={{ height: 2, borderRadius: 1 }} />
+      ) : null}
       {step.goTo === undefined ? null : (
-        <Link
-          data-testid="next-step-link"
-          component={RouterLink}
-          to={step.goTo.to}
-          underline="hover"
-          sx={{ fontSize: 13, fontWeight: 600 }}
-        >
-          {step.goTo.label} →
-        </Link>
+        <Box>
+          <Button
+            data-testid="next-step-link"
+            component={RouterLink}
+            to={step.goTo.to}
+            variant="contained"
+            size="small"
+          >
+            {step.goTo.label}
+          </Button>
+        </Box>
       )}
     </Box>
   );
