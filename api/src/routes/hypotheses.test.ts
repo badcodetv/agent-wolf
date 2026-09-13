@@ -187,6 +187,12 @@ interface StubConfig {
   /** A status code `GET /agent/attention-requests` answers with instead of a body. */
   failAttention?: number;
   schedules?: string;
+  /**
+   * Rows `GET /agent/deliveries` holds. `subscription_id` and `limit` are
+   * HONOURED, as Bob honours them, so a read that forgets the filter sees
+   * every schedule's jobs and its test fails.
+   */
+  deliveries?: Record<string, unknown>[];
 }
 
 const EMPTY = '{"memories":[]}';
@@ -383,6 +389,14 @@ class Stub {
     }
     if (path === "/agent/schedules") {
       return { status: 200, body: this.config.schedules ?? '{"schedules":[]}' };
+    }
+    if (path === "/agent/deliveries") {
+      let rows = this.config.deliveries ?? [];
+      const subscription = url.searchParams.get("subscription_id");
+      if (subscription !== null) rows = rows.filter((row) => row["subscription_id"] === subscription);
+      const limit = url.searchParams.get("limit");
+      if (limit !== null) rows = rows.slice(0, Number(limit));
+      return { status: 200, body: JSON.stringify({ deliveries: rows }) };
     }
     // 🔴 `GET /agent/session/{id}/status` — the probe the create route waits on.
     //
@@ -1820,6 +1834,40 @@ describe("hypotheses_detail", () => {
     expect(res.json.atoms.schedule_id).toBe("sched-1");
   });
 
+  it("hypotheses_detail: research says a run is in flight, read from THIS schedule's deliveries only", async () => {
+    const stub = baseStub();
+    stub.board = page([stateRow(ID, "live", "Copper is the new oil")]);
+    stub.details![`hypothesis:${ID}`] = page([stateRow(ID, "live", "Copper is the new oil")]);
+    stub.schedules = JSON.stringify({
+      schedules: [
+        { id: "sched-1", project: "wolf", worker: `researcher-${ID}`, cron: "0 6 * * *", input: "", enabled: true },
+      ],
+    });
+    stub.deliveries = [
+      // Another schedule's job, newer and running: must not count.
+      { id: "d-critic", subscription_id: "sched-2", schedule_id: "sched-2", worker: "critic", status: "running", created_at: 1787334900, started_at: 1787334901, ended_at: 0 },
+      { id: "d-2", subscription_id: "sched-1", schedule_id: "sched-1", worker: `researcher-${ID}`, status: "running", created_at: 1787334600, started_at: 1787334605, ended_at: 0 },
+      { id: "d-1", subscription_id: "sched-1", schedule_id: "sched-1", worker: `researcher-${ID}`, status: "ok", created_at: 1787248200, started_at: 1787248201, ended_at: 1787248500 },
+    ];
+    const h = await harness(stub);
+    const res = await get(h, `/api/hypotheses/${ID}`);
+
+    expect(res.json.research.state).toBe("running");
+    expect(res.json.research.started_at_ms).toBe(1787334605000);
+    expect(res.json.research.last_finished_at_ms).toBe(1787248500000);
+    expect(res.json.research.last_outcome).toBe("ok");
+    expect(typeof res.json.research.next_run_at_ms).toBe("number");
+    const read = h.stub.requests.find((r) => r.path.startsWith("/agent/deliveries"));
+    expect(new URL(read!.path, BOB).searchParams.get("subscription_id")).toBe("sched-1");
+  });
+
+  it("hypotheses_detail: research is null for a draft, which has no schedule to ask about", async () => {
+    const h = await harness(baseStub());
+    const res = await get(h, `/api/hypotheses/${ID}`);
+    expect(res.json.research).toBeNull();
+    expect(h.stub.requests.some((r) => r.path.startsWith("/agent/deliveries"))).toBe(false);
+  });
+
   it("hypotheses_detail: a spec-shaped memory written INSIDE a container is not accepted as the locked spec", async () => {
     const stub = baseStub();
     stub.details![`hypothesis-spec:${ID}`] = page([
@@ -1951,6 +1999,7 @@ describe("hypotheses_detail", () => {
         // `report` is: this assertion is what fails when a later ticket drops
         // a block from the payload.
         "challenge_reason",
+        "research",
         "state_history",
         "state_history_truncated",
       ].sort(),

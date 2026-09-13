@@ -28,6 +28,7 @@ import type { BobClient } from "../bob/client.js";
 import type {
   AttentionRequestRecord,
   MemorySearchResultRow,
+  ScheduleRecord,
   UnixMs,
   UnixSec,
 } from "../bob/types.js";
@@ -45,6 +46,11 @@ import { detectDrift, type DriftResult } from "../report/drift.js";
 import { parseTemplate } from "../report/template.js";
 import type { ReportComposeStats } from "./report.js";
 import type { HypothesisStatus } from "../hypothesis/lifecycle.js";
+import {
+  RESEARCH_DELIVERY_PAGE,
+  researchStatusFrom,
+  type ResearchStatus,
+} from "../hypothesis/research.js";
 import {
   INTERVIEWER_WORKER,
   HYPOTHESIS_ID_PATTERN,
@@ -430,6 +436,14 @@ export interface HypothesisDetail {
    * controls is a dropped anomaly, which the doctrine forbids.
    */
   state_history_truncated: boolean;
+  /**
+   * Is the daily researcher working right now, when did it last finish, and
+   * when does it run next — see `hypothesis/research.ts`.
+   *
+   * `null` when there is no researcher schedule (every draft) or when Bob's
+   * delivery log could not be read. A progress signal only: it decides nothing.
+   */
+  research: ResearchStatus | null;
 }
 
 // ── Options ─────────────────────────────────────────────────────────────
@@ -1157,6 +1171,7 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
           listKind(id, KIND_RESEARCH_NOTE),
           listKind(id, KIND_SPEC_AMENDMENT),
         ]);
+      const schedule = await scheduleFor(id);
 
       // The spec: the newest TRUSTED `hypothesis-spec` once one exists,
       // otherwise the newest `hypothesis-spec-candidate` — the untrusted kind
@@ -1215,10 +1230,11 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
           created_at_ms: change.createdAtMs,
         })),
         state_history_truncated: historyTruncated,
+        research: schedule === null ? null : await researchFor(id, schedule),
         atoms: {
           session_id: record.sessionId,
           worker: researcherWorkerFor(id),
-          schedule_id: await scheduleIdFor(id),
+          schedule_id: schedule?.id ?? null,
           datasets: specSource === KIND_SPEC ? datasetNamesFrom(id, spec) : [],
         },
       };
@@ -1568,13 +1584,32 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
   }
 
   /** null before go-live: the schedule is created with the researcher worker. */
-  async function scheduleIdFor(id: string): Promise<string | null> {
+  async function scheduleFor(id: string): Promise<ScheduleRecord | null> {
     const worker = researcherWorkerFor(id);
     try {
       const schedules = await client.listSchedules();
-      return schedules.find((schedule) => schedule.worker === worker)?.id ?? null;
+      return schedules.find((schedule) => schedule.worker === worker) ?? null;
     } catch (err) {
       logger.warn({ id, err }, "could not list schedules");
+      return null;
+    }
+  }
+
+  /**
+   * ONE delivery read, filtered server-side to this schedule: a schedule
+   * firing carries the schedule's id as its `subscription_id`. Degrades to
+   * `null` — a page that cannot say whether research is running is still the
+   * page carrying the verdict controls.
+   */
+  async function researchFor(id: string, schedule: ScheduleRecord): Promise<ResearchStatus | null> {
+    try {
+      const deliveries = await client.listDeliveries({
+        subscriptionId: schedule.id,
+        limit: RESEARCH_DELIVERY_PAGE,
+      });
+      return researchStatusFrom(schedule, deliveries, Date.now());
+    } catch (err) {
+      logger.warn({ id, err }, "could not list the researcher's deliveries");
       return null;
     }
   }
