@@ -2499,6 +2499,8 @@ describe("hypotheses_report_block", () => {
       drift: null,
       unreadable: false,
       tamper: null,
+      written_by_worker: null,
+      written_by_session: null,
     });
   });
 
@@ -2527,6 +2529,9 @@ describe("hypotheses_report_block", () => {
       drift: { orphan_slots: [], unfilled_slots: [] },
       unreadable: false,
       tamper: null,
+      // The report row's own provenance, so the stamp names its writer.
+      written_by_worker: `researcher-${ID}`,
+      written_by_session: "sess-tick",
     });
   });
 

@@ -389,6 +389,15 @@ export interface ReportBlock {
    * about an attack this page stayed silent about.
    */
   tamper: Tamper[] | null;
+  /**
+   * Who wrote the newest own `kind=report` — its provenance, verbatim, so the
+   * page's stamp can name the researcher instead of "unknown writer"
+   * (2026-09-13 walk). `null` when no readable report exists. It vouches for
+   * nothing: the report read has already applied the cross-hypothesis rule,
+   * and these are that row's own fields.
+   */
+  written_by_worker: string | null;
+  written_by_session: string | null;
 }
 
 export interface HypothesisDetail {
@@ -1373,6 +1382,8 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
       // site; joining two reads of ONE kind would make duplicates reachable
       // and silently change the assumption.
       tamper: mergeTamper(templateRead.tamper, degraded.read.tamper),
+      written_by_worker: report?.createdByWorker ?? null,
+      written_by_session: report?.createdBySession ?? null,
     };
   }
 

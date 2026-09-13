@@ -259,6 +259,13 @@ export interface ReportBlock {
    * neither branch may swallow the other.
    */
   tamper: Tamper[] | null;
+  /**
+   * The newest report row's own provenance, for the stamp. `null` with no
+   * readable report. OPTIONAL: an older server does not send them, and the
+   * stamp then says "unknown writer" as before.
+   */
+  written_by_worker?: string | null;
+  written_by_session?: string | null;
 }
 
 /** `GET /api/hypotheses/:id/embed-token`. `expires_at_sec` is unix SECONDS. */

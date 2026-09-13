@@ -787,6 +787,20 @@ describe("W23's report panel, in its host", () => {
     expect(within(section).getByTestId("report-empty")).toBeInTheDocument();
   });
 
+  it("🔴 the report stamp names the researcher that wrote it, not \"unknown writer\"", async () => {
+    await renderDetail({
+      [DETAIL]: {
+        json: fullBody({
+          report: { ...REPORT, written_by_worker: "researcher-1a2b3c4d", written_by_session: "sess-tick" },
+        }),
+      },
+      [TOKEN]: tokenRoute,
+      [ID_SERIES("brent_crude")]: seriesBody,
+    });
+    const section = screen.getByTestId("report-section");
+    expect(within(section).getByTestId("provenance-stamp")).toHaveTextContent(/^researcher-1a2b3c4d/);
+  });
+
   it("🔴 shows the notices ABOVE the frame's box, not inside it", async () => {
     await renderDetail({
       [DETAIL]: {

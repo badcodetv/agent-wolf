@@ -371,10 +371,13 @@ export default function HypothesisDetail() {
             <Box data-testid="report-section" data-report-frame="shown">
               <Provenance
                 kind={detail.report?.has_template === true ? "model" : "machine"}
-                // ⚠️ The pinned report block carries NO writer — not
-                // `written_by_worker`, not `written_by_session` — so the stamp
-                // falls back to `UNKNOWN_WRITER` rather than borrowing a
-                // writer from a neighbouring row it cannot vouch for.
+                // The report row's OWN provenance, served on the block since
+                // 2026-09-13 — the stamp read "unknown writer" on the first
+                // real report. An older server omits both and the stamp falls
+                // back to `UNKNOWN_WRITER` rather than borrowing a writer from
+                // a neighbouring row it cannot vouch for.
+                worker={detail.report?.written_by_worker ?? null}
+                session={detail.report?.written_by_session ?? null}
                 atMs={detail.report?.updated_at_ms ?? null}
               >
                 <ReportDrift report={detail.report ?? null} />
