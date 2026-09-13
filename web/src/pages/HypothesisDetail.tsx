@@ -96,7 +96,7 @@ import TamperWarning from "../components/TamperWarning.js";
 import Timeline from "../components/Timeline.js";
 import VerdictActions from "../components/VerdictActions.js";
 import VerdictBand from "../components/VerdictBand.js";
-import { ApiError, fetchHypothesis } from "../api/client.js";
+import { ApiError, fetchHypothesis, fetchReportCandidate } from "../api/client.js";
 import type { HypothesisDetail as Detail, SpecCondition } from "../api/types.js";
 
 /**
@@ -109,6 +109,14 @@ import type { HypothesisDetail as Detail, SpecCondition } from "../api/types.js"
  */
 export const TITLE_TRUNCATED_CAUSE =
   "this title is cut — the memory list returns a 500-byte snippet and line 1 ran past it";
+
+/** A draft with no accepted template and no candidate seen yet. */
+export const NO_REPORT_TEMPLATE_YET =
+  "No report template yet — one is written during the interview and locked when the hypothesis goes live.";
+
+/** A draft whose interview has deposited a report candidate that nobody has accepted. */
+export const REPORT_CANDIDATE_READY =
+  "A report template is ready to review. Open Review and go live to see it and accept it.";
 
 /** A section heading. Density over air: a label, not a card. */
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -188,6 +196,31 @@ export default function HypothesisDetail() {
     }, pollMs);
     return () => clearInterval(timer);
   }, [pollMs, load]);
+
+  // Does the interview's report CANDIDATE exist yet? The detail payload does
+  // not say, and a draft whose interview had deposited one still read "No
+  // report template yet" (2026-09-13 walk). Asked once when the draft's page
+  // opens without a template and again when the spec first validates — the
+  // interview's finish line, which it reaches after depositing the candidate
+  // — never on every poll. A failed or empty read keeps the old sentence.
+  const candidateCheckKey =
+    detail?.hypothesis.status === "draft" && detail.report?.has_template !== true
+      ? `valid:${detail.spec_validation?.valid === true}`
+      : null;
+  const [candidateReady, setCandidateReady] = useState(false);
+  useEffect(() => {
+    if (candidateCheckKey === null) return;
+    let live = true;
+    fetchReportCandidate(id).then(
+      () => {
+        if (live) setCandidateReady(true);
+      },
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, [id, candidateCheckKey]);
 
   // The condition's STATISTIC lives on the spec, not on the evaluation. Built
   // here because this is where the spec is; `undefined` for anything the spec
@@ -362,9 +395,8 @@ export default function HypothesisDetail() {
                 <Typography sx={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", mb: 0.5 }}>
                   REPORT
                 </Typography>
-                <Typography sx={{ fontSize: 13, color: "text.secondary" }}>
-                  No report template yet — one is written during the interview and locked when the
-                  hypothesis goes live.
+                <Typography data-testid="report-suppressed-say" sx={{ fontSize: 13, color: "text.secondary" }}>
+                  {candidateReady ? REPORT_CANDIDATE_READY : NO_REPORT_TEMPLATE_YET}
                 </Typography>
               </Box>
             ) : (

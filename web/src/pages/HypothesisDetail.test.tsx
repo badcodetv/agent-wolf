@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, screen, within } from "@testing-library/react";
 import { Route, Routes } from "react-router";
-import HypothesisDetail, { DRAFT_POLL_MS, LIVE_POLL_MS, RESEARCH_POLL_MS } from "./HypothesisDetail.js";
+import HypothesisDetail, {
+  DRAFT_POLL_MS,
+  LIVE_POLL_MS,
+  NO_REPORT_TEMPLATE_YET,
+  REPORT_CANDIDATE_READY,
+  RESEARCH_POLL_MS,
+} from "./HypothesisDetail.js";
 import { renderWithProviders, stubFetchRoutes, type FetchRoutes } from "../testUtils.js";
 
 const ID = "1a2b3c4d";
@@ -538,6 +544,32 @@ describe("🔴 a missing block costs a region, never the page", () => {
     expect(screen.queryByTestId("report-frame-host")).toBeNull();
     // The sentence the box existed to say is still said.
     expect(screen.getByTestId("report-section")).toHaveTextContent("No report template yet");
+  });
+
+  it("🔴 a draft whose interview deposited a report candidate says it is ready to review", async () => {
+    // 2026-09-13: the page said "No report template yet" beside an interview
+    // that had already written one.
+    await renderDetail({
+      [DETAIL]: { json: detailBody({ spec_validation: { valid: true, errors: [] } }) },
+      [`GET /api/hypotheses/${ID}/report-candidate`]: { json: { memory_id: "cand-1", summary: "a chart", html: "<div></div>" } },
+      [TOKEN]: tokenRoute,
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("report-suppressed-say")).toHaveTextContent(REPORT_CANDIDATE_READY);
+  });
+
+  it("keeps the no-template sentence when there is no candidate", async () => {
+    await renderDetail({
+      [DETAIL]: { json: detailBody() },
+      [`GET /api/hypotheses/${ID}/report-candidate`]: {
+        status: 404,
+        json: { error: { kind: "not_found", message: "no candidate" } },
+      },
+      [TOKEN]: tokenRoute,
+    });
+    expect(screen.getByTestId("report-suppressed-say")).toHaveTextContent(NO_REPORT_TEMPLATE_YET);
   });
 
   it("a draft WITH an accepted template gets the frame back", async () => {
