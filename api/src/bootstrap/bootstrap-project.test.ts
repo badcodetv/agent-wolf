@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { validateSpec } from "../hypothesis/spec.js";
+import { validateReportContent } from "../mcp/reportvalidate.js";
 import {
   MockAgent,
   setGlobalDispatcher,
@@ -483,6 +484,64 @@ describe("prompt contract — the literals every other ticket depends on", () =>
     // answer arrives as a NEW user message, so a second card in the same
     // turn gets one answer, and prose after the card buries it.
     expect(/ask ONE question/i.test(INTERVIEWER_PROMPT)).toBe(true);
+  });
+
+  // 🔴 The interview that never ended (2026-09-13). A first-time user typed
+  // "the price of Bitcoin will go up"; the interviewer pushed for
+  // specificity "relentlessly", redesigned its template because a generic
+  // one meant "the interview did not finish", and never told the user what
+  // to do next. These pin the bounds and the finish line that replaced that.
+
+  it("interviewer.md bounds the interview: a question budget and a fix budget", () => {
+    expect(INTERVIEWER_PROMPT).toMatch(/at most 3 questions/);
+    expect(INTERVIEWER_PROMPT).toMatch(/At most 2 fix rounds per candidate/);
+    expect(INTERVIEWER_PROMPT).not.toMatch(/relentlessly/);
+  });
+
+  it("interviewer.md names every tool it expects the model to call, by its full name", () => {
+    for (const tool of [
+      "mcp__wolf__series_search",
+      "mcp__wolf__series_fetch",
+      "mcp__wolf__spec_validate",
+      "mcp__wolf__report_validate",
+      "mcp__core__memory_create",
+      "mcp__ui__ask_user",
+    ]) {
+      expect(INTERVIEWER_PROMPT.includes(tool), `interviewer.md must name ${tool}`).toBe(true);
+    }
+  });
+
+  it("interviewer.md ends on the UI's own words: 'Review and go live'", () => {
+    // The label of the primary button NextStep.tsx renders once a valid spec
+    // lands (web/src/components/NextStep.tsx, REVIEW_AND_GO_LIVE). If the two
+    // drift, the model points the user at a button that does not exist.
+    expect(INTERVIEWER_PROMPT).toMatch(/## The closing message/);
+    expect(INTERVIEWER_PROMPT).toContain("**Review and go live**");
+    const nextStep = readFileSync(join(repoRoot, "web", "src", "components", "NextStep.tsx"), "utf8");
+    expect(nextStep).toContain('"Review and go live"');
+  });
+
+  it("interviewer.md deposits the report BEFORE the spec, so the button never appears early", () => {
+    const report = INTERVIEWER_PROMPT.indexOf("**Deposit the report candidate first**");
+    const spec = INTERVIEWER_PROMPT.indexOf("**Then deposit the spec candidate**");
+    expect(report).toBeGreaterThan(-1);
+    expect(spec).toBeGreaterThan(report);
+  });
+
+  it("interviewer.md's report skeleton actually VALIDATES", () => {
+    // The skeleton exists so a template is reachable in one pass. One that
+    // did not validate would send the model straight back into the loop.
+    const block = /```html\s*([\s\S]*?)```/.exec(INTERVIEWER_PROMPT);
+    expect(block, "interviewer.md must carry a report skeleton in a ```html block").not.toBeNull();
+    const out = validateReportContent(`summary\n${block![1]!}`);
+    expect(out.errors).toEqual([]);
+    expect(out.valid).toBe(true);
+  });
+
+  it("interviewer.md still says what to say instead of 'live'", () => {
+    expect(INTERVIEWER_PROMPT).toMatch(/You cannot mark a hypothesis live/);
+    expect(INTERVIEWER_PROMPT).toMatch(/ready for review/);
+    expect(INTERVIEWER_PROMPT).toMatch(/Nothing is\s+tracked until you do/);
   });
 
   it("researcher-preamble.md forbids ask_user — nobody is watching a daily tick", () => {
