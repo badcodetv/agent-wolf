@@ -268,7 +268,7 @@ describe("mcp_auth rejects an unauthenticated or wrongly-authenticated call", ()
 });
 
 describe("mcp_tools_list schema", () => {
-  it("lists all three tools with complete JSON Schema", async () => {
+  it("lists all four tools with complete JSON Schema", async () => {
     const { base } = await harness();
     const res = await rpc(base, { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
     const tools: any[] = res.json.result.tools;
@@ -276,8 +276,10 @@ describe("mcp_tools_list schema", () => {
 
     // `spec_validate` joined the two market-data tools when the interviewer
     // turned out to have no way to check a spec before depositing it — see
-    // specvalidate.ts. Listed here so a fourth tool cannot arrive unnoticed.
+    // specvalidate.ts. `report_validate` followed for the template — see
+    // reportvalidate.ts. Listed here so a fifth tool cannot arrive unnoticed.
     expect(Object.keys(byName).sort()).toEqual([
+      "report_validate",
       "series_fetch",
       "series_search",
       "spec_validate",
@@ -322,6 +324,9 @@ describe("mcp_tools_list schema", () => {
     expect(byName.spec_validate.inputSchema.required).toEqual(["content"]);
     expect(byName.spec_validate.description).toContain("BEFORE you deposit");
     expect(byName.spec_validate.description).toContain("writes nothing");
+    expect(byName.report_validate.inputSchema.required).toEqual(["content"]);
+    expect(byName.report_validate.description).toContain("BEFORE you deposit");
+    expect(byName.report_validate.description).toContain("writes nothing");
     // …and series_search states that Stooq results omit first/last.
     expect(byName.series_search.description).toContain("null");
   });

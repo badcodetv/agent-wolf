@@ -4,9 +4,9 @@
  * design/2026-08-20-agent-wolf.md § "The MCP server name and its auth
  * header" (agent-bob repo):
  *
- * Three tools: `series_search` and `series_fetch` (market data) and
- * `spec_validate` (the interviewer's schema check before it deposits a
- * candidate — read-only, writes nothing).
+ * Four tools: `series_search` and `series_fetch` (market data), and
+ * `spec_validate` + `report_validate` (the interviewer's checks before it
+ * deposits a spec or report candidate — read-only, write nothing).
  *
  *   "Server name is `wolf`, so tools are mcp__wolf__series_fetch and
  *   friends — the researcher prompt, X1's mock-model script and W7 must all
@@ -44,6 +44,7 @@ import {
   DEFAULT_SERIES_URL_TTL_SEC,
 } from "./seriesdownload.js";
 import { constantTimeEquals } from "./seriesdownload.js";
+import { registerReportValidateTool } from "./reportvalidate.js";
 import { registerSpecValidateTool } from "./specvalidate.js";
 import { registerSeriesTools, type MarketDataAccess } from "./tools.js";
 
@@ -75,6 +76,9 @@ export interface WolfMcpOptions {
   /** Download-URL lifetime in seconds. Defaults to 300. */
   seriesUrlTtlSec?: number;
   marketdata: MarketDataAccess;
+  /** `config.reportMaxBytes` — the limit `report_validate` checks a template
+   * against, so it agrees with the review screen. Defaults to the config default. */
+  reportMaxBytes?: number;
   /** Injectable clock in epoch **milliseconds**. */
   now?: () => number;
 }
@@ -146,6 +150,9 @@ export function createWolfMcp(options: WolfMcpOptions): WolfMcp {
     // Read-only and pure; see specvalidate.ts for the thirteen-error
     // interview that made it necessary.
     registerSpecValidateTool(server);
+    // `report_validate` — the same loop for the report template; see
+    // reportvalidate.ts for the interview that never finished without it.
+    registerReportValidateTool(server, options.reportMaxBytes);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,

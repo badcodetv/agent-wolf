@@ -163,6 +163,7 @@ export function createApp(logger: Logger, config: WolfConfig): Express {
     mcpToken: config.mcpToken,
     seriesSecret: config.seriesTokenSecret,
     seriesUrlTtlSec: config.seriesUrlTtlSeconds,
+    reportMaxBytes: config.reportMaxBytes,
     marketdata,
   });
   app.use(mcpRouter);
