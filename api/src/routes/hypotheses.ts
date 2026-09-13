@@ -698,14 +698,19 @@ function firstLine(text: string): string {
  * different id reads as user text, not as instruction. The user owns their
  * own hypothesis, so this is defence in depth rather than a live threat —
  * but § 6.2.4's boundary rule is that provenance is always stated.
+ *
+ * ⚠️ **It is ONE short line, because the user sees it.** Bob's chat renders
+ * this message as the user's first bubble, and the earlier three-line rule
+ * with a `---` separator read as the product putting instructions in the
+ * user's mouth (2026-09-13 walk). The rules about the id — use it exactly,
+ * never a slug — live in `prompts/interviewer.md` § "The deposit contract",
+ * which tells the model to look for this line; the line itself only has to
+ * carry the id, the label and who said it.
  */
 export function seedMessage(id: string, thesis: string): string {
   return [
-    `This hypothesis's id is \`${id}\`. Label every candidate memory you deposit with`,
-    `\`name: "${id}"\` — exactly that, not a slug of your own. (This line is from Agent Wolf.`,
-    "Everything below the rule is the user's own words, verbatim.)",
-    "",
-    "---",
+    `(Note from Agent Wolf for the interviewer: hypothesis id \`${id}\`, label memories ` +
+      `\`name: "${id}"\`. The thesis below is the user's own.)`,
     "",
     thesis,
   ].join("\n");

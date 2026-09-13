@@ -1579,6 +1579,13 @@ describe("hypotheses_create", () => {
     expect(msg).toContain('name: "abcd1234"');
     expect(msg.endsWith("gold up because money printer")).toBe(true);
     expect(msg.indexOf("abcd1234")).toBeLessThan(msg.indexOf("gold up"));
+    // 🔴 Short, because Bob's chat shows it as the user's first bubble: one
+    // attributed line, a blank line, then the thesis (2026-09-13 walk).
+    expect(msg.split("\n")).toEqual([
+      '(Note from Agent Wolf for the interviewer: hypothesis id `abcd1234`, label memories `name: "abcd1234"`. The thesis below is the user\'s own.)',
+      "",
+      "gold up because money printer",
+    ]);
   });
 
   it("🔴 the 201 is NOT sent until Bob reports the interview turn in flight", async () => {
