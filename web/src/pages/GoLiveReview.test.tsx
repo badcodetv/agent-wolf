@@ -915,3 +915,49 @@ describe("GoLiveReview: the empty and hostile states", () => {
     );
   });
 });
+
+/* ================================================================== */
+/* The spec being locked                                               */
+/* ================================================================== */
+
+describe("GoLiveReview: the spec going live", () => {
+  it("🔴 shows the spec in plain words above the template", async () => {
+    // 2026-09-13: the next step said "check the scoreboard" and this screen
+    // showed only the template.
+    await renderReview({
+      ...OK,
+      [DETAIL]: {
+        json: detailBody({
+          spec: {
+            thesis: "Bitcoin will go up",
+            horizon_days: 90,
+            flat_band_pct: 2,
+            staleness_days: 5,
+            metrics: [{ slug: "btc-usd", source: "yahoo", series_id: "BTC-USD", direction: "up", weight: 1, unit: "USD" }],
+            invalidation: [
+              {
+                id: "inv-1", metric: "btc-usd", stat: "change_pct", reference: "value_at_live", op: "lt",
+                threshold: -15, sustained_days: 14, meaning: "Bitcoin is not going up",
+              },
+            ],
+          },
+        }),
+      },
+    });
+    const section = screen.getByTestId("golive-spec");
+    expect(within(section).getByTestId("spec-thesis")).toHaveTextContent("Bitcoin will go up");
+    expect(within(section).getByTestId("spec-horizon")).toHaveTextContent("Tracked for 90 days from go-live.");
+    expect(textsOf("spec-metric")).toEqual(["btc-usd — BTC-USD from yahoo, expected to go up"]);
+    expect(textsOf("spec-condition")).toEqual([
+      "btc-usd's % change since go-live is below -15% for 14 days in a row — Bitcoin is not going up",
+    ]);
+    // Above the template, in document order.
+    const template = screen.getByTestId("candidate-summary");
+    expect(section.compareDocumentPosition(template) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("says so plainly when no spec has been proposed", async () => {
+    await renderReview(OK);
+    expect(screen.getByTestId("spec-summary-empty")).toBeInTheDocument();
+  });
+});

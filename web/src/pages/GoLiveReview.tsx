@@ -92,6 +92,7 @@ import Typography from "@mui/material/Typography";
 import Link from "@mui/material/Link";
 import { Link as RouterLink, useNavigate, useParams } from "react-router";
 import GoLiveButton from "../components/GoLiveButton.js";
+import SpecSummary from "../components/SpecSummary.js";
 import Provenance from "../components/trust/Provenance.js";
 import Severity from "../components/trust/Severity.js";
 import TamperWarning from "../components/TamperWarning.js";
@@ -113,6 +114,9 @@ import type {
 } from "../api/types.js";
 
 // ── The sentences, written once ─────────────────────────────────────────
+
+/** Above the spec summary. Going live locks exactly this. */
+export const SPEC_HEADING = "THE SPEC GOING LIVE";
 
 export const SCRIPT_SRCS_HEADING = "Remote code this template references";
 export const CODE_ORIGINS_HEADING = "Origins allowed to execute code";
@@ -426,6 +430,18 @@ export default function GoLiveReview() {
         </Box>
       ) : null}
 
+      {/* 🔴 The spec first: it is what the scoreboard is built from, and the
+          next step sends the reader here to "check the scoreboard". This
+          screen used to show only the template (2026-09-13 walk). */}
+      {detail !== null ? (
+        <Box component="section" data-testid="golive-spec" sx={{ mb: 2 }}>
+          <Typography sx={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", mb: 0.5 }}>
+            {SPEC_HEADING}
+          </Typography>
+          <SpecSummary spec={detail.spec ?? null} />
+        </Box>
+      ) : null}
+
       {!candidateRead ? <Skeleton data-testid="golive-loading" variant="rectangular" height={240} /> : null}
 
       {candidateAbsent ? (
@@ -434,6 +450,11 @@ export default function GoLiveReview() {
         </Typography>
       ) : null}
 
+      {candidate !== null ? (
+        <Typography sx={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", mb: 0.5 }}>
+          THE REPORT TEMPLATE
+        </Typography>
+      ) : null}
       {candidate !== null ? (
         // § 2, Channel P: a candidate is model-authored. A NON-SEMANTIC ground
         // tint and a stamp, never a warning treatment — a proposed template is
