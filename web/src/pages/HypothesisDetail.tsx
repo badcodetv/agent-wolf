@@ -134,10 +134,22 @@ export const DRAFT_POLL_MS = 5_000;
  */
 export const LIVE_POLL_MS = 60_000;
 
+/**
+ * How often a live hypothesis re-reads while its researcher is WORKING. The
+ * report and notes land mid-run, and a minute's lag after "Results appear
+ * here by themselves" reads as a broken promise.
+ */
+export const RESEARCH_POLL_MS = 10_000;
+
 /** The poll interval for a status, or `null` for a status that does not change by itself. */
-export function pollIntervalFor(status: string | null | undefined): number | null {
+export function pollIntervalFor(
+  status: string | null | undefined,
+  researchState?: string | null,
+): number | null {
   if (status === "draft") return DRAFT_POLL_MS;
-  if (status === "live") return LIVE_POLL_MS;
+  if (status === "live") {
+    return researchState === "running" || researchState === "queued" ? RESEARCH_POLL_MS : LIVE_POLL_MS;
+  }
   return null;
 }
 
@@ -162,7 +174,7 @@ export default function HypothesisDetail() {
     void load();
   }, [load]);
 
-  const pollMs = pollIntervalFor(detail?.hypothesis.status);
+  const pollMs = pollIntervalFor(detail?.hypothesis.status, detail?.research?.state);
   const pollInFlight = useRef(false);
   useEffect(() => {
     if (pollMs === null) return;
@@ -272,6 +284,7 @@ export default function HypothesisDetail() {
               status={detail.hypothesis.status}
               specValidation={detail.spec_validation}
               templateAccepted={detail.report?.has_template}
+              research={detail.research ?? null}
             />
 
             {/* R141: the board shows an ellipsis, the detail page says why. */}

@@ -174,6 +174,26 @@ export interface HypothesisDetail {
    * never the page (R140).
    */
   report?: ReportBlock | null;
+  /**
+   * Is the daily researcher working right now (`api/src/hypothesis/research.ts`).
+   * `null` for a draft, which has no schedule, and when Bob's delivery log
+   * could not be read. OPTIONAL: an older server does not send it. A progress
+   * signal only — nothing is decided from it.
+   */
+  research?: ResearchStatus | null;
+}
+
+export interface ResearchStatus {
+  /** `queued`: fired, waiting to start. `running`: a researcher is working. `idle`: neither. */
+  state: "queued" | "running" | "idle" | string;
+  /** When the in-flight run started; `null` when idle. Unix ms. */
+  started_at_ms: UnixMs | null;
+  /** When the newest finished run ended; `null` before the first. Unix ms. */
+  last_finished_at_ms: UnixMs | null;
+  /** That run's Bob delivery status, verbatim: `ok`, `failed`, `rate_limited`, … */
+  last_outcome: string | null;
+  /** The schedule's next firing in UTC; `null` when unknown. Unix ms. */
+  next_run_at_ms: UnixMs | null;
 }
 
 /**

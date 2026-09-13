@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, screen, within } from "@testing-library/react";
 import { Route, Routes } from "react-router";
-import HypothesisDetail, { DRAFT_POLL_MS, LIVE_POLL_MS } from "./HypothesisDetail.js";
+import HypothesisDetail, { DRAFT_POLL_MS, LIVE_POLL_MS, RESEARCH_POLL_MS } from "./HypothesisDetail.js";
 import { renderWithProviders, stubFetchRoutes, type FetchRoutes } from "../testUtils.js";
 
 const ID = "1a2b3c4d";
@@ -900,6 +900,36 @@ describe("🔴 a draft notices the interview finishing by itself", () => {
     expect(stub.countFor(DETAIL)).toBe(1);
     await tick(LIVE_POLL_MS);
     expect(stub.countFor(DETAIL)).toBe(2);
+  });
+
+  it("🔴 says research is running, and polls fast until the run finishes", async () => {
+    // 2026-09-13: after go-live the page sat unchanged for the minutes a tick
+    // takes, with nothing saying anything was happening.
+    const running = () => ({
+      json: {
+        ...livePayload(),
+        research: { state: "running", started_at_ms: Date.now() - 120_000, last_finished_at_ms: null, last_outcome: null, next_run_at_ms: null },
+      },
+    });
+    const finishedRun = () => ({
+      json: {
+        ...livePayload(),
+        research: { state: "idle", started_at_ms: null, last_finished_at_ms: Date.UTC(2026, 8, 13, 10, 42), last_outcome: "ok", next_run_at_ms: Date.UTC(2026, 8, 14, 6, 0) },
+      },
+    });
+    const stub = await renderDetail({
+      [DETAIL]: (call) => (call < 2 ? running() : finishedRun()),
+      [TOKEN]: tokenRoute,
+    });
+    expect(screen.getByTestId("research-line")).toHaveTextContent("Research is running — started 2 minutes ago. Results appear here by themselves.");
+    await tick(RESEARCH_POLL_MS);
+    expect(stub.countFor(DETAIL)).toBe(2);
+    await tick(RESEARCH_POLL_MS);
+    expect(stub.countFor(DETAIL)).toBe(3);
+    expect(screen.getByTestId("research-line")).toHaveTextContent("Last research run finished 13 Sept 2026 10:42 UTC · next run 14 Sept 2026 06:00 UTC");
+    // Back to the slow poll once nothing is running.
+    await tick(RESEARCH_POLL_MS * 3);
+    expect(stub.countFor(DETAIL)).toBe(3);
   });
 
   it("drops to the slow poll once the status leaves draft", async () => {

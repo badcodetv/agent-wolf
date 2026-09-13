@@ -41,7 +41,9 @@ import Button from "@mui/material/Button";
 import LinearProgress from "@mui/material/LinearProgress";
 import Typography from "@mui/material/Typography";
 import { Link as RouterLink } from "react-router";
-import type { SpecValidation } from "../api/types.js";
+import { relativeTime } from "./trust/Provenance.js";
+import { formatUtcDateTime } from "../format.js";
+import type { ResearchStatus, SpecValidation } from "../api/types.js";
 
 export interface NextStepProps {
   hypothesisId: string;
@@ -51,6 +53,8 @@ export interface NextStepProps {
   specValidation?: SpecValidation;
   /** `report.has_template` from the detail payload. */
   templateAccepted?: boolean;
+  /** `research` from the detail payload. Only a live hypothesis renders it. */
+  research?: ResearchStatus | null;
 }
 
 /** The primary button's label. `prompts/interviewer.md` quotes it verbatim. */
@@ -118,14 +122,60 @@ export function nextStepFor(
   }
 }
 
+/**
+ * The research line under a live step: is a researcher working right now, and
+ * if not, when did it last finish and when does it run next.
+ *
+ * 🔴 The first real-model walk (2026-09-13) went live and then watched a page
+ * that did not change for the minutes a tick takes, with nothing saying
+ * anything was happening. This is that signal, and nothing more: it is read
+ * from Bob's delivery log, it decides no state, and an absent block renders
+ * nothing rather than a guess.
+ */
+export function researchLineFor(
+  research: ResearchStatus | null | undefined,
+  nowMs: number = Date.now(),
+): { say: string; working: boolean } | null {
+  if (research === null || research === undefined) return null;
+  const next = research.next_run_at_ms;
+  if (research.state === "running" || research.state === "queued") {
+    const when = relativeTime(research.started_at_ms, nowMs);
+    const started =
+      research.state === "queued"
+        ? "Research is starting"
+        : when === undefined
+          ? "Research is running"
+          : `Research is running — started ${when}`;
+    return { say: `${started}. Results appear here by themselves.`, working: true };
+  }
+  const parts: string[] = [];
+  if (research.last_finished_at_ms !== null) {
+    const outcome =
+      research.last_outcome === "ok" || research.last_outcome === null
+        ? "finished"
+        : "did not finish cleanly";
+    parts.push(`Last research run ${outcome} ${formatUtcDateTime(research.last_finished_at_ms)}`);
+  }
+  if (next !== null) {
+    parts.push(
+      research.last_finished_at_ms === null
+        ? `The first research run starts ${formatUtcDateTime(next)}`
+        : `next run ${formatUtcDateTime(next)}`,
+    );
+  }
+  return parts.length === 0 ? null : { say: parts.join(" · "), working: false };
+}
+
 export default function NextStep({
   hypothesisId,
   status,
   specValidation,
   templateAccepted,
+  research,
 }: NextStepProps) {
   const step = nextStepFor(hypothesisId, status, specValidation?.valid, templateAccepted);
   if (step === null) return null;
+  const researchLine = status === "live" ? researchLineFor(research) : null;
 
   return (
     <Box
@@ -153,6 +203,20 @@ export default function NextStep({
       {step.working === true ? (
         <LinearProgress data-testid="next-step-working" sx={{ height: 2, borderRadius: 1 }} />
       ) : null}
+      {researchLine === null ? null : (
+        <>
+          <Typography
+            data-testid="research-line"
+            data-working={researchLine.working ? "true" : "false"}
+            sx={{ fontSize: 13, color: "text.secondary" }}
+          >
+            {researchLine.say}
+          </Typography>
+          {researchLine.working ? (
+            <LinearProgress data-testid="research-working" sx={{ height: 2, borderRadius: 1 }} />
+          ) : null}
+        </>
+      )}
       {step.goTo === undefined ? null : (
         <Box>
           <Button

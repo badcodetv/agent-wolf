@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { screen } from "@testing-library/react";
-import NextStep, { nextStepFor, REVIEW_AND_GO_LIVE } from "./NextStep.js";
+import NextStep, { nextStepFor, researchLineFor, REVIEW_AND_GO_LIVE } from "./NextStep.js";
 import { renderWithProviders } from "../testUtils.js";
 
 const ID = "1a2b3c4d";
@@ -90,5 +90,46 @@ describe("NextStep", () => {
   it("renders nothing at all for a terminal hypothesis", () => {
     renderWithProviders(<NextStep hypothesisId={ID} status="archived" />);
     expect(screen.queryByTestId("next-step")).toBeNull();
+  });
+});
+
+describe("researchLineFor", () => {
+  const NOW = Date.UTC(2026, 8, 13, 10, 0);
+  const idle = { state: "idle", started_at_ms: null, last_finished_at_ms: null, last_outcome: null, next_run_at_ms: null };
+
+  it("says a run is in flight, how long ago it started, and that results arrive by themselves", () => {
+    const line = researchLineFor({ ...idle, state: "running", started_at_ms: NOW - 120_000 }, NOW);
+    expect(line).toEqual({ say: "Research is running — started 2 minutes ago. Results appear here by themselves.", working: true });
+    expect(researchLineFor({ ...idle, state: "queued", started_at_ms: NOW }, NOW)?.say).toBe(
+      "Research is starting. Results appear here by themselves.",
+    );
+  });
+
+  it("names the last finish and the next run when idle", () => {
+    const line = researchLineFor(
+      { ...idle, last_finished_at_ms: Date.UTC(2026, 8, 13, 9, 42), last_outcome: "ok", next_run_at_ms: Date.UTC(2026, 8, 14, 6, 0) },
+      NOW,
+    );
+    expect(line).toEqual({ say: "Last research run finished 13 Sept 2026 09:42 UTC · next run 14 Sept 2026 06:00 UTC", working: false });
+    expect(researchLineFor({ ...idle, next_run_at_ms: Date.UTC(2026, 8, 14, 6, 0) }, NOW)?.say).toBe(
+      "The first research run starts 14 Sept 2026 06:00 UTC",
+    );
+    expect(researchLineFor({ ...idle, last_finished_at_ms: NOW, last_outcome: "failed" }, NOW)?.say).toContain("did not finish cleanly");
+  });
+
+  it("renders nothing when the server said nothing", () => {
+    expect(researchLineFor(null, NOW)).toBeNull();
+    expect(researchLineFor(undefined, NOW)).toBeNull();
+    expect(researchLineFor(idle, NOW)).toBeNull();
+  });
+
+  it("is shown on a live hypothesis only", () => {
+    const research = { ...idle, state: "running", started_at_ms: Date.now() };
+    const { unmount } = renderWithProviders(<NextStep hypothesisId={ID} status="live" research={research} />);
+    expect(screen.getByTestId("research-line")).toHaveAttribute("data-working", "true");
+    expect(screen.getByTestId("research-working")).toBeInTheDocument();
+    unmount();
+    renderWithProviders(<NextStep hypothesisId={ID} status="challenged" research={research} />);
+    expect(screen.queryByTestId("research-line")).toBeNull();
   });
 });
