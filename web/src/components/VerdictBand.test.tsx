@@ -101,6 +101,19 @@ describe("what the band shows", () => {
     expect(screen.getByTestId("verdict-band-score")).toHaveTextContent("-0.50");
   });
 
+  it("🔴 says it is waiting for the first observation rather than showing the evaluator's day-one 0.00", () => {
+    renderBand({
+      status: "live",
+      evaluation: evaluation({
+        support_score: 0,
+        metrics: [{ slug: "btc-usd", direction: "up", realised_change_pct: null, last_observation_ms: null, stale: true, stale_reason: "no_observations" }],
+        conditions: [],
+      }),
+    });
+    expect(screen.getByTestId("verdict-band-awaiting")).toHaveTextContent("Waiting for the first observation after go-live");
+    expect(screen.queryByTestId("verdict-band-score")).toBeNull();
+  });
+
   it("shows an em dash, never a zero, when there is no evaluation", () => {
     renderBand({ evaluation: null });
     // A zero is a real score. The absence of one is not, and rendering the

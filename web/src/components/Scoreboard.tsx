@@ -53,6 +53,33 @@ export const SUPPORT_SCORE_NOTE = "summary only — it decides nothing, only con
 /** Rendered when the poller has never produced an evaluation. Day one for every hypothesis. */
 export const NEVER_EVALUATED = "not evaluated yet — the daily researcher has not produced a reading";
 
+/**
+ * Rendered in place of the score when an evaluation ran but nothing counted.
+ *
+ * 🔴 W4 scores only observations dated at or after go-live, so on day one the
+ * evaluator runs, finds nothing to score, and writes `support_score: 0`. The
+ * page then showed a confident `0.00` over "last observation —" (2026-09-13
+ * walk): a number nothing produced. A zero is a real reading; this is not one.
+ */
+export const AWAITING_FIRST_OBSERVATION = "Waiting for the first observation after go-live";
+
+/**
+ * True when the evaluation has metrics and not one of them, nor any
+ * condition, has seen an observation — the day-one state. Read defensively:
+ * the wire types `unknown`, and a malformed field counts as "no observation".
+ */
+export function awaitingFirstObservation(evaluation: EvaluationResult | null | undefined): boolean {
+  if (evaluation === null || evaluation === undefined) return false;
+  const metrics = metricsOf(evaluation);
+  if (metrics.length === 0) return false;
+  const observed = (ms: unknown) => typeof ms === "number" && Number.isFinite(ms);
+  if (metrics.some((m) => observed(m?.last_observation_ms))) return false;
+  const conditions = Array.isArray(evaluation.conditions) ? evaluation.conditions : [];
+  return !conditions.some(
+    (c) => typeof c?.observations_in_window === "number" && c.observations_in_window > 0,
+  );
+}
+
 export interface ScoreboardProps {
   /** `null`/absent = never evaluated. Must degrade, never throw (R140). */
   evaluation?: EvaluationResult | null;
@@ -76,23 +103,32 @@ export default function Scoreboard({ evaluation }: ScoreboardProps) {
 
   const metrics = metricsOf(evaluation);
   const score = typeof evaluation.support_score === "number" ? evaluation.support_score : null;
+  const awaiting = awaitingFirstObservation(evaluation);
 
   return (
     <Box data-testid="scoreboard" data-evaluated="true">
       <Box sx={{ display: "flex", alignItems: "baseline", gap: 2, flexWrap: "wrap" }}>
-        <Typography
-          data-testid="support-score"
-          variant="mono"
-          // The ordinary text colour, stated rather than left off so a later
-          // edit has to argue with this line instead of quietly adding a sign
-          // colour. Not by sign, not by threshold, not at all.
-          sx={{ fontSize: 22, fontWeight: 700, color: "text.primary" }}
-        >
-          {score === null ? "—" : score.toFixed(2)}
-        </Typography>
-        <Typography data-testid="support-score-note" sx={{ fontSize: 13, color: "text.secondary" }}>
-          {SUPPORT_SCORE_NOTE}
-        </Typography>
+        {awaiting ? (
+          <Typography data-testid="support-score-awaiting" sx={{ fontSize: 14, color: "text.secondary" }}>
+            {AWAITING_FIRST_OBSERVATION}
+          </Typography>
+        ) : (
+          <>
+            <Typography
+              data-testid="support-score"
+              variant="mono"
+              // The ordinary text colour, stated rather than left off so a later
+              // edit has to argue with this line instead of quietly adding a sign
+              // colour. Not by sign, not by threshold, not at all.
+              sx={{ fontSize: 22, fontWeight: 700, color: "text.primary" }}
+            >
+              {score === null ? "—" : score.toFixed(2)}
+            </Typography>
+            <Typography data-testid="support-score-note" sx={{ fontSize: 13, color: "text.secondary" }}>
+              {SUPPORT_SCORE_NOTE}
+            </Typography>
+          </>
+        )}
         <Box sx={{ flex: 1 }} />
         <Typography variant="mono" sx={{ fontSize: 11, color: "text.secondary" }}>
           {`evaluated ${formatUtcDateTime(evaluation.evaluated_at_ms)}`}

@@ -44,7 +44,12 @@ import {
   conditionColor,
   type ConditionState as ThemeConditionState,
 } from "../theme.js";
-import { NEVER_EVALUATED, SUPPORT_SCORE_NOTE } from "./Scoreboard.js";
+import {
+  AWAITING_FIRST_OBSERVATION,
+  NEVER_EVALUATED,
+  SUPPORT_SCORE_NOTE,
+  awaitingFirstObservation,
+} from "./Scoreboard.js";
 import { NO_STATE_LABEL } from "./StatusChip.js";
 import { ABSENT } from "../format.js";
 import { isConditionState, type ConditionResult, type EvaluationResult } from "../api/types.js";
@@ -107,17 +112,27 @@ export default function VerdictBand({ status, evaluation }: VerdictBandProps) {
           {label}
         </Typography>
 
-        <Typography
-          data-testid="verdict-band-score"
-          variant="mono"
-          // The ordinary text colour, whatever the sign. See the file header.
-          sx={{ fontSize: 20, fontWeight: 700, color: "text.primary" }}
-        >
-          {score === null ? ABSENT : score.toFixed(2)}
-        </Typography>
-        <Typography data-testid="verdict-band-note" sx={{ fontSize: 13, color: "text.secondary" }}>
-          {SUPPORT_SCORE_NOTE}
-        </Typography>
+        {awaitingFirstObservation(evaluation) ? (
+          // Day one: the evaluator ran and had nothing to score. Its `0` is
+          // not a reading — see `AWAITING_FIRST_OBSERVATION`.
+          <Typography data-testid="verdict-band-awaiting" sx={{ fontSize: 13, color: "text.secondary" }}>
+            {AWAITING_FIRST_OBSERVATION}
+          </Typography>
+        ) : (
+          <>
+            <Typography
+              data-testid="verdict-band-score"
+              variant="mono"
+              // The ordinary text colour, whatever the sign. See the file header.
+              sx={{ fontSize: 20, fontWeight: 700, color: "text.primary" }}
+            >
+              {score === null ? ABSENT : score.toFixed(2)}
+            </Typography>
+            <Typography data-testid="verdict-band-note" sx={{ fontSize: 13, color: "text.secondary" }}>
+              {SUPPORT_SCORE_NOTE}
+            </Typography>
+          </>
+        )}
       </Box>
 
       <Box sx={{ display: "flex", alignItems: "baseline", gap: 2, flexWrap: "wrap" }}>

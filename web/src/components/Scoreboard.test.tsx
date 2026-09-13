@@ -15,7 +15,12 @@ import { render, screen, within } from "@testing-library/react";
 import { ThemeProvider } from "@mui/material/styles";
 import { decomposeColor } from "@mui/material/styles";
 import type { Theme } from "@mui/material/styles";
-import Scoreboard, { NEVER_EVALUATED, SUPPORT_SCORE_NOTE } from "./Scoreboard.js";
+import Scoreboard, {
+  AWAITING_FIRST_OBSERVATION,
+  NEVER_EVALUATED,
+  SUPPORT_SCORE_NOTE,
+  awaitingFirstObservation,
+} from "./Scoreboard.js";
 import { darkTheme, lightTheme } from "../theme.js";
 import type { EvaluationResult, MetricResult } from "../api/types.js";
 
@@ -203,5 +208,37 @@ describe("🔴 nothing comes from a Bob delivery status", () => {
     renderBoard(payload);
     expect(screen.getByTestId("scoreboard")).toHaveAttribute("data-evaluated", "true");
     expect(screen.getByTestId("scoreboard-metric")).toBeInTheDocument();
+  });
+});
+
+describe("🔴 day one: an evaluation with nothing to score shows no number", () => {
+  // 2026-09-13: the first tick after go-live rendered "0.00" over
+  // "last observation —". The evaluator's zero was not a reading.
+  const dayOne = () =>
+    evaluation({
+      support_score: 0,
+      metrics: [metric({ realised_change_pct: null, last_observation_ms: null })],
+      conditions: [
+        {
+          id: "inv-1", metric: "brent_crude", state: "indeterminate", reason: "no_observations", value: null,
+          threshold: -15, op: "lt", window_start_ms: 0, window_end_ms: 0, observations_in_window: 0,
+        },
+      ],
+    });
+
+  it("says it is waiting for the first observation instead of 0.00", () => {
+    renderBoard(dayOne());
+    expect(screen.getByTestId("support-score-awaiting")).toHaveTextContent(AWAITING_FIRST_OBSERVATION);
+    expect(screen.queryByTestId("support-score")).toBeNull();
+  });
+
+  it("is only day one while nothing has been observed", () => {
+    expect(awaitingFirstObservation(dayOne())).toBe(true);
+    expect(awaitingFirstObservation(evaluation())).toBe(false);
+    expect(awaitingFirstObservation(evaluation({ metrics: [] }))).toBe(false);
+    expect(awaitingFirstObservation(null)).toBe(false);
+    const counted = dayOne();
+    counted.conditions[0]!.observations_in_window = 3;
+    expect(awaitingFirstObservation(counted)).toBe(false);
   });
 });
