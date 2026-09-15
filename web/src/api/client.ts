@@ -24,6 +24,7 @@ import type {
   HypothesisDetail,
   ReportCandidate,
   ReportTemplateAccepted,
+  ResearchRunResult,
   SeriesResponse,
   SignedInUser,
 } from "./types.js";
@@ -212,6 +213,15 @@ export function archiveHypothesis(id: string, rationale: string): Promise<unknow
   return postJson<unknown>(`/api/hypotheses/${encodeURIComponent(id)}/retire`, {
     rationale: rationale.trim(),
   });
+}
+
+/**
+ * `POST /api/hypotheses/:id/research/run` — fire the researcher's schedule
+ * now. Bob's own firing: the scheduled run still happens, and pressing twice
+ * inside a minute answers `already_fired` rather than running twice.
+ */
+export function runResearch(id: string): Promise<ResearchRunResult> {
+  return postJson<ResearchRunResult>(`/api/hypotheses/${encodeURIComponent(id)}/research/run`);
 }
 
 /** `GET /api/hypotheses/:id`. */

@@ -181,6 +181,10 @@ export interface HypothesisDetail {
    * signal only — nothing is decided from it.
    */
   research?: ResearchStatus | null;
+  /** The trusted state changes. OPTIONAL here: the page reads go-live time from it and degrades without it. */
+  state_history?: StateChangeRow[];
+  /** `state_history` hit the store's cap; older rows may exist. */
+  state_history_truncated?: boolean;
 }
 
 export interface ResearchStatus {
@@ -194,6 +198,22 @@ export interface ResearchStatus {
   last_outcome: string | null;
   /** The schedule's next firing in UTC; `null` when unknown. Unix ms. */
   next_run_at_ms: UnixMs | null;
+  /** The schedule's cron, verbatim (UTC). OPTIONAL: an older server does not send it. */
+  cron?: string;
+}
+
+/** `POST /api/hypotheses/:id/research/run` — Bob's outcome, verbatim. */
+export interface ResearchRunResult {
+  /** `requested`, `already_fired`, `target_missing`, `busy`, and open to more. */
+  outcome: string;
+  reason: string;
+}
+
+/** One trusted state change, newest first (`state_history` on the detail payload). */
+export interface StateChangeRow {
+  id: string;
+  status: string | null;
+  created_at_ms: UnixMs;
 }
 
 /**

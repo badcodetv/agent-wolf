@@ -184,6 +184,19 @@ export interface ScheduleRecord {
   updatedAtSec?: UnixSec;
 }
 
+/**
+ * `POST /agent/schedules/{id}/run` — what one hand-fired occurrence came to.
+ * `outcome` is Bob's word, verbatim: `requested`, `already_fired` (pressed
+ * twice inside one minute), `target_missing`, `busy`, and open to more.
+ */
+export interface ScheduleRunResult {
+  scheduleId: string;
+  outcome: string;
+  reason: string;
+  eventId: string;
+  deliveryId: string;
+}
+
 // ── Deliveries ───────────────────────────────────────────────────────────
 
 export interface ListDeliveriesParams {

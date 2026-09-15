@@ -44,6 +44,7 @@ import {
   type ListAttentionRequestsParams,
   type ListDeliveriesParams,
   type ScheduleRecord,
+  type ScheduleRunResult,
   type SessionByName,
   type SessionListRow,
   type VerifyGoogleResult,
@@ -168,6 +169,12 @@ export interface BobClient {
   createSchedule(params: CreateScheduleParams): Promise<ScheduleRecord>;
   listSchedules(): Promise<ScheduleRecord[]>;
   deleteSchedule(id: string, params?: { rationale?: string }): Promise<void>;
+  /**
+   * Fire one schedule now — Bob's own firing at the current minute, through
+   * the same dispatch gate. Pressing twice inside a minute answers
+   * `already_fired`; a disabled schedule is Bob's `409`, i.e. `conflict`.
+   */
+  runSchedule(id: string): Promise<ScheduleRunResult>;
 
   listDeliveries(params?: ListDeliveriesParams): Promise<DeliveryRecord[]>;
   listAttentionRequests(params?: ListAttentionRequestsParams): Promise<AttentionRequestRecord[]>;
@@ -943,6 +950,25 @@ async function deleteSchedule(
   });
 }
 
+function runSchedule(ctx: ClientContext, id: string): Promise<ScheduleRunResult> {
+  const where = "POST /agent/schedules/{id}/run";
+  return doRequest(ctx, {
+    method: "POST",
+    path: `/agent/schedules/${encodeURIComponent(id)}/run`,
+  }).then(({ json }) => {
+    if (!isRecord(json) || typeof json["outcome"] !== "string") {
+      throw invalidShape(where, "expected an object with an outcome");
+    }
+    return {
+      scheduleId: strField(json, "schedule_id"),
+      outcome: strField(json, "outcome"),
+      reason: strField(json, "reason"),
+      eventId: strField(json, "event_id"),
+      deliveryId: strField(json, "delivery_id"),
+    };
+  });
+}
+
 function listDeliveries(ctx: ClientContext, params?: ListDeliveriesParams): Promise<DeliveryRecord[]> {
   const query: Record<string, QueryValue> = {
     event_id: params?.eventId,
@@ -1109,6 +1135,7 @@ export function createBobClient(options: CreateBobClientOptions): BobClient {
     createSchedule: (params) => createSchedule(ctx, params),
     listSchedules: () => listSchedules(ctx),
     deleteSchedule: (id, params) => deleteSchedule(ctx, id, params),
+    runSchedule: (id) => runSchedule(ctx, id),
 
     listDeliveries: (params) => listDeliveries(ctx, params),
     listAttentionRequests: (params) => listAttentionRequests(ctx, params),

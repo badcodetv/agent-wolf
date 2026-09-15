@@ -96,6 +96,66 @@ const tokenRoute = {
   json: { token: "tok", expires_at_sec: Math.floor(Date.parse("2026-08-24T12:00:00Z") / 1000) + 900, embed_url: "" },
 };
 
+describe("status first (2026-09-15)", () => {
+  it("a draft keeps the conversation open: the interview IS the page", async () => {
+    await renderDetail({ [DETAIL]: { json: detailBody() }, [TOKEN]: tokenRoute });
+    expect(screen.getByTestId("chat-rail")).toHaveAttribute("data-rail-open", "true");
+    expect(screen.queryByTestId("hypothesis-summary")).toBeNull();
+    expect(screen.getByTestId("next-step")).toBeInTheDocument();
+  });
+
+  it("a live hypothesis starts with the conversation CLOSED and the answer on top", async () => {
+    const stub = await renderDetail({
+      [DETAIL]: { json: livePayload({ research: { state: "idle", started_at_ms: null, last_finished_at_ms: null, last_outcome: null, next_run_at_ms: null, cron: "0 6 * * *" } }) },
+      [TOKEN]: tokenRoute,
+    });
+    expect(screen.getByTestId("chat-rail")).toHaveAttribute("data-rail-open", "false");
+    // A closed rail mints no embed token.
+    expect(stub.countFor(TOKEN)).toBe(0);
+    expect(screen.getByTestId("standing-word")).toHaveTextContent("Too early to tell");
+    expect(screen.getByTestId("research-strip-title")).toHaveTextContent("every day at 06:00 UTC");
+    expect(screen.queryByTestId("next-step")).toBeNull();
+  });
+
+  it("Run now fires the researcher and re-reads the page", async () => {
+    const RUN = `POST /api/hypotheses/${ID}/research/run`;
+    const research = { state: "idle", started_at_ms: null, last_finished_at_ms: null, last_outcome: null, next_run_at_ms: null, cron: "0 6 * * *" };
+    const stub = await renderDetail({
+      [DETAIL]: (call) =>
+        call === 0
+          ? { json: livePayload({ research }) }
+          : { json: livePayload({ research: { ...research, state: "queued", started_at_ms: Date.now() } }) },
+      [TOKEN]: tokenRoute,
+      [RUN]: { json: { outcome: "requested", reason: "" } },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("research-run-now"));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(stub.countFor(RUN)).toBe(1);
+    expect(stub.countFor(DETAIL)).toBe(2);
+    expect(screen.getByTestId("research-strip")).toHaveAttribute("data-state", "queued");
+  });
+
+  it("tabs switch what is shown without unmounting anything", async () => {
+    await renderDetail({ [DETAIL]: { json: livePayload() }, [TOKEN]: tokenRoute });
+    expect(screen.getByTestId("detail-tabpanel-report")).toBeVisible();
+    expect(screen.getByTestId("detail-tabpanel-rules")).not.toBeVisible();
+    act(() => {
+      fireEvent.click(screen.getByTestId("detail-tab-rules"));
+    });
+    expect(screen.getByTestId("detail-tabpanel-rules")).toBeVisible();
+    expect(screen.getByTestId("detail-tabpanel-report")).not.toBeVisible();
+    expect(screen.getByTestId("report-section")).toBeInTheDocument();
+  });
+
+  it("the Proposals tab shows how many are waiting", async () => {
+    const amendment = { id: "a1", snippet: "widen the band", status: "pending", created_at_ms: 1, created_by_worker: "researcher", created_by_session: "s" };
+    await renderDetail({ [DETAIL]: { json: livePayload({ amendments: [amendment] }) }, [TOKEN]: tokenRoute });
+    expect(screen.getByTestId("detail-tab-proposals")).toHaveTextContent("Proposals (1)");
+  });
+});
+
 describe("HypothesisDetail (W13's frame; W14 fills the left column)", () => {
   it("renders the two columns: a left column and the sticky rail", async () => {
     await renderDetail({ [DETAIL]: { json: detailBody() }, [TOKEN]: tokenRoute });
@@ -420,21 +480,25 @@ describe("🔴 the rail is a SIBLING of the scrolling column", () => {
 });
 
 describe("W14's left column", () => {
-  it("renders every region, in the order § 5 draws them", async () => {
+  it("renders every region: the answer first, then the tabs in their order", async () => {
     await renderDetail({
       [DETAIL]: { json: fullBody() },
       [TOKEN]: tokenRoute,
       [ID_SERIES("brent_crude")]: seriesBody,
     });
+    // 2026-09-15: the standing card leads; every detail section still EXISTS
+    // (inactive tabs are hidden, not unmounted), in tab order.
+    const summary = screen.getByTestId("hypothesis-summary");
+    expect(summary.compareDocumentPosition(screen.getByTestId("detail-tabs")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     const sections = Array.from(
       screen.getByTestId("detail-column").querySelectorAll("[data-testid^='section-']"),
     ).map((node) => node.getAttribute("data-testid"));
     expect(sections).toEqual([
+      "section-charts",
       "section-scoreboard",
       "section-conditions",
-      "section-charts",
-      "section-artifacts",
       "section-proposals",
+      "section-artifacts",
       "section-timeline",
     ]);
     expect(screen.getByTestId("challenged-case")).toBeInTheDocument();
@@ -583,7 +647,8 @@ describe("🔴 a missing block costs a region, never the page", () => {
 
   it("🔴 a draft collapses the four empty analysis sections into one line", async () => {
     await renderDetail({ [DETAIL]: { json: detailBody() }, [TOKEN]: tokenRoute });
-    expect(screen.getByTestId("analysis-empty")).toBeInTheDocument();
+    // One line per tab that would otherwise hold empty sections: Charts and Rules.
+    expect(screen.getAllByTestId("analysis-empty")).toHaveLength(2);
     expect(screen.queryByTestId("scoreboard")).toBeNull();
     expect(screen.queryByTestId("condition-table-empty")).toBeNull();
     // ARTIFACTS and TIMELINE are one line each and are meaningful on a draft:
@@ -719,19 +784,23 @@ const REPORT = {
 };
 
 describe("W23's verdict band", () => {
-  it("composes ABOVE the verdict actions, without absorbing them", async () => {
+  it("never absorbs the verdict actions, which sit under the standing card", async () => {
     await renderDetail({
       [DETAIL]: { json: fullBody() },
       [TOKEN]: tokenRoute,
       [ID_SERIES("brent_crude")]: seriesBody,
     });
     const band = screen.getByTestId("verdict-band");
+    const summary = screen.getByTestId("hypothesis-summary");
     const actions = screen.getByTestId("verdict-actions");
     // Two components, not one: the "buttons only in `challenged`" rule lives
     // in `VerdictActions`, and folding them together would put it in two
-    // places.
+    // places. Since 2026-09-15 the band lives in the Rules tab; the actions
+    // stay at the top, directly under the answer they act on.
     expect(band.contains(actions)).toBe(false);
-    expect(band.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(summary.contains(actions)).toBe(false);
+    expect(summary.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByTestId("detail-tabpanel-rules").contains(band)).toBe(true);
   });
 
   it("renders the band in a state that has no buttons at all", async () => {
@@ -967,12 +1036,16 @@ describe("🔴 a draft notices the interview finishing by itself", () => {
       [DETAIL]: (call) => (call < 2 ? running() : finishedRun()),
       [TOKEN]: tokenRoute,
     });
-    expect(screen.getByTestId("research-line")).toHaveTextContent("Research is running — started 2 minutes ago. Results appear here by themselves.");
+    // Since 2026-09-15 a live page says it in the research strip, not NEXT STEP.
+    expect(screen.getByTestId("research-strip-detail")).toHaveTextContent("Researching now, started 2 minutes ago. Results appear on this page by themselves.");
+    expect(screen.getByTestId("research-run-now")).toBeDisabled();
     await tick(RESEARCH_POLL_MS);
     expect(stub.countFor(DETAIL)).toBe(2);
     await tick(RESEARCH_POLL_MS);
     expect(stub.countFor(DETAIL)).toBe(3);
-    expect(screen.getByTestId("research-line")).toHaveTextContent("Last research run finished 13 Sept 2026 10:42 UTC · next run 14 Sept 2026 06:00 UTC");
+    expect(screen.getByTestId("research-strip-detail")).toHaveTextContent("(14 Sept 2026 06:00 UTC)");
+    expect(screen.getByTestId("research-strip-detail")).toHaveTextContent("finished OK");
+    expect(screen.getByTestId("research-run-now")).toBeEnabled();
     // Back to the slow poll once nothing is running.
     await tick(RESEARCH_POLL_MS * 3);
     expect(stub.countFor(DETAIL)).toBe(3);

@@ -1334,6 +1334,42 @@ export function createHypothesesRouter(options: CreateHypothesesRouterOptions): 
   });
 
   /**
+   * "Run now" — fire this hypothesis's researcher schedule at once, so a human
+   * can watch one run instead of waiting for tomorrow's 06:00.
+   *
+   * It is Bob's OWN firing (`POST /agent/schedules/{id}/run`): the same
+   * delivery, the same dispatch gate, and the scheduled run still happens.
+   * Running is not a state change, so nothing is written to memory. Only a
+   * `live` hypothesis has a schedule worth running — a `challenged` one is
+   * waiting on a human, and a researcher run there would pile evidence on a
+   * decision that is not the model's.
+   *
+   * The answer is Bob's `outcome` verbatim (`requested`, `already_fired`, …);
+   * the page polls the `research` block to show the run itself.
+   */
+  router.post("/api/hypotheses/:id/research/run", (req: Request, res: Response, next) => {
+    void (async () => {
+      signedInUser(req);
+      const id = requireHypothesisId(idParam(req));
+      const record = await store.readHypothesis(id);
+      if (record.status !== "live") {
+        throw new WolfError("conflict", "only a live hypothesis has a researcher to run", {
+          details: { status: record.status },
+        });
+      }
+      const schedule = await scheduleFor(id);
+      if (schedule === null) {
+        throw new WolfError("conflict", "this hypothesis has no researcher schedule");
+      }
+      if (!schedule.enabled) {
+        throw new WolfError("conflict", "the researcher schedule is switched off");
+      }
+      const result = await client.runSchedule(schedule.id);
+      res.status(200).json({ outcome: result.outcome, reason: result.reason });
+    })().catch(next);
+  });
+
+  /**
    * The pinned `report` block (§ "The detail route's report block, pinned").
    *
    * It goes through W15's `store.readTemplate` / `store.readLatestReport` and

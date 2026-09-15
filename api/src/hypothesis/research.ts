@@ -33,6 +33,8 @@ export interface ResearchStatus {
   last_outcome: string | null;
   /** The schedule's next firing, from its cron in UTC. `null` when it cannot be computed. */
   next_run_at_ms: UnixMs | null;
+  /** The schedule's cron, verbatim, so the page can say WHEN it runs and not only when next. */
+  cron: string;
 }
 
 /** How many of the schedule's newest deliveries the block reads. One run in flight plus history. */
@@ -63,6 +65,7 @@ export function researchStatusFrom(
     last_finished_at_ms: finished === undefined ? null : toMs(finished.endedAtSec * 1000),
     last_outcome: finished === undefined ? null : finished.status,
     next_run_at_ms: next === null ? null : toMs(next),
+    cron: schedule.cron,
   };
 }
 

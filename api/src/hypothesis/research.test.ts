@@ -57,6 +57,7 @@ describe("researchStatusFrom", () => {
       last_finished_at_ms: null,
       last_outcome: null,
       next_run_at_ms: at("2026-09-14T06:00:00Z"),
+      cron: "0 6 * * *",
     });
   });
 

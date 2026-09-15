@@ -739,6 +739,30 @@ describe("schedules", () => {
     expect(pathnameOf(c)).toBe("/agent/schedules/sch-1");
     expect(queryOf(c)).toEqual({ rationale: "no longer needed" });
   });
+
+  it("POST /agent/schedules/{id}/run — Bob's outcome comes back verbatim", async () => {
+    const c = intercept("POST", 200, {
+      schedule_id: "sch-1",
+      worker: "researcher-1a2b3c4d",
+      outcome: "requested",
+      event_id: "ev-1",
+      delivery_id: "d-1",
+    });
+    const result = await client().runSchedule("sch-1");
+    expect(pathnameOf(c)).toBe("/agent/schedules/sch-1/run");
+    expect(result).toEqual({
+      scheduleId: "sch-1",
+      outcome: "requested",
+      reason: "",
+      eventId: "ev-1",
+      deliveryId: "d-1",
+    });
+  });
+
+  it("POST /agent/schedules/{id}/run — a disabled schedule (Bob's 409) is a conflict", async () => {
+    intercept("POST", 409, "this schedule is disabled; enable it before running it");
+    await expect(client().runSchedule("sch-1")).rejects.toMatchObject({ kind: "conflict" });
+  });
 });
 
 describe("deliveries and attention requests", () => {

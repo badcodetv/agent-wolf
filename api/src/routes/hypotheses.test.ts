@@ -187,6 +187,8 @@ interface StubConfig {
   /** A status code `GET /agent/attention-requests` answers with instead of a body. */
   failAttention?: number;
   schedules?: string;
+  /** `POST /agent/schedules/{id}/run`. Default: Bob's `requested`. */
+  runSchedule?: Answer;
   /**
    * Rows `GET /agent/deliveries` holds. `subscription_id` and `limit` are
    * HONOURED, as Bob honours them, so a read that forgets the filter sees
@@ -389,6 +391,14 @@ class Stub {
     }
     if (path === "/agent/schedules") {
       return { status: 200, body: this.config.schedules ?? '{"schedules":[]}' };
+    }
+    if (method === "POST" && /^\/agent\/schedules\/[^/]+\/run$/.test(path)) {
+      return (
+        this.config.runSchedule ?? {
+          status: 200,
+          body: JSON.stringify({ schedule_id: path.split("/")[3], outcome: "requested", delivery_id: "d-run" }),
+        }
+      );
     }
     if (path === "/agent/deliveries") {
       let rows = this.config.deliveries ?? [];
@@ -1878,6 +1888,59 @@ describe("hypotheses_detail", () => {
     const res = await get(h, `/api/hypotheses/${ID}`);
     expect(res.json.research).toBeNull();
     expect(h.stub.requests.some((r) => r.path.startsWith("/agent/deliveries"))).toBe(false);
+  });
+
+  function liveWithSchedule(enabled = true): StubConfig {
+    const stub = baseStub();
+    stub.board = page([stateRow(ID, "live", "Copper is the new oil")]);
+    stub.details![`hypothesis:${ID}`] = page([stateRow(ID, "live", "Copper is the new oil")]);
+    stub.schedules = JSON.stringify({
+      schedules: [
+        { id: "sched-2", project: "wolf", worker: "critic", cron: "0 4 * * 1", input: "", enabled: true },
+        { id: "sched-1", project: "wolf", worker: `researcher-${ID}`, cron: "0 6 * * *", input: "", enabled },
+      ],
+    });
+    return stub;
+  }
+
+  const runRequests = (h: Harness) =>
+    h.stub.requests.filter((r) => r.method === "POST" && r.path.includes("/run"));
+
+  it("hypotheses_research_run: fires THIS hypothesis's schedule and answers Bob's outcome", async () => {
+    const h = await harness(liveWithSchedule());
+    const res = await post(h, `/api/hypotheses/${ID}/research/run`, {});
+
+    expect(res.status).toBe(200);
+    expect(res.json).toEqual({ outcome: "requested", reason: "" });
+    expect(runRequests(h).map((r) => r.path)).toEqual(["/agent/schedules/sched-1/run"]);
+    expect(h.stub.appendRequests).toHaveLength(0);
+  });
+
+  it("hypotheses_research_run: the detail's research block carries the cron", async () => {
+    const h = await harness(liveWithSchedule());
+    const res = await get(h, `/api/hypotheses/${ID}`);
+    expect(res.json.research.cron).toBe("0 6 * * *");
+  });
+
+  it("hypotheses_research_run: a draft is refused 409 and nothing is fired", async () => {
+    const h = await harness(baseStub());
+    const res = await post(h, `/api/hypotheses/${ID}/research/run`, {});
+    expect(res.status).toBe(409);
+    expect(runRequests(h)).toHaveLength(0);
+  });
+
+  it("hypotheses_research_run: a switched-off schedule is refused 409 and nothing is fired", async () => {
+    const h = await harness(liveWithSchedule(false));
+    const res = await post(h, `/api/hypotheses/${ID}/research/run`, {});
+    expect(res.status).toBe(409);
+    expect(runRequests(h)).toHaveLength(0);
+  });
+
+  it("hypotheses_research_run: 401 with no cookie", async () => {
+    const h = await harness(liveWithSchedule());
+    const res = await post(h, `/api/hypotheses/${ID}/research/run`, {}, false);
+    expect(res.status).toBe(401);
+    expect(runRequests(h)).toHaveLength(0);
   });
 
   it("hypotheses_detail: a spec-shaped memory written INSIDE a container is not accepted as the locked spec", async () => {

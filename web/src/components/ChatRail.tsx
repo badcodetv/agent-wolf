@@ -61,15 +61,23 @@ export interface ChatRailProps {
   hypothesisId: string;
   /** Rendered above the frame; defaults to § 5's own heading. */
   heading?: ReactNode;
+  /**
+   * Whether the rail starts open. The page passes `false` once a hypothesis
+   * has left draft: the interview is over, and a rail replaying it at 40% of
+   * the width is what made the live page hard to read (2026-09-15). Read once,
+   * on mount — the reader's own toggle wins after that.
+   */
+  defaultOpen?: boolean;
 }
 
 export default function ChatRail({
   hypothesisId,
   heading = "Conversation",
+  defaultOpen = true,
 }: ChatRailProps) {
   const theme = useTheme();
   const isNarrow = useMediaQuery(theme.breakpoints.down("md"));
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(defaultOpen);
   const [wide, setWide] = useState(false);
 
   const header = (
@@ -199,7 +207,7 @@ export default function ChatRail({
               writingMode: "vertical-rl",
             }}
           >
-            ⟩⟨
+            ⟩⟨ {heading}
           </Button>
         </Tooltip>
       )}

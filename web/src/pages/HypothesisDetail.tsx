@@ -3,15 +3,23 @@
  *
  * ```
  * ┌──────────────────────────────────────────────┬──────────────────────┐
- * │  ← Board   Petrodollar / drone parts    kai  │  Conversation    ⟨⟩  │
- * │  ◉ CHALLENGED — [Confirm] [Invalidate]       │  ┌────────────────┐  │
- * │  THE CASE · tripped rows · 3 research notes  │  │  Bob embed     │  │
- * │  REPORT (fixed height, expand)               │  │  sticky, 100vh │  │
- * │  SCOREBOARD · CONDITIONS · CHARTS            │  │                │  │
- * │  ARTIFACTS · PROPOSALS · TIMELINE  ↓ scroll  │  └────────────────┘  │
+ * │  ← Board   Gold rises with M2   LIVE   kai   │  Conversation    ⟨⟩  │
+ * │  HOW IT'S DOING  ● Holding       +0.34 d42   │  ┌────────────────┐  │
+ * │  PROVED WRONG IF…  [rule] [rule] [rule]      │  │  Bob embed     │  │
+ * │  Researcher runs daily 06:00 …   [Run now]   │  │  OPEN in draft,│  │
+ * │  [Confirm] [Invalidate] · THE CASE (challgd) │  │  CLOSED after  │  │
+ * │  Report | Charts | Rules | Proposals | Files │  └────────────────┘  │
  * └──────────────────────────────────────────────┴──────────────────────┘
- *    left: scrolls normally, ~1fr           right: sticky rail, 100vh
+ *    left: scrolls, ~1fr                    right: collapsible rail
  * ```
+ *
+ * ## Status first (2026-09-15)
+ *
+ * Kai's verdict after real use was that the page answered everything at the
+ * same volume. The answer now leads (`HypothesisSummary`, built from the
+ * numbers in `standing.ts`), the schedule and a Run now button follow
+ * (`ResearchStrip`), and every former section lives in a tab. Tabs HIDE,
+ * they never unmount, so no block's fetches or polls depend on the tab.
  *
  * ## The shape, and what W23 inherits
  *
@@ -76,6 +84,10 @@ import Typography from "@mui/material/Typography";
 import Skeleton from "@mui/material/Skeleton";
 import { Link as RouterLink, useParams } from "react-router";
 import Link from "@mui/material/Link";
+import Tab from "@mui/material/Tab";
+import Tabs from "@mui/material/Tabs";
+import HypothesisSummary from "../components/HypothesisSummary.js";
+import ResearchStrip from "../components/ResearchStrip.js";
 import Severity from "../components/trust/Severity.js";
 import AmendmentList from "../components/AmendmentList.js";
 import ArchiveButton from "../components/ArchiveButton.js";
@@ -125,6 +137,39 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       <Typography sx={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", mb: 0.5 }}>
         {title}
       </Typography>
+      {children}
+    </Box>
+  );
+}
+
+/**
+ * The detail tabs (2026-09-15). The page answers "how is it doing" above
+ * them; everything that is evidence FOR that answer sits one click away.
+ *
+ * 🔴 Every panel stays MOUNTED and inactive ones are `hidden`, so no block's
+ * requests, polling or refresh keys change with the tab — hiding is layout,
+ * never data.
+ */
+export const DETAIL_TABS = [
+  { key: "report", label: "Report" },
+  { key: "charts", label: "Charts" },
+  { key: "rules", label: "Rules in detail" },
+  { key: "proposals", label: "Proposals" },
+  { key: "history", label: "Files & timeline" },
+] as const;
+
+export type DetailTab = (typeof DETAIL_TABS)[number]["key"];
+
+function TabPanel({ active, name, children }: { active: boolean; name: DetailTab; children: React.ReactNode }) {
+  return (
+    <Box
+      role="tabpanel"
+      id={`detail-tabpanel-${name}`}
+      aria-labelledby={`detail-tab-${name}`}
+      data-testid={`detail-tabpanel-${name}`}
+      hidden={!active}
+      sx={{ pt: 2, display: active ? "flex" : "none", flexDirection: "column", gap: 2 }}
+    >
       {children}
     </Box>
   );
@@ -244,6 +289,20 @@ export default function HypothesisDetail() {
     (detail?.evaluation === null || detail?.evaluation === undefined) &&
     (detail?.amendments ?? []).length === 0;
 
+  const [tab, setTab] = useState<DetailTab>("report");
+  const amendmentCount = (detail?.amendments ?? []).length;
+  const status = detail?.hypothesis.status;
+  // The standing card and the research strip say what NEXT STEP says for
+  // these two, louder; a draft and a terminal state keep the box.
+  const showNextStep = status !== "live" && status !== "challenged";
+
+  const analysisEmptySay = (
+    <Typography data-testid="analysis-empty" sx={{ fontSize: 13, color: "text.secondary" }}>
+      No scoreboard, conditions or charts yet — they appear once the spec is locked at
+      go-live and the researcher has produced its first reading.
+    </Typography>
+  );
+
   return (
     // 🔴 At `md` and up this page IS the viewport below the app bar, and its
     // two columns scroll independently. `overflow: hidden` here is what stops
@@ -288,7 +347,7 @@ export default function HypothesisDetail() {
         ) : (
           <Box sx={{ mt: 2, display: "flex", flexDirection: "column", gap: 2 }}>
             <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap" }}>
-              <Typography sx={{ fontSize: 18, fontWeight: 600 }}>
+              <Typography component="h1" sx={{ fontSize: 24, fontWeight: 600, letterSpacing: "-0.01em" }}>
                 {detail.hypothesis.title ?? "(no title — no trusted state row)"}
               </Typography>
               <StatusChip status={detail.hypothesis.status} />
@@ -312,13 +371,15 @@ export default function HypothesisDetail() {
                 below say why an action is unavailable; this says which action
                 to take instead, and a reader who only reads one line must get
                 that one. */}
-            <NextStep
-              hypothesisId={id}
-              status={detail.hypothesis.status}
-              specValidation={detail.spec_validation}
-              templateAccepted={detail.report?.has_template}
-              research={detail.research ?? null}
-            />
+            {showNextStep ? (
+              <NextStep
+                hypothesisId={id}
+                status={detail.hypothesis.status}
+                specValidation={detail.spec_validation}
+                templateAccepted={detail.report?.has_template}
+                research={detail.research ?? null}
+              />
+            ) : null}
 
             {/* R141: the board shows an ellipsis, the detail page says why. */}
             {detail.hypothesis.title_truncated === true ? (
@@ -352,10 +413,24 @@ export default function HypothesisDetail() {
               />
             ) : null}
 
-            <VerdictBand
+            {/* LAYER 1 — how it is doing, in one word, one sentence, and one
+                card per rule. Renders nothing for a draft. */}
+            <HypothesisSummary
               status={detail.hypothesis.status}
               evaluation={detail.evaluation ?? null}
+              spec={detail.spec ?? null}
+              stateHistory={detail.state_history}
+              stateHistoryTruncated={detail.state_history_truncated}
             />
+
+            {/* LAYER 2 — the researcher: its schedule and a Run now button. */}
+            {detail.hypothesis.status === "live" ? (
+              <ResearchStrip
+                hypothesisId={id}
+                research={detail.research ?? null}
+                onStarted={() => void load({ quiet: true })}
+              />
+            ) : null}
 
             <VerdictActions
               hypothesisId={id}
@@ -390,6 +465,29 @@ export default function HypothesisDetail() {
                 itself. Once a template exists, or once the hypothesis has left
                 draft, the frame is back and unchanged: an empty report on a
                 LIVE hypothesis is a real finding and keeps its full box. */}
+            {/* LAYER 3 — detail on demand. */}
+            <Box data-testid="detail-tabs">
+            <Tabs
+              value={tab}
+              onChange={(_e, next: DetailTab) => setTab(next)}
+              variant="scrollable"
+              allowScrollButtonsMobile
+              sx={(theme) => ({ borderBottom: `1px solid ${theme.palette.divider}`, minHeight: 40 })}
+            >
+              {DETAIL_TABS.map((t) => (
+                <Tab
+                  key={t.key}
+                  value={t.key}
+                  id={`detail-tab-${t.key}`}
+                  aria-controls={`detail-tabpanel-${t.key}`}
+                  data-testid={`detail-tab-${t.key}`}
+                  label={t.key === "proposals" && amendmentCount > 0 ? `${t.label} (${amendmentCount})` : t.label}
+                  sx={{ textTransform: "none", fontSize: 14, minHeight: 40 }}
+                />
+              ))}
+            </Tabs>
+
+            <TabPanel active={tab === "report"} name="report">
             {reportFrameSuppressed ? (
               <Box data-testid="report-section" data-report-frame="suppressed">
                 <Typography sx={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", mb: 0.5 }}>
@@ -420,71 +518,86 @@ export default function HypothesisDetail() {
             </Box>
             )}
 
+            </TabPanel>
+
             {/* 🔴 Collapsed to ONE line while nothing has ever been measured.
                 Four headings each saying "not evaluated yet" is four times the
-                noise of saying it once, and it buried the two things on a
-                draft that do matter. This is a DRAFT-only collapse: the moment
-                a hypothesis goes live, every section renders whether or not it
-                has content, because an empty section on a live hypothesis is
-                itself the finding. */}
-            {analysisEmpty ? (
-              <Typography data-testid="analysis-empty" sx={{ fontSize: 13, color: "text.secondary" }}>
-                No scoreboard, conditions or charts yet — they appear once the spec is locked at
-                go-live and the researcher has produced its first reading.
-              </Typography>
-            ) : (
-              <>
-            <Section title="SCOREBOARD">
-              <Scoreboard evaluation={detail.evaluation ?? null} />
-            </Section>
+                noise of saying it once. This is a DRAFT-only collapse: the
+                moment a hypothesis goes live, every section renders whether or
+                not it has content, because an empty section on a live
+                hypothesis is itself the finding. */}
+            <TabPanel active={tab === "charts"} name="charts">
+              {analysisEmpty ? (
+                analysisEmptySay
+              ) : (
+                <Section title="CHARTS">
+                  <MetricCharts
+                    hypothesisId={id}
+                    spec={detail.spec ?? null}
+                    specSource={detail.spec_source}
+                    refreshKey={detail.evaluation?.evaluated_at_ms ?? null}
+                  />
+                </Section>
+              )}
+            </TabPanel>
 
-            <Section title="CONDITIONS">
-              <ConditionTable
-                conditions={
-                  Array.isArray(detail.evaluation?.conditions) ? detail.evaluation.conditions : []
-                }
-                statFor={statFor}
+            <TabPanel active={tab === "rules"} name="rules">
+              <VerdictBand
+                status={detail.hypothesis.status}
+                evaluation={detail.evaluation ?? null}
               />
-            </Section>
+              {analysisEmpty ? (
+                analysisEmptySay
+              ) : (
+                <>
+                  <Section title="SCOREBOARD">
+                    <Scoreboard evaluation={detail.evaluation ?? null} />
+                  </Section>
+                  <Section title="CONDITIONS">
+                    <ConditionTable
+                      conditions={
+                        Array.isArray(detail.evaluation?.conditions) ? detail.evaluation.conditions : []
+                      }
+                      statFor={statFor}
+                    />
+                  </Section>
+                </>
+              )}
+            </TabPanel>
 
-            <Section title="CHARTS">
-              <MetricCharts
-                hypothesisId={id}
-                spec={detail.spec ?? null}
-                specSource={detail.spec_source}
-                refreshKey={detail.evaluation?.evaluated_at_ms ?? null}
-              />
-            </Section>
-
-              </>
-            )}
+            <TabPanel active={tab === "proposals"} name="proposals">
+              <Section title="PROPOSALS">
+                <AmendmentList
+                  hypothesisId={id}
+                  amendments={detail.amendments ?? []}
+                  onDone={() => void load()}
+                />
+              </Section>
+            </TabPanel>
 
             {/* W29. § 2 maps artifact METADATA to `machine`: it is Bob's
                 record of what a container wrote, not model prose — so the
-                panel carries no tint and no stamp. The panel itself is
-                Bob's own `ArtifactPanel`, under WOLF's ThemeProvider. */}
-            <Section title="ARTIFACTS">
-              <ArtifactsPanel hypothesisId={id} />
-            </Section>
-
-            <Section title="PROPOSALS">
-              <AmendmentList
-                hypothesisId={id}
-                amendments={detail.amendments ?? []}
-                onDone={() => void load()}
-              />
-            </Section>
-
-            <Section title="TIMELINE">
-              <Timeline detail={detail} />
-            </Section>
+                panel carries no tint and no stamp. */}
+            <TabPanel active={tab === "history"} name="history">
+              <Section title="ARTIFACTS">
+                <ArtifactsPanel hypothesisId={id} />
+              </Section>
+              <Section title="TIMELINE">
+                <Timeline detail={detail} />
+              </Section>
+            </TabPanel>
+            </Box>
           </Box>
         )}
       </Box>
 
       {/* Right column: the rail. A SIBLING of the column above, never a child
-          of it — sticky, 100vh, collapsible, and never measured. */}
-      <ChatRail hypothesisId={id} />
+          of it — collapsible, and never measured. It waits for the detail so
+          it can start CLOSED once the interview is over (its open state is
+          read once, on mount); a page that failed to load keeps it open. */}
+      {detail !== null || failure !== null ? (
+        <ChatRail hypothesisId={id} defaultOpen={detail === null || detail.hypothesis.status === "draft"} />
+      ) : null}
     </Box>
   );
 }
